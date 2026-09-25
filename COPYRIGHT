@@ -1,0 +1,26 @@
+AMPLIFai Phone companion
+Copyright (C) 2026 OSIRS LLC
+SPDX-License-Identifier: GPL-3.0-or-later
+
+The project-authored Swift/Python companion and its accompanying build and
+packaging scripts are free software: you can redistribute them and/or modify
+them under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
+any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+This notice applies only to the project-authored companion files in source/.
+Third-party source archives, embedded dependencies, license texts and notices
+retain their respective copyrights and license terms. THIRD-PARTY-NOTICES.txt
+and the per-file/source manifests preserve that evidence. This notice does not
+claim ownership of third-party code or choose a different license for it.
+
+The separate AMPLIFai website, hosted backend, account service and their source
+are not included in this package or licensed by this companion notice. This
+package boundary does not state a legal conclusion about any other program.

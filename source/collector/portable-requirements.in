@@ -1,0 +1,3 @@
+# Mac arm64 companion build roots; resolve with Python 3.12 only.
+pyinstaller==6.22.3
+pymobiledevice3==10.4.0

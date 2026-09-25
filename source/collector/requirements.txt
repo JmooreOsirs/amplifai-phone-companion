@@ -1,0 +1,4 @@
+# Local prototype only. pymobiledevice3 and pyiosbackup are GPL-3.0; do not
+# redistribute this dependency stack with the private product without a
+# separate license/distribution decision.
+pymobiledevice3==10.4.0
