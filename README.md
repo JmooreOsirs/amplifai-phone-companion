@@ -1,9 +1,30 @@
 # AMPLIFai Phone companion source
 
-**Mac owner-test candidate — Apple Silicon only.** Normal installation,
-owner-operated iPhone collection and hosted-browser transfer still need
-acceptance. Windows and Android are not included or supported by this release.
-Do not bypass Gatekeeper or device permission prompts.
+**Mac and Android owner/partner test builds.** Normal fresh installation,
+owner-operated phone collection and hosted-browser transfer still need
+acceptance. These are not verified customer-ready downloads. Do not bypass
+Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
+companions are not available.
+
+- [Mac Apple Silicon/macOS 14+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/2026.09.25-rc1): existing Apple-notarized iPhone companion; unchanged.
+- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.09.25-rc1): release-signed APK for same-phone browser handoff. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected.
+- Start through [AMPLIFai phone setup](https://amplifai-database-engine.vercel.app/phone) or your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account). The temporary app-generated pairing code is not a phone number or email verification code.
+
+## Android source and build
+
+`source/collector/android/` contains the complete project-authored Android app,
+resources, JVM tests and pinned Gradle build configuration. Its README documents
+the normal owner flow, permission boundaries, foreground handoff lifecycle and
+remaining physical-device matrix. The Android release carries its matching
+source archive, license/notices and checksums beside the APK. No private signing
+key, password, account source or owner phone data is included.
+
+Build with Android SDK 37, JDK 25 and the pinned Gradle wrapper. Developer build
+tools are not required by installer users. Without release signing variables,
+the generated release APK is unsigned and must not be distributed as installable.
+The Android README describes operator-supplied signing and verification.
+
+## Mac source package
 
 The [versioned release assets](https://github.com/JmooreOsirs/amplifai-phone-companion/releases)
 carry the complete corresponding-source archive, including the `third_party/`
@@ -24,8 +45,8 @@ byte-for-byte reproducible binary build or verified operation on an owner phone.
 ## Contents
 
 - `source/`: project-authored Swift/Python companion, tests, exact dependency
-  lock, logo and build/packaging scripts. No Android app or private account/web
-  implementation is included.
+  lock, logo and build/packaging scripts, plus the separate Android source folder.
+  No private account/web implementation is included.
 - `third_party/source_archives/`: checksum-verified exact Python, native and
   Rust source archives. The complete candidate contains 143 archives. All 102
   pinned Python build inputs remain available; the package matrix marks which

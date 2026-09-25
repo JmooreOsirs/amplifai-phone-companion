@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">AMPLIFai Phone</string>
+    <string name="handoff_channel">Phone handoff</string>
+    <string name="handoff_channel_description">Visible status and cancellation for an approved five-minute browser transfer.</string>
+    <string name="handoff_notification_title">Phone handoff is active</string>
+    <string name="handoff_notification_text">Same-phone browser only. Stops within five minutes.</string>
+    <string name="handoff_cancel">Cancel handoff</string>
+</resources>

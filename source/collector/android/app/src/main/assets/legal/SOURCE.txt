@@ -1,0 +1,16 @@
+AMPLIFai Phone Android 2026.09.25-rc1
+Copyright (C) 2026 OSIRS LLC
+Project-authored Android companion: GPL-3.0-or-later. No warranty.
+
+Matching source, build configuration, notices and checksums accompany the APK:
+https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.09.25-rc1
+
+Source repository (Android app under source/collector/android):
+https://github.com/JmooreOsirs/amplifai-phone-companion
+
+This app uses the Android platform on the owner's device. The source package
+retains Gradle wrapper/build-tool license notices. The private AMPLIFai website
+and backend are separate and are not included in this companion license.
+
+Owner/partner test only. Normal fresh install, real-device permissions, browser
+handoff and source coverage remain subject to owner-operated validation.
