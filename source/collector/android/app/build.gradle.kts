@@ -35,8 +35,8 @@ android {
         applicationId = "ai.satoris.amplifai.phone"
         minSdk = 26
         targetSdk = 37
-        versionCode = 26092501
-        versionName = "2026.09.25-rc1"
+        versionCode = 26092801
+        versionName = "2026.09.28-rc1"
 
     }
 

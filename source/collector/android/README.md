@@ -1,6 +1,6 @@
 # AMPLIFai Phone — Android owner/partner test
 
-`2026.09.25-rc1` (`26092501`) is a qualified test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
+`2026.09.28-rc1` (`26092801`) is an owner/partner test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
 
 ## Owner flow
 
@@ -18,6 +18,7 @@ Use the signed APK's normal Android download/install flow. No developer mode, US
 - Covered downloaded/local-file apps on Android 15/16 can also encounter Restricted Settings for the SMS permission group. This build does not guide users around it; unavailable SMS must leave contacts and permitted calls usable. [Android 16 security requirements](https://source.android.com/docs/compatibility/16/android-16-cdd#225_security_model).
 - Grants are checked before provider queries, after permission results, before handoff, and when returning to the Activity. Revoked local sources are dropped and their handoff cancelled. Provider refusal is unavailable, not an empty successful read.
 - A readable source with zero observed records remains available and distinct from denied/not-read history. `missingSources` identifies unavailable history; unavailable sources cannot export stale interactions. Available metadata is observed coverage, never proof of completeness.
+- Provider scans stop before a partial result can be reviewed when they exceed 100,000 contact-phone rows or 256,000 call/SMS rows per source. A 32 MB selected-metadata handoff bound can also reject an unusually large review; reducing the selected contacts is the only supported retry. Neither condition silently exports incomplete history.
 
 ## Bounded handoff lifecycle
 

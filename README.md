@@ -7,7 +7,7 @@ Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
 companions are not available.
 
 - [Mac Apple Silicon/macOS 14+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/2026.09.25-rc1): existing Apple-notarized iPhone companion; unchanged.
-- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.09.25-rc1): release-signed APK for same-phone browser handoff. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected.
+- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.09.28-rc1): release-signed owner/partner test APK for same-phone browser handoff. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits now reject incomplete reads before review.
 - Start through [AMPLIFai phone setup](https://amplifai-database-engine.vercel.app/phone) or your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account). The temporary app-generated pairing code is not a phone number or email verification code.
 
 ## Android source and build

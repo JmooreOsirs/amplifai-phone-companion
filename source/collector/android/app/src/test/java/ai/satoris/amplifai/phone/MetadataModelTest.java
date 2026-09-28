@@ -2,6 +2,7 @@ package ai.satoris.amplifai.phone;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
@@ -38,5 +39,14 @@ public final class MetadataModelTest {
         assertEquals(0, review.selectedContacts);
         assertEquals(0, review.earliestMs);
         assertEquals(0, review.latestMs);
+    }
+
+    @Test public void providerLimitCannotBecomeAnApparentlyCompleteSource() {
+        try {
+            new MetadataModel.Source<>(Collections.singletonList("newest only"), 0, true);
+            fail("A bounded provider scan must not be eligible for review or handoff.");
+        } catch (MetadataModel.SourceLimitExceededException expected) {
+            assertTrue(expected.getMessage().contains("scan limit"));
+        }
     }
 }

@@ -259,6 +259,8 @@ public final class MainActivity extends Activity {
                 publishRead(taskSignal, () -> finishFailure("Read cancelled. No new source was stored."));
             } catch (SecurityException ignored) {
                 publishRead(taskSignal, () -> finishFailure(sourceName(source) + " unavailable: access was denied or revoked. No new source was stored."));
+            } catch (MetadataModel.SourceLimitExceededException ignored) {
+                publishRead(taskSignal, () -> finishFailure(sourceName(source) + " exceeds this test build's provider scan limit. Nothing from that source was transferred; its full history was not reviewed."));
             } catch (RuntimeException ignored) {
                 publishRead(taskSignal, () -> finishFailure(sourceName(source) + " provider unavailable or unsupported. No new source was stored."));
             }
@@ -278,7 +280,7 @@ public final class MainActivity extends Activity {
         cancellation = null;
         cancel.setEnabled(false);
         status.setText(sourceName(source) + ": " + result.records.size() + " metadata records observed, " +
-                result.rejected + " rows excluded" + (result.truncated ? "; provider scan limit reached, coverage partial" : "") + ".");
+                result.rejected + " rows excluded.");
         showCoverage();
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
     }
@@ -389,6 +391,11 @@ public final class MainActivity extends Activity {
         try {
             payload = NativePayload.selected(contacts, calls, messages, selectedIds,
                     callsAvailable, messagesAvailable, Instant.now());
+        } catch (IllegalArgumentException invalidSelection) {
+            status.setText(invalidSelection.getMessage() + " Reduce the selection or reread and review it. No account save was made.");
+            return;
+        }
+        try {
             handoff.approve(payload);
         } catch (RuntimeException unavailable) {
             status.setText("Local handoff could not start. Check notification access and review again. No account save was made.");

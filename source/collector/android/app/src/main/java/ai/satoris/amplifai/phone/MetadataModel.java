@@ -44,13 +44,16 @@ public final class MetadataModel {
     public static final class Source<T> {
         public final List<T> records;
         public final int rejected;
-        public final boolean truncated;
 
         public Source(List<T> records, int rejected, boolean truncated) {
+            if (truncated) throw new SourceLimitExceededException();
             this.records = Collections.unmodifiableList(new ArrayList<>(records));
             this.rejected = rejected;
-            this.truncated = truncated;
         }
+    }
+
+    public static final class SourceLimitExceededException extends IllegalStateException {
+        SourceLimitExceededException() { super("Provider scan limit reached before the source was fully read."); }
     }
 
     public static final class Review {

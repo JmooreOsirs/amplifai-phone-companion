@@ -12,7 +12,12 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -99,6 +104,40 @@ public final class LocalBridgeTest {
             assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "").startsWith("HTTP/1.1 409"));
             assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata?cursor=1", auth, "").contains("\"nextCursor\":null"));
             assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "").contains("\"completed\":true"));
+            assertClosed(bridge.port());
+        }
+    }
+
+    @Test public void multiYearSelectedPayloadTraversesEveryLocalPage() throws Exception {
+        List<MetadataModel.Interaction> calls = new ArrayList<>();
+        Instant base = Instant.parse("2023-01-01T00:00:00Z");
+        for (int index = 0; index < 20_000; index++) {
+            calls.add(new MetadataModel.Interaction(index + 1, "call", "+15550100200",
+                    base.plus(index % 1_200, ChronoUnit.DAYS).toEpochMilli(), "incoming", 42L));
+        }
+        byte[] payload = NativePayload.selected(
+                List.of(new MetadataModel.Contact(1, "Synthetic", List.of("+15550100200"))),
+                calls, List.of(), Set.of(1L), true, true, Instant.parse("2026-09-28T00:00:00Z"));
+        try (LocalBridge bridge = new LocalBridge(payload, ORIGIN, 0)) {
+            bridge.start();
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v1/pair",
+                    "Content-Type: application/json\r\n", "{\"code\":\"" + bridge.code() + "\"}");
+            Matcher token = Pattern.compile("\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"").matcher(paired);
+            assertTrue(token.find());
+            String auth = "Authorization: Bearer " + token.group(1) + "\r\n";
+            int pages = (payload.length + 128 * 1024 - 1) / (128 * 1024);
+            assertTrue(pages > 1);
+            for (int cursor = 0; cursor < pages; cursor++) {
+                String path = "/v1/metadata" + (cursor == 0 ? "" : "?cursor=" + cursor);
+                String response = send(bridge.port(), ORIGIN, "GET", path, auth, "");
+                assertTrue(response.startsWith("HTTP/1.1 200"));
+                assertTrue(response.contains("\"cursor\":" + cursor + ","));
+                assertTrue(response.contains("\"totalBytes\":" + payload.length));
+                assertTrue(response.contains("\"nextCursor\":" +
+                        (cursor == pages - 1 ? "null" : cursor + 1)));
+            }
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "")
+                    .contains("\"completed\":true"));
             assertClosed(bridge.port());
         }
     }
