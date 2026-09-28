@@ -1,6 +1,8 @@
 # AMPLIFai Phone — Android owner/partner test
 
-`2026.09.28-rc1` (`26092801`) is an owner/partner test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
+`2026.09.28-rc2` (`26092802`) is an owner/partner test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
+
+This version fixes an Android-only pairing crash in rc1. Install the signed rc2 APK as an update over rc1; do not uninstall or clear app data to recover. The update must retain the same application ID and signing certificate with a higher version code. After updating, open the app, review the selected sources and approve a fresh one-use browser handoff.
 
 ## Owner flow
 
@@ -62,6 +64,8 @@ Partial configuration is rejected. This Android project disables the configurati
 ## Remaining physical acceptance
 
 No emulator or device run is represented by JVM socket tests. Use the actual published signed APK through the normal download/install path, with owner-approved synthetic test contacts/history where practical. Record device model, Android/OEM version, browser version, APK hash and per-source outcome; never capture bodies, credentials, or pairing tokens in evidence.
+
+Pairing release regression: on the existing Pixel 8 emulator, install rc1, start a reviewed synthetic handoff, and observe that its first valid `POST /v1/pair` crashes the bridge thread with Android `PatternSyntaxException`. Install rc2 with `adb install -r` (no uninstall), start a new reviewed handoff, and require HTTP 200 for pairing and metadata plus listener closure after the one-use transfer. Keep the code/token and synthetic contact identity out of logs. Host-JVM socket tests do not catch Android's stricter regex parser; this emulator check is mandatory for the next pairing change.
 
 - Samsung and Pixel: install without developer tools; confirm contacts-only, contacts+calls, and permitted SMS independently. Denied/installer-restricted sources must stay unavailable and must not block permitted sources. A genuinely empty readable history must say zero observed, not denied.
 - Android 13+: deny notifications (no listener); allow and explicitly approve again (visible notification + Cancel). Disable app/channel notifications or dismiss the notification during transfer (stop). Confirm older API 26–28 two-argument and API 29+ typed foreground-service behavior when those devices are available.

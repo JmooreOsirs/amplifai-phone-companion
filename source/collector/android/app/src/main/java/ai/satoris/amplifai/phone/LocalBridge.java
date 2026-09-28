@@ -158,7 +158,7 @@ public final class LocalBridge implements AutoCloseable {
             close(EndReason.EXPIRED);
             return;
         }
-        if (!command.matches("\\s*\\{\\s*\"code\"\\s*:\\s*\"[0-9]{10}\"\\s*}\\s*")) {
+        if (!command.matches("\\s*\\{\\s*\"code\"\\s*:\\s*\"[0-9]{10}\"\\s*\\}\\s*")) {
             reply(output, 400, true, empty()); return;
         }
         if (token != null) { reply(output, 403, true, empty()); return; }
