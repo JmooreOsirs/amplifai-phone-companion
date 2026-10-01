@@ -7,6 +7,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from test_windows_storage import NativeBoundary, ace
+from amplifai_phone import workspace as workspace_module
+
 from amplifai_phone.workspace import (
     MIN_FREE_BYTES,
     ROOT_MARKER,
@@ -189,6 +192,13 @@ class WorkspaceTest(unittest.TestCase):
             self.assertRaises(WorkspaceError),
         ):
             SessionWorkspace(self.root).__enter__()
+        if os.name == "nt":
+            self.assertTrue(self.root.is_dir())
+            self.assertEqual(list(self.root.iterdir()), [])
+            with self.assertRaises(WorkspaceError):
+                SessionWorkspace(self.root).__enter__()
+            self.assertEqual((unrelated / "keep").read_bytes(), b"owner")
+            return
         self.assertFalse(self.root.exists())
         self.assertEqual((unrelated / "keep").read_bytes(), b"owner")
         with SessionWorkspace(self.root):
@@ -260,6 +270,56 @@ class WorkspaceTest(unittest.TestCase):
             SessionWorkspace(self.root).__enter__()
         self.assertEqual(error.exception.code, "workspace_unsafe")
         self.assertEqual((self.root / "owner-backup").read_bytes(), b"do-not-touch")
+
+    def test_windows_root_is_atomic_private_and_pinned_until_marker_write(self) -> None:
+        native = NativeBoundary()
+        native.create_hook = self.root.mkdir
+        real_write = workspace_module._write_private
+
+        def write_while_pinned(path: Path, payload: bytes) -> None:
+            self.assertIsNotNone(native.created)
+            self.assertTrue(native.descriptors, "fresh security readback precedes bytes")
+            self.assertEqual(native.closed, [51], "identity pins cover the marker write")
+            real_write(path, payload)
+
+        with (native.installed(),
+              patch("amplifai_phone.workspace._write_private", side_effect=write_while_pinned)):
+            self.assertTrue(workspace_module._owned_root(self.root, create=True))
+        self.assertEqual((self.root / ROOT_MARKER).read_bytes(), b"AMPLIFAI_PHONE_SESSIONS_V1\n")
+        self.assertEqual(set(native.closed), {51, *native.handles})
+
+    def test_windows_creation_race_or_bad_readback_never_writes_or_recursively_deletes(self) -> None:
+        for failure in ("race", "unsafe ACE"):
+            with self.subTest(failure=failure):
+                native = NativeBoundary()
+                if failure == "race":
+                    native.failure = "CreateDirectoryW"
+                else:
+                    native.aces.append(ace(native.other))
+                with (native.installed(),
+                      patch("amplifai_phone.workspace._write_private") as writer,
+                      patch("amplifai_phone.workspace.shutil.rmtree") as delete,
+                      self.assertRaises(WorkspaceError) as caught):
+                    workspace_module._owned_root(self.root, create=True)
+                writer.assert_not_called()
+                delete.assert_not_called()
+                self.assertEqual(caught.exception.code, "workspace_unsafe")
+
+    def test_windows_marker_failure_retains_only_private_new_root_and_reports_no_phone_bytes(self) -> None:
+        native = NativeBoundary()
+        native.create_hook = self.root.mkdir
+        with (native.installed(),
+              patch("amplifai_phone.workspace._write_private", side_effect=OSError("sensitive path")),
+              patch("amplifai_phone.workspace.shutil.rmtree") as delete,
+              self.assertRaises(WorkspaceError) as caught):
+            workspace_module._owned_root(self.root, create=True)
+        delete.assert_not_called()
+        self.assertEqual(caught.exception.code, "workspace_marker")
+        self.assertIn("empty or marker-only", str(caught.exception))
+        self.assertIn("No phone data was written", str(caught.exception))
+        self.assertNotIn("sensitive path", str(caught.exception))
+        self.assertTrue(self.root.is_dir())
+        self.assertEqual(list(self.root.iterdir()), [])
 
 
 if __name__ == "__main__":

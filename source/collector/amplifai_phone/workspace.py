@@ -11,7 +11,11 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from .windows_storage import private_windows_directory, windows_process_alive
+from .windows_storage import (
+    create_private_windows_directory,
+    private_windows_directory,
+    windows_process_alive,
+)
 
 ROOT_MARKER = ".amplifai-phone-sessions-v1"
 SESSION_MARKER = ".amplifai-owned-session.json"
@@ -77,10 +81,28 @@ def _owned_root(root: Path, *, create: bool) -> bool:
                 "App support directory cannot be a symlink", code="workspace_unsafe"
             )
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name == "nt":
+            # Create with a protected owner/DACL, not mkdir followed by repair.
+            # The native context pins parent/root identity through marker bytes.
+            # Races and unverified paths never enter recursive rollback.
+            try:
+                with create_private_windows_directory(root):
+                    try:
+                        _write_private(root / ROOT_MARKER, b"AMPLIFAI_PHONE_SESSIONS_V1\n")
+                    except OSError:
+                        raise WorkspaceError(
+                            "The private storage root is empty or marker-only. "
+                            "No phone data was written; the folder was not removed.",
+                            code="workspace_marker",
+                        ) from None
+            except PermissionError as exc:
+                raise WorkspaceError(
+                    "New sessions root could not be verified; no phone data was written",
+                    code="workspace_unsafe",
+                ) from exc
+            return True
         root.mkdir(mode=0o700)
         try:
-            if os.name == "nt":
-                private_windows_directory(root, create=True)
             _write_private(root / ROOT_MARKER, b"AMPLIFAI_PHONE_SESSIONS_V1\n")
         except BaseException:
             # This root was just created here and has never held a phone session.
