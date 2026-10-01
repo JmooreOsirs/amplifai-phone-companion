@@ -6,7 +6,6 @@ It never changes backup encryption settings or exports source databases.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import plistlib
@@ -16,6 +15,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .backup_watchdog import (
+    BackupWatchdog,
+    observe_backup_receives,
+    run_backup_session,
+)
 from .metadata import (
     RETAINED_HISTORY_START,
     SourceResult,
@@ -24,7 +28,7 @@ from .metadata import (
     read_contacts,
     read_messages,
 )
-from .workspace import MAX_BACKUP_SECONDS, SessionWorkspace
+from .workspace import SessionWorkspace
 
 MAX_SOURCE_BYTES = 128 * 1024 * 1024
 HOME_DOMAIN = "HomeDomain"
@@ -215,38 +219,47 @@ async def collect_iphone(
         transport = "wifi" if device.is_network else "usb"
         if connection_callback is not None:
             connection_callback(transport)
-        async with lockdown, Mobilebackup2Service(lockdown) as service:
-            rules = service.resolve_backup_selection(
-                ("contacts", "call_history", "sms")
-            )
+        watchdog = BackupWatchdog()
 
-            def bounded_progress(value: float) -> None:
-                workspace.check_bound()
-                if progress_callback is not None:
-                    progress_callback(value)
+        async def capture_session() -> IPhoneCapture:
+            async with lockdown, Mobilebackup2Service(lockdown) as service:
+                await observe_backup_receives(service, watchdog)
+                rules = service.resolve_backup_selection(
+                    ("contacts", "call_history", "sms")
+                )
 
-            await asyncio.wait_for(
-                service.backup(
+                def bounded_progress(value: float) -> None:
+                    watchdog.raise_if_aborted()
+                    workspace.check_bound()
+                    if progress_callback is not None:
+                        progress_callback(value)
+
+                watchdog.start()
+                await service.backup(
                     full=True,
                     backup_directory=root,
                     progress_callback=bounded_progress,
                     filter_callback=service.selection_filter_callback(rules),
                     patch_manifest=False,
                     unback=False,
-                ),
-                timeout=MAX_BACKUP_SECONDS,
-            )
-            workspace.check_bound()
-            from pyiosbackup.manifest_plist import ManifestPlist
+                )
+                watchdog.backup_completed()
+                workspace.check_bound()
+                from pyiosbackup.manifest_plist import ManifestPlist
 
-            backup_path = root / lockdown.udid
-            encrypted = ManifestPlist.from_path(
-                backup_path / ManifestPlist.NAME
-            ).is_encrypted
-            password = password_provider() if encrypted else ""
-            if encrypted and not password:
-                raise RuntimeError("The existing encrypted-backup password is required")
-            # The service stores the backup under <workspace>/<UDID>.
-            return parse_selected_backup(
-                backup_path, password, now, workspace.check_bound
-            )
+                backup_path = root / lockdown.udid
+                encrypted = ManifestPlist.from_path(
+                    backup_path / ManifestPlist.NAME
+                ).is_encrypted
+                password = password_provider() if encrypted else ""
+                if encrypted and not password:
+                    raise RuntimeError(
+                        "The existing encrypted-backup password is required"
+                    )
+                return parse_selected_backup(
+                    backup_path, password, now, workspace.check_bound
+                )
+
+        return await run_backup_session(
+            capture_session(), watchdog, workspace.preserve_for_recovery
+        )

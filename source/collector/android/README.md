@@ -1,8 +1,20 @@
 # AMPLIFai Phone — Android owner/partner test
 
-`2026.09.28-rc2` (`26092802`) is an owner/partner test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
+The new `2026.10.01-rc1` (`26100101`) candidate reuses the exact supplied AMPLIFai
+wordmark for its launcher icon. Its Android Java behavior is unchanged from the
+published `2026.09.28-rc2` (`26092802`) release; the version, source notice and
+launcher resources are the only changed Android inputs. Both are owner/partner
+test builds, not a claim of verified Samsung/Pixel compatibility or universal
+SMS/call coverage. Publication requires the same dedicated release signature,
+matching corresponding source and an independently checked download hash.
+Physical-device acceptance remains separate from compilation and JVM tests.
 
-This version fixes an Android-only pairing crash in rc1. Install the signed rc2 APK as an update over rc1; do not uninstall or clear app data to recover. The update must retain the same application ID and signing certificate with a higher version code. After updating, open the app, review the selected sources and approve a fresh one-use browser handoff.
+The published September 28 rc2 fixes an Android-only pairing crash in that day's
+rc1. Preserve rc2 as rollback/acquisition compatibility; never recommend the
+broken September 28 rc1. Install a qualified October 1 candidate as an in-place
+update, without uninstalling or clearing app data. Updates retain the application
+ID and signing certificate with a higher version code. After updating, open the
+app, review the selected sources and approve a fresh one-use browser handoff.
 
 ## Owner flow
 

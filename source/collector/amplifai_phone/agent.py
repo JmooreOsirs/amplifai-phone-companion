@@ -7,7 +7,6 @@ Tests inject a synthetic collector directly into run_connect.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import signal
 import sys
@@ -16,7 +15,9 @@ from pathlib import Path
 from typing import TextIO
 
 from .__main__ import review_capture
+from .backup_watchdog import BackupCleanupIncomplete, BackupStalled, BackupTimeLimit
 from .bridge import BridgeError, BridgeServer
+from .capture_runtime import run_local_capture
 from .ios_backup import IPhoneCapture, collect_iphone
 from .metadata import MAX_SELECTED_CONTACTS, UnsupportedSchema
 from .workspace import WorkspaceError, abandoned_sessions, clear_abandoned
@@ -54,7 +55,21 @@ def _error_code(exc: BaseException) -> str:
     if isinstance(exc, CaptureCancelled):
         return "cancelled"
     if isinstance(exc, WorkspaceError):
-        return "workspace"
+        return exc.code
+    if isinstance(exc, (BackupStalled, BackupTimeLimit)):
+        return exc.code
+    if isinstance(exc, BackupCleanupIncomplete):
+        return (
+            exc.reason
+            if exc.reason
+            in {
+                "backup_stalled",
+                "backup_time_limit",
+                "cancelled",
+                "connection_timeout",
+            }
+            else "collection_failed"
+        )
     if isinstance(exc, UnsupportedSchema):
         return "unsupported_schema"
     if isinstance(exc, (BackupPasswordIsRequired, InvalidUnwrap)):
@@ -62,7 +77,7 @@ def _error_code(exc: BaseException) -> str:
     if isinstance(exc, PairingError):
         return "trust_required"
     if isinstance(exc, TimeoutError):
-        return "timeout"
+        return "connection_timeout"
     if isinstance(exc, RuntimeError) and (
         "exactly one trusted iPhone" in str(exc)
         or "trusted iPhone connection" in str(exc)
@@ -70,6 +85,17 @@ def _error_code(exc: BaseException) -> str:
     ):
         return "phone_connection"
     return "collection_failed"
+
+
+def _error_event(exc: BaseException) -> dict[str, object]:
+    event: dict[str, object] = {"kind": "error", "code": _error_code(exc)}
+    if isinstance(exc, BackupCleanupIncomplete):
+        event["cleanupRequired"] = True
+    elif isinstance(exc, WorkspaceError) and exc.code == "workspace_cleanup":
+        if exc.primary_error is not None:
+            event["code"] = _error_code(exc.primary_error)
+        event["cleanupRequired"] = True
+    return event
 
 
 def run_connect(
@@ -102,7 +128,7 @@ def run_connect(
     bridge: BridgeServer | None = None
     selected_ids: set[int] | None = None
     try:
-        capture = asyncio.run(
+        capture = run_local_capture(
             collector(
                 password_provider=password_provider,
                 progress_callback=progress,
@@ -140,6 +166,20 @@ def run_connect(
                     bridge = None
                 _emit(sink, {"kind": "state", "state": "pairing_revoked"})
                 continue
+            if action in {"handoff-status", "finish"}:
+                if (set(command) != {"action", "handoffId"} or bridge is None
+                        or command.get("handoffId") != bridge.handoff_id):
+                    _emit(sink, {"kind": "error", "code": "handoff_unconfirmed"})
+                    continue
+                state = bridge.handoff_state()
+                if action == "finish":
+                    if state != "saved":
+                        _emit(sink, {"kind": "error", "code": "handoff_unconfirmed"})
+                        continue
+                    _emit(sink, {"kind": "state", "state": "completed"})
+                    return 0
+                _emit(sink, {"kind": "handoff", "state": state, "handoffId": bridge.handoff_id})
+                continue
             if action == "pair":
                 if selected_ids is None:
                     _emit(sink, {"kind": "error", "code": "selection"})
@@ -163,6 +203,8 @@ def run_connect(
                         "pairCode": bridge.code,
                         "port": bridge.port,
                         "expiresInSeconds": 300,
+                        "handoffId": bridge.handoff_id,
+                        "payloadSha256": bridge.payload_sha256,
                     },
                 )
                 continue
@@ -192,7 +234,7 @@ def run_connect(
         _emit(sink, {"kind": "state", "state": "cancelled"})
         return 130
     except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - do not expose device errors
-        _emit(sink, {"kind": "error", "code": _error_code(exc)})
+        _emit(sink, _error_event(exc))
         return 1
     finally:
         if bridge is not None:
@@ -236,8 +278,11 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
     except ImportError:
         _emit(sink, {"kind": "error", "code": "runtime_missing"})
         return 1
-    except (WorkspaceError, OSError):
-        _emit(sink, {"kind": "error", "code": "workspace"})
+    except WorkspaceError as exc:
+        _emit(sink, _error_event(exc))
+        return 1
+    except OSError:
+        _emit(sink, {"kind": "error", "code": "workspace_unavailable"})
         return 1
 
 

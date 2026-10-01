@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import plistlib
 import tempfile
 import unittest
@@ -63,6 +64,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
         service.backup = AsyncMock()
+        service.service._ensure_started = AsyncMock(
+            return_value=(asyncio.StreamReader(), MagicMock())
+        )
         service.resolve_backup_selection.return_value = ("selection-rules",)
         service.selection_filter_callback.return_value = "selection-filter"
         expected = IPhoneCapture(
@@ -164,6 +168,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
         service.backup = AsyncMock()
+        service.service._ensure_started = AsyncMock(
+            return_value=(asyncio.StreamReader(), MagicMock())
+        )
         expected = IPhoneCapture(
             SourceResult(0, (), 0),
             SourceResult(0, (), 0),
@@ -239,6 +246,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
         service.backup = AsyncMock()
+        service.service._ensure_started = AsyncMock(
+            return_value=(asyncio.StreamReader(), MagicMock())
+        )
         expected = IPhoneCapture(
             SourceResult(0, (), 0),
             SourceResult(0, (), 0),
@@ -304,6 +314,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
         service.backup = AsyncMock()
+        service.service._ensure_started = AsyncMock(
+            return_value=(asyncio.StreamReader(), MagicMock())
+        )
         expected = IPhoneCapture(
             SourceResult(0, (), 0),
             SourceResult(0, (), 0),

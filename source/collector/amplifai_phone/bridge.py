@@ -7,6 +7,7 @@ The owner must first select contacts and explicitly approve a browser handoff.
 from __future__ import annotations
 
 import hmac
+import hashlib
 import json
 import re
 import secrets
@@ -14,6 +15,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from uuid import uuid4
 
 from .ios_backup import IPhoneCapture
 from .metadata import interactions_for_contacts, select_people
@@ -84,6 +86,9 @@ class BridgeServer:
         now: Any = time.monotonic,
     ):
         self.payload = selected_metadata(capture, ids)
+        self.handoff_id = str(uuid4())
+        self.payload_sha256 = hashlib.sha256(self.payload).hexdigest()
+        self.acknowledged_saved = False
         self.origin = origin
         self.now = now
         self.expires_at = now() + PAIR_SECONDS
@@ -126,7 +131,7 @@ class BridgeServer:
 
             def do_OPTIONS(self) -> None:
                 metadata_path = re.fullmatch(r"/v1/metadata(?:\?cursor=(0|[1-9][0-9]{0,3}))?", self.path)
-                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete") and metadata_path is None):
+                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete", "/v1/acknowledge-save") and metadata_path is None):
                     self._reply(403)
                     return
                 expected_method = "GET" if metadata_path is not None else "POST"
@@ -153,6 +158,9 @@ class BridgeServer:
                     return
                 if self.path == "/v1/complete":
                     self._complete()
+                    return
+                if self.path == "/v1/acknowledge-save":
+                    self._acknowledge_save()
                     return
                 if self.path != "/v1/pair":
                     self._reply(403)
@@ -204,6 +212,8 @@ class BridgeServer:
                     body = json.dumps(
                         {
                             "token": bridge.token,
+                            "handoffId": bridge.handoff_id,
+                            "payloadSha256": bridge.payload_sha256,
                             "expiresInSeconds": max(
                                 0, int(bridge.expires_at - bridge.now())
                             ),
@@ -223,7 +233,7 @@ class BridgeServer:
                     self._reply(403)
                     return
                 with bridge.lock:
-                    if bridge.now() >= bridge.expires_at:
+                    if bridge.now() >= bridge.expires_at or bridge.closed:
                         self._reply(410)
                         return
                     if bridge.token is None or not hmac.compare_digest(
@@ -237,6 +247,50 @@ class BridgeServer:
                         return
                     bridge.used = True
                 self._reply(200, b'{"completed":true}')
+
+            def _acknowledge_save(self) -> None:
+                """The trusted browser must assert a real validated save, never delivery."""
+                if self.headers.get("Transfer-Encoding") or self.headers.get_all("Content-Type") != ["application/json"]:
+                    self._reply(415)
+                    return
+                authorizations = self.headers.get_all("Authorization")
+                with bridge.lock:
+                    if bridge.now() >= bridge.expires_at or bridge.closed:
+                        self._reply(410)
+                        return
+                    if (authorizations is None or len(authorizations) != 1 or bridge.token is None
+                            or not hmac.compare_digest(authorizations[0].encode("utf-8"), f"Bearer {bridge.token}".encode("ascii"))):
+                        self._reply(403)
+                        return
+                lengths = self.headers.get_all("Content-Length")
+                try:
+                    length = int(lengths[0]) if lengths is not None and len(lengths) == 1 else 0
+                except ValueError:
+                    length = 0
+                if not 0 < length <= MAX_REQUEST_BYTES:
+                    self._reply(413 if length > MAX_REQUEST_BYTES else 400)
+                    return
+                try:
+                    command = json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    self._reply(400)
+                    return
+                if (not isinstance(command, dict) or set(command) != {"handoffId", "payloadSha256", "saved"}
+                        or command.get("saved") is not True
+                        or not isinstance(command.get("handoffId"), str)
+                        or not isinstance(command.get("payloadSha256"), str)):
+                    self._reply(400)
+                    return
+                with bridge.lock:
+                    # The immutable pairing binds this assertion to exactly the reviewed metadata.
+                    if bridge.now() >= bridge.expires_at or bridge.closed:
+                        self._reply(410)
+                        return
+                    if not bridge.used or command["handoffId"] != bridge.handoff_id or command["payloadSha256"] != bridge.payload_sha256:
+                        self._reply(409)
+                        return
+                    bridge.acknowledged_saved = True
+                self._reply(200, b'{"acknowledged":true}')
 
             def do_GET(self) -> None:
                 if not self._authorized_origin():
@@ -291,6 +345,14 @@ class BridgeServer:
     def start(self) -> None:
         self.thread.start()
         self.timer.start()
+
+    def handoff_state(self) -> str:
+        with self.lock:
+            if self.acknowledged_saved:
+                return "saved"
+            if self.now() >= self.expires_at or self.closed:
+                return "expired"
+            return "received" if self.used else "waiting"
 
     def close(self) -> None:
         with self.lifecycle_lock:
