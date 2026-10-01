@@ -33,7 +33,7 @@ try {
             $acl.AddAccessRule($rule)
         }
         $phase = 14
-        Set-Acl -LiteralPath $folder -AclObject $acl
+        [System.IO.DirectoryInfo]::new($folder).SetAccessControl($acl)
     }
     $phase = 15
     $acl = Get-Acl -LiteralPath $folder
