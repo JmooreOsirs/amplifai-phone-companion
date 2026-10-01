@@ -1,4 +1,4 @@
-name: Windows companion administrator-runner software qualification
+name: Windows reduced-token storage qualification
 
 on:
   push:
@@ -33,18 +33,14 @@ jobs:
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
           python --version
           python -c "import platform; print(platform.machine())"
-      - name: Install exact hash-pinned Windows dependencies
-        run: python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
-      - name: Fail fast on native owner-ACL and PID proof (administrator runner)
+      # Reuse administrator software proof: run 36908082055, source 901142c.
+      # This new probe is stdlib-only; no device collection or child elevation.
+      - name: Verify reduced-token policy and actual synchronous storage
         timeout-minutes: 2
-        run: python -m unittest discover -s source/collector/tests -p test_windows_storage.py -v
-      - name: Qualify only changed cancellation and private workspace paths
-        timeout-minutes: 2
+        shell: pwsh
         env:
           PYTHONPATH: source/collector;source/collector/tests
-        run: python -m unittest test_backup_watchdog.CollectionAbortTest test_workspace -v
-      - name: Verify runtime without connecting to a phone
         run: |
-          python -m amplifai_phone.agent runtime-check
-          python -m amplifai_phone.agent inspect
-          python -c "import tkinter as tk; window=tk.Tk(); window.withdraw(); window.update(); window.destroy(); print('Windows native Tk runtime ready')"
+          python -m unittest test_windows_restricted_token_probe -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python source/collector/tests/windows_restricted_token_probe.py
