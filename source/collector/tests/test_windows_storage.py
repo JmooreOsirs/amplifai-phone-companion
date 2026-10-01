@@ -280,7 +280,6 @@ class NativeBoundary:
 
     def LocalFree(self, descriptor: object) -> None:
         self.freed.append(address(descriptor))
-        return None
 
     def CloseHandle(self, handle: int) -> int:
         self.closed.append(handle)
@@ -317,12 +316,51 @@ class WindowsNativePolicyTest(unittest.TestCase):
         self.assertEqual(native.loads[1][0], r"C:\Windows\System32\advapi32.dll")
         for name, args in native.calls:
             if name == "CreateFileW":
-                self.assertEqual(args[1], 0x20080)
+                self.assertEqual(args[1], 0x20080 if args[0] == str(self.path) else 0x80)
                 self.assertEqual(args[2], 3, "no share-delete or privilege-granting access")
                 self.assertEqual(args[4], 3)
                 self.assertEqual(args[5], 0x02200000)
             if name == "GetSecurityInfo":
                 self.assertEqual(args[1:3], (1, 5))
+
+    def test_ancestor_pinning_does_not_require_reading_ancestor_acls(self) -> None:
+        target = str(self.path)
+
+        class MetadataAncestorBoundary(NativeBoundary):
+            def CreateFileW(self, path, access, *arguments):
+                if path != target and access & 0x20000:
+                    self.error = 5
+                    return storage._INVALID_HANDLE
+                return super().CreateFileW(path, access, *arguments)
+
+        native = MetadataAncestorBoundary()
+        with native.installed(), storage.create_private_windows_directory(self.path):
+            self.assertIsNotNone(native.created)
+            self.assertEqual(len(native.freed), 1, "root ACL readback still completed")
+            self.assertEqual(native.closed, [51], "all directory identities remain pinned")
+        self.assertEqual(set(native.closed), {51, *native.handles})
+        root = [args for name, args in native.calls
+                if name == "CreateFileW" and args[0] == target]
+        self.assertEqual(root[0][1], 0x20080, "root must retain READ_CONTROL")
+
+    def test_handle_failures_preserve_only_the_immediate_numeric_os_diagnostic(self) -> None:
+        for failure in ("CreateFileW", "GetFileInformationByHandleEx"):
+            native = NativeBoundary()
+            native.failure = failure
+            with (native.installed(), self.assertRaises(PermissionError) as caught,
+                  storage.create_private_windows_directory(self.path)):
+                self.fail("OS handle failure cannot allow marker/data")
+            error = caught.exception
+            self.assertEqual(getattr(error, "win32_code", None), 183)
+            self.assertEqual(getattr(error, "native_stage", None), 15)
+            self.assertEqual(getattr(error, "api_code", None),
+                             1 if failure == "CreateFileW" else 2)
+            self.assertEqual(getattr(error, "requested_access", None), 0x80)
+            self.assertEqual(getattr(error, "ancestor", None), True)
+            self.assertNotIn(str(self.path), str(error))
+            self.assertNotIn("1001", str(error))
+            self.assertIsNone(error.__cause__)
+            self.assertEqual(set(native.closed), {51, *native.handles})
 
     def test_verify_never_creates_or_repairs_an_existing_directory(self) -> None:
         native = NativeBoundary()
@@ -372,9 +410,9 @@ class WindowsNativePolicyTest(unittest.TestCase):
                 native = NativeBoundary()
                 native.failure = failure
                 native.reparse_paths.add(reparse)
-                with native.installed(), self.assertRaises(PermissionError):
-                    with storage.create_private_windows_directory(self.path):
-                        self.fail("a raced root must not be admitted")
+                with (native.installed(), self.assertRaises(PermissionError),
+                      storage.create_private_windows_directory(self.path)):
+                    self.fail("a raced root must not be admitted")
                 self.assertEqual(set(native.closed), {51, *native.handles})
                 if reparse == str(self.path.parent):
                     self.assertIsNone(native.created)
@@ -402,9 +440,9 @@ class WindowsNativePolicyTest(unittest.TestCase):
             with self.subTest(failure=failure):
                 native = NativeBoundary()
                 native.failure = failure
-                with native.installed(), self.assertRaisesRegex(PermissionError, r"native policy stage \d+\)$") as caught:
-                    with storage.create_private_windows_directory(self.path):
-                        self.fail("failed OS call must fail closed")
+                with (native.installed(), self.assertRaisesRegex(PermissionError, r"native policy stage \d+\)$") as caught,
+                      storage.create_private_windows_directory(self.path)):
+                    self.fail("failed OS call must fail closed")
                 self.assertNotIn(str(self.path), str(caught.exception))
                 self.assertNotIn("1001", str(caught.exception))
                 self.assertIsNone(caught.exception.__cause__)
@@ -442,9 +480,9 @@ class WindowsNativePolicyTest(unittest.TestCase):
     def test_reparse_ancestor_is_rejected_before_creating_a_root(self) -> None:
         native = NativeBoundary()
         native.reparse_paths.add(str(self.path.parent.parent))
-        with native.installed(), self.assertRaises(PermissionError):
-            with storage.create_private_windows_directory(self.path):
-                self.fail("creation must not traverse a substituted ancestor")
+        with (native.installed(), self.assertRaises(PermissionError),
+              storage.create_private_windows_directory(self.path)):
+            self.fail("creation must not traverse a substituted ancestor")
         self.assertIsNone(native.created)
         self.assertEqual(set(native.closed), {51, *native.handles})
 
@@ -457,9 +495,9 @@ class WindowsStorageTest(unittest.TestCase):
             inherited.mkdir()
             with self.assertRaises(PermissionError):
                 storage.private_windows_directory(inherited)
-            with self.assertRaises(PermissionError):
-                with storage.create_private_windows_directory(inherited):
-                    self.fail("existing directories cannot be claimed")
+            with (self.assertRaises(PermissionError),
+                  storage.create_private_windows_directory(inherited)):
+                self.fail("existing directories cannot be claimed")
             private = Path(parent) / "private"
             with storage.create_private_windows_directory(private):
                 child = private / "synthetic-source"

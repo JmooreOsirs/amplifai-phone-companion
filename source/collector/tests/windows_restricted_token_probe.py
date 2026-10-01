@@ -20,7 +20,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from amplifai_phone import windows_storage as storage
-from amplifai_phone.workspace import SessionWorkspace
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 DWORD = ctypes.c_uint32
 BOOL = ctypes.c_int32
@@ -276,32 +276,72 @@ def restricted_storage_token() -> Iterator[dict[str, object]]:
                 os._exit(70)
 
 
-def main() -> None:
+def directory_diagnostic(error: storage._DirectoryHandleError) -> dict[str, object]:
+    return {
+        "native_stage": error.native_stage,
+        "win32_code": error.win32_code,
+        "requested_access": error.requested_access,
+        "api_code": error.api_code,
+    }
+
+
+def observe_legacy_ancestor_access(root: Path) -> dict[str, object]:
+    """Read-only old-mask observation, not storage admission or a fallback."""
+    api = storage._NativeSecurity()
+    with ExitStack() as lifetime:
+        for index, ancestor in enumerate(reversed(root.parents)):
+            try:
+                # The default root mask is exactly the former ancestor mask.
+                # No security descriptor/ACL, marker or data is changed here.
+                api.open_directory(ancestor, lifetime)
+            except storage._DirectoryHandleError as error:
+                return {
+                    "all_readable": False,
+                    "failed_ancestor_index": index,
+                    **directory_diagnostic(error),
+                }
+    return {"all_readable": True}
+
+
+def main() -> int:
     # Storage operations remain on this thread; no worker/subprocess inherits
     # the unrestricted process token. Only synthetic bytes are ever written.
-    with tempfile.TemporaryDirectory(prefix="amplifai-reduced-storage-") as parent:
-        root = Path(parent) / "sessions"
-        with restricted_storage_token() as proof:
-            workspace = SessionWorkspace(root)
-            with workspace as directory:
-                synthetic = directory / "synthetic-source"
-                synthetic.write_bytes(b"synthetic-only")
-                require(synthetic.read_bytes() == b"synthetic-only", 80)
+    try:
+        with tempfile.TemporaryDirectory(prefix="amplifai-reduced-storage-") as parent:
+            root = Path(parent) / "sessions"
+            with restricted_storage_token() as proof:
+                legacy = observe_legacy_ancestor_access(root)
+                workspace = SessionWorkspace(root)
+                with workspace as directory:
+                    synthetic = directory / "synthetic-source"
+                    synthetic.write_bytes(b"synthetic-only")
+                    require(synthetic.read_bytes() == b"synthetic-only", 80)
+                    storage.private_windows_directory(root)
+                require(not directory.exists(), 80)
                 storage.private_windows_directory(root)
-            require(not directory.exists(), 80)
-            storage.private_windows_directory(root)
-        print(
-            json.dumps(
-                {
-                    "kind": "reduced-token-storage",
-                    "ready": True,
-                    "scope": "same-identity synchronous storage only",
-                    **proof,
-                },
-                sort_keys=True,
-            )
+    except (WorkspaceError, PermissionError) as failure:
+        error = failure.__cause__ if isinstance(failure, WorkspaceError) else failure
+        diagnostic = (
+            directory_diagnostic(error)
+            if isinstance(error, storage._DirectoryHandleError)
+            else {"code": "storage_probe_failed"}
         )
+        print(json.dumps({"kind": "reduced-token-storage", "ready": False, **diagnostic}))
+        return 1
+    print(
+        json.dumps(
+            {
+                "kind": "reduced-token-storage",
+                "ready": True,
+                "scope": "same-identity synchronous storage only",
+                "legacy_ancestor_access": legacy,
+                **proof,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

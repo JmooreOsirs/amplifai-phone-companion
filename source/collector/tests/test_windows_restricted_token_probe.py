@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import ctypes
+import io
+import json
 import struct
 import unittest
+from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import windows_restricted_token_probe as probe
@@ -157,6 +161,58 @@ class RestrictedBoundary(NativeBoundary):
 
 
 class RestrictedProbeTest(unittest.TestCase):
+    def test_actual_workspace_failure_is_a_numeric_packet_not_a_private_traceback(self):
+        native = NativeBoundary()
+        native.failure = "CreateFileW"
+
+        @contextmanager
+        def synthetic_os_boundary():
+            with native.installed():
+                yield {}
+
+        output_stream = io.StringIO()
+        with (patch.object(probe, "restricted_storage_token", synthetic_os_boundary),
+              patch("sys.stdout", output_stream)):
+            self.assertEqual(probe.main(), 1)
+        self.assertEqual(json.loads(output_stream.getvalue()), {
+            "kind": "reduced-token-storage", "ready": False,
+            "native_stage": 15, "win32_code": 183, "requested_access": 0x80, "api_code": 1,
+        })
+        self.assertIsNone(native.created)
+        self.assertNotIn("Traceback", output_stream.getvalue())
+        self.assertNotIn("amplifai-reduced-storage-", output_stream.getvalue())
+
+    def test_legacy_ancestor_observation_is_numeric_only_and_never_creates_storage(self):
+        class AncestorDenied(NativeBoundary):
+            def CreateFileW(self, path, access, *arguments):
+                self.error = 5
+                return probe.storage._INVALID_HANDLE
+
+        native = AncestorDenied()
+        path = Path("synthetic-parent/private")
+        with native.installed():
+            diagnostic = probe.observe_legacy_ancestor_access(path)
+        self.assertEqual(diagnostic, {
+            "all_readable": False,
+            "failed_ancestor_index": 0,
+            "native_stage": 15,
+            "api_code": 1,
+            "win32_code": 5,
+            "requested_access": 0x20080,
+        })
+        self.assertIsNone(native.created)
+        self.assertFalse(native.handles)
+        self.assertNotIn("synthetic", str(diagnostic))
+
+    def test_legacy_observation_cannot_ignore_reparse_identity_failure(self):
+        native = NativeBoundary()
+        native.reparse_paths.add(".")
+        path = Path("synthetic-parent/private")
+        with native.installed(), self.assertRaises(PermissionError):
+            probe.observe_legacy_ancestor_access(path)
+        self.assertIsNone(native.created)
+        self.assertEqual(set(native.closed), set(native.handles))
+
     def test_reduced_copy_is_verified_from_effective_thread_before_any_storage(self):
         native = RestrictedBoundary()
         with native.installed(), probe.restricted_storage_token() as proof:

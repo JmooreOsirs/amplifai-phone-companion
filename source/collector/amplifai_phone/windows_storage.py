@@ -12,10 +12,10 @@ from __future__ import annotations
 import ctypes
 import ntpath
 import os
+from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
 from pathlib import Path
-from typing import Iterator
 
 # Windows uses LLP64. c_ulong/wintypes.DWORD are host-sized on non-Windows
 # synthetic test hosts, so every security structure uses explicit Windows widths.
@@ -33,6 +33,24 @@ _DACL_PROTECTED = 0x1000
 _MAX_SID_BYTES = 68  # SECURITY_MAX_SID_SIZE: 8 + 15 DWORD subauthorities
 _MAX_TOKEN_BYTES = 4096
 _INVALID_HANDLE = _PTR(-1).value
+_READ_CONTROL = 0x00020000
+_FILE_READ_ATTRIBUTES = 0x00000080
+
+
+class _DirectoryHandleError(PermissionError):
+    """Immediate OS diagnosis without a path, SID or formatted Win32 message."""
+
+    def __init__(
+        self, win32_code: int, requested_access: int, ancestor: bool, *, api_code: int
+    ) -> None:
+        self.native_stage = 15
+        self.win32_code = win32_code
+        self.requested_access = requested_access
+        self.ancestor = ancestor
+        self.api_code = api_code  # 1: CreateFileW; 2: attribute readback.
+        super().__init__(
+            "Windows private storage owner or ACL is unsafe (native policy stage 15)"
+        )
 
 
 class _TokenUser(ctypes.Structure):
@@ -219,18 +237,29 @@ class _NativeSecurity:
         ), 13)
         return descriptor, acl
 
-    def open_directory(self, path: Path, lifetime: ExitStack) -> object:
+    def open_directory(
+        self, path: Path, lifetime: ExitStack, *, ancestor: bool = False
+    ) -> object:
         # OPEN_REPARSE_POINT inspects the directory itself, not a junction target.
         # No FILE_SHARE_DELETE: the parent/root cannot be replaced while pinned.
+        # Ancestors need identity/attribute pins, not their security descriptor.
+        # Only the root requires READ_CONTROL for independent owner/DACL readback.
+        access = _FILE_READ_ATTRIBUTES | (0 if ancestor else _READ_CONTROL)
         handle = self.kernel.CreateFileW(
-            str(path), 0x00020080, 0x03, None, 3, 0x02200000, None
+            str(path), access, 0x03, None, 3, 0x02200000, None
         )
-        _require(handle not in (None, 0, _INVALID_HANDLE), 15)
+        if handle in (None, 0, _INVALID_HANDLE):
+            raise _DirectoryHandleError(
+                ctypes.get_last_error(), access, ancestor, api_code=1
+            ) from None
         lifetime.callback(self.close, handle)
         information = _FileAttributeTagInfo()
-        _require(self.kernel.GetFileInformationByHandleEx(
+        if not self.kernel.GetFileInformationByHandleEx(
             handle, 9, ctypes.byref(information), ctypes.sizeof(information)
-        ), 15)
+        ):
+            raise _DirectoryHandleError(
+                ctypes.get_last_error(), access, ancestor, api_code=2
+            ) from None
         _require(information.Attributes & 0x10 and not information.Attributes & 0x400
                  and information.ReparseTag == 0, 15)
         return handle
@@ -239,7 +268,7 @@ class _NativeSecurity:
         # A final-component no-follow flag alone still traverses ancestor
         # junctions. Inspect and pin the whole chain before a root is admitted.
         for ancestor in reversed(path.parents):
-            self.open_directory(ancestor, lifetime)
+            self.open_directory(ancestor, lifetime, ancestor=True)
 
     def verify(self, handle: object, principals: tuple[object, ...]) -> None:
         owner, dacl, descriptor = _PTR(), _PTR(), _PTR()

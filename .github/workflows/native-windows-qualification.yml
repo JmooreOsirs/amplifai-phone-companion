@@ -41,6 +41,6 @@ jobs:
         env:
           PYTHONPATH: source/collector;source/collector/tests
         run: |
-          python -m unittest test_windows_restricted_token_probe -v
+          python -m unittest test_windows_storage.WindowsNativePolicyTest test_windows_restricted_token_probe -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python source/collector/tests/windows_restricted_token_probe.py
