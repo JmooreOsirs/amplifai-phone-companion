@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:width="66dp" android:height="31dp" android:gravity="center">
+    <item android:width="66dp" android:height="18.53dp" android:gravity="center">
         <bitmap android:src="@drawable/amplifai_wordmark"
             android:gravity="fill" android:filter="true" />
     </item>
