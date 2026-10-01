@@ -5,9 +5,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from amplifai_phone.windows_storage import (
     _ACL_SCRIPT,
+    _windows_powershell,
     private_windows_directory,
     windows_process_alive,
 )
@@ -19,6 +22,31 @@ class WindowsPolicySourceTest(unittest.TestCase):
             _ACL_SCRIPT.strip().splitlines()[0], "$ErrorActionPreference = 'Stop'"
         )
 
+    def test_acl_rules_use_the_typed_constructor(self) -> None:
+        self.assertIn(
+            "[System.Security.AccessControl.FileSystemAccessRule]::new(", _ACL_SCRIPT
+        )
+
+    def test_acl_failure_reports_only_the_numeric_policy_phase(self) -> None:
+        path = Path("synthetic-private-folder")
+        with (
+            patch("amplifai_phone.windows_storage.os.name", "nt"),
+            patch(
+                "amplifai_phone.windows_storage._windows_powershell",
+                return_value="OS-owned-powershell.exe",
+            ),
+            patch(
+                "amplifai_phone.windows_storage.subprocess.run",
+                return_value=SimpleNamespace(returncode=14),
+            ) as run,
+            self.assertRaisesRegex(PermissionError, r"policy exit code 14\)$") as error,
+        ):
+            private_windows_directory(path, create=True)
+        self.assertNotIn(str(path), str(error.exception))
+        self.assertEqual(run.call_args.args[0][0], "OS-owned-powershell.exe")
+        self.assertEqual(run.call_args.kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(run.call_args.kwargs["stderr"], subprocess.DEVNULL)
+
 
 @unittest.skipUnless(os.name == "nt", "actual Windows security APIs required")
 class WindowsStorageTest(unittest.TestCase):
@@ -27,7 +55,7 @@ class WindowsStorageTest(unittest.TestCase):
         environment["AMPLIFAI_ACL_PARSE_INPUT"] = _ACL_SCRIPT
         result = subprocess.run(
             [
-                "powershell.exe",
+                _windows_powershell(),
                 "-NoLogo",
                 "-NoProfile",
                 "-NonInteractive",

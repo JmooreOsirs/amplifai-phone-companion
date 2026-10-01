@@ -1,36 +1,12 @@
 # AMPLIFai Phone companion source
 
-**Mac and Android owner/partner test builds.** Normal fresh installation,
-owner-operated phone collection and hosted-browser transfer still need
-acceptance. These are not verified customer-ready downloads. Do not bypass
-Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
-companions are not available.
+This repository carries the authored-source view. The complete matching Mac
+source archive, including the exact 143 upstream source archives and 278
+notice files, is offered with the owner-test binaries at:
+https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.01-rc1
 
-- [Mac Apple Silicon/macOS 14+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/2026.09.25-rc1): existing Apple-notarized iPhone companion; unchanged.
-- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.09.28-rc2): release-signed owner/partner test APK for same-phone browser handoff. This in-place update fixes a pairing crash in rc1; testers should install rc2 over rc1 without clearing app data. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review.
-- Start through your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account), or use the separate [browser-only pilot](https://amplifai-database-engine.vercel.app/phone). The temporary app-generated pairing code is not a phone number or email verification code.
-
-## Android source and build
-
-`source/collector/android/` contains the complete project-authored Android app,
-resources, JVM tests and pinned Gradle build configuration. Its README documents
-the normal owner flow, permission boundaries, foreground handoff lifecycle and
-remaining physical-device matrix. The Android release carries its matching
-source archive, license/notices and checksums beside the APK. No private signing
-key, password, account source or owner phone data is included.
-
-Build with Android SDK 37, JDK 25 and the pinned Gradle wrapper. Developer build
-tools are not required by installer users. Without release signing variables,
-the generated release APK is unsigned and must not be distributed as installable.
-The Android README describes operator-supplied signing and verification.
-
-## Mac source package
-
-The [versioned release assets](https://github.com/JmooreOsirs/amplifai-phone-companion/releases)
-carry the complete corresponding-source archive, including the `third_party/`
-files described below, beside the candidate binary. This repository contains
-the companion-authored portion and retained notice aggregate; it is not the
-private AMPLIFai website/backend repository.
+Download `AMPLIFai-Phone-macOS-Source-2026.10.01-rc1.tar.gz` and its checksums
+for the full offline package; upstream archives are not duplicated into Git.
 
 The project-authored companion is Copyright (C) 2026 OSIRS LLC and licensed
 under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
@@ -42,11 +18,11 @@ Python helper. It is not a signed app or installer. It includes the source and
 build inputs matched to the selected artifact inventory; it does not claim a
 byte-for-byte reproducible binary build or verified operation on an owner phone.
 
-## Contents
+## Complete source archive contents
 
 - `source/`: project-authored Swift/Python companion, tests, exact dependency
-  lock, logo and build/packaging scripts, plus the separate Android source folder.
-  No private account/web implementation is included.
+  lock, logo and build/packaging scripts. No Android app or private account/web
+  implementation is included.
 - `third_party/source_archives/`: checksum-verified exact Python, native and
   Rust source archives. The complete candidate contains 143 archives. All 102
   pinned Python build inputs remain available; the package matrix marks which

@@ -8,10 +8,22 @@ import unittest
 from pathlib import Path
 
 from collect_companion_native_closure import archive_notices, requested_sources
-from package_companion_review import assemble, contained_file, verify_app, verify_file
+from package_companion_review import (
+    assemble,
+    contained_file,
+    native_input_records,
+    verify_app,
+    verify_file,
+)
 
 
 class PackageEvidenceTests(unittest.TestCase):
+    def test_complete_native_closure_is_not_reduced_to_the_interpreter_roots(self):
+        records = [{"name": name} for name in ("CPython", "python-build-standalone", "openssl-3.5")]
+        self.assertEqual(native_input_records({"records": records}), records)
+        with self.assertRaisesRegex(ValueError, "standalone build recipe"):
+            native_input_records({"records": records[1:]})
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="amplifai-package-test-")
         self.root = Path(self.temporary.name).resolve()

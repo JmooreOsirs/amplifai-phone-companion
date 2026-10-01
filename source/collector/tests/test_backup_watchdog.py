@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import struct
 import tempfile
@@ -21,7 +22,8 @@ from amplifai_phone.backup_watchdog import (
     run_backup_session,
 )
 from amplifai_phone.ios_backup import collect_iphone
-from amplifai_phone.workspace import SESSION_MARKER
+from amplifai_phone.windows_storage import private_windows_directory
+from amplifai_phone.workspace import SESSION_MARKER, WorkspaceError
 
 
 async def checkpoint() -> None:
@@ -249,6 +251,16 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_storage_failure_is_reported_without_waiting(self) -> None:
+        with (
+            patch(
+                "amplifai_phone.ios_backup.SessionWorkspace.__enter__",
+                side_effect=WorkspaceError("synthetic storage unavailable"),
+            ),
+            self.assertRaisesRegex(WorkspaceError, "synthetic storage unavailable"),
+        ):
+            await asyncio.wait_for(self._cancel_collection(hang_teardown=False), 1)
+
     async def test_collection_cancel_cleans_session_and_never_parses_capture(
         self,
     ) -> None:
@@ -319,7 +331,18 @@ class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
                     sessions_root=root,
                 )
             )
-            await started.wait()
+            startup = asyncio.create_task(started.wait())
+            try:
+                done, _pending = await asyncio.wait(
+                    (task, startup), timeout=20, return_when=asyncio.FIRST_COMPLETED
+                )
+                if task in done:
+                    await task  # Surface early storage/setup failure, not a CI hang.
+                    self.fail("collection returned before the synthetic backup started")
+                self.assertIn(startup, done, "collection startup exceeded 20 seconds")
+            finally:
+                startup.cancel()
+                await asyncio.gather(startup, return_exceptions=True)
             task.cancel()
             with self.assertRaises(
                 BackupCleanupIncomplete if hang_teardown else asyncio.CancelledError
@@ -331,7 +354,10 @@ class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(sessions), int(hang_teardown))
             if hang_teardown:
                 self.assertTrue((sessions[0] / SESSION_MARKER).is_file())
-                self.assertEqual(sessions[0].stat().st_mode & 0o077, 0)
+                if os.name == "nt":
+                    private_windows_directory(root)
+                else:
+                    self.assertEqual(sessions[0].stat().st_mode & 0o077, 0)
                 release.set()
                 await checkpoint()
 

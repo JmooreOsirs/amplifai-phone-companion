@@ -6,8 +6,8 @@ The owner must first select contacts and explicitly approve a browser handoff.
 
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import json
 import re
 import secrets

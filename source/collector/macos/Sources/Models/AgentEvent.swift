@@ -35,7 +35,9 @@ struct AgentEvent: Decodable {
     let sessions: [ResiduePreview]?
     let count: Int?
     let code: String?
+    let cleanupRequired: Bool?
     let pairCode: String?
     let port: Int?
     let expiresInSeconds: Int?
+    let handoffId: String?
 }
