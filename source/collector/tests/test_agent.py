@@ -14,7 +14,12 @@ from amplifai_phone.backup_watchdog import (
     BackupTimeLimit,
 )
 from amplifai_phone.ios_backup import IPhoneCapture
-from amplifai_phone.metadata import Contact, Interaction, SourceResult
+from amplifai_phone.metadata import (
+    Contact,
+    Interaction,
+    SourceCapacityLimit,
+    SourceResult,
+)
 from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 
@@ -58,6 +63,30 @@ def synthetic_capture() -> IPhoneCapture:
 
 
 class AgentProtocolTest(unittest.TestCase):
+    def test_metadata_capacity_error_is_distinct_and_never_emits_private_details(self) -> None:
+        async def failed(**_kwargs):
+            raise SourceCapacityLimit("private /Users/tester/source count detail")
+
+        output = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), output, failed), 1)
+        self.assertEqual(json.loads(output.getvalue().splitlines()[-1]), {"kind": "error", "code": "source_capacity_limit"})
+        self.assertNotIn("/Users/tester", output.getvalue())
+
+    def test_byte_progress_advances_independently_of_flat_backup_percentage(self) -> None:
+        async def capture(**kwargs):
+            kwargs["progress_callback"](7)
+            for count in (1024**3, 2 * 1024**3):
+                kwargs["transfer_callback"]({"stage": "backup", "receivedBytes": count,
+                                             "retainedBytes": count // 2, "discardedBytes": count // 2,
+                                             "filesReceived": 9, "elapsedSeconds": 10, "bytesPerSecond": 1000})
+            return synthetic_capture()
+
+        output = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO('{"action":"disconnect"}\n'), output, capture), 0)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([event["receivedBytes"] for event in events if event["kind"] == "transfer"], [1024**3, 2 * 1024**3])
+        self.assertEqual(len([event for event in events if event["kind"] == "progress"]), 1)
+
     def test_storage_reasons_survive_connect_and_admin_without_private_details(
         self,
     ) -> None:

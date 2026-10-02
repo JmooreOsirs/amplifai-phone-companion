@@ -23,7 +23,7 @@ PACKAGE_SCRIPTS = (
     "record_native_sources.py", "inventory_portable_helper.py", "extract_companion_notices.py",
     "render_companion_coverage.py", "scan_companion_bundle.py", "companion_release_preflight.sh",
     "package_companion_review.py", "test_companion_review_package.py",
-    "collect_companion_native_closure.py",
+    "collect_companion_native_closure.py", "verify_frozen_metadata.py",
 )
 
 

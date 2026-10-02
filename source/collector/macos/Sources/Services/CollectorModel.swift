@@ -21,6 +21,12 @@ final class CollectorModel: ObservableObject {
     @Published var phase: Phase = .idle
     @Published var progress = 0.0
     @Published private(set) var progressIsKnown = false
+    @Published private(set) var transferBytes: Int64 = 0
+    @Published private(set) var retainedBytes: Int64 = 0
+    @Published private(set) var transferFileCount: Int64 = 0
+    @Published private(set) var transferBytesPerSecond = 0.0
+    @Published private(set) var processedBytes: Int64 = 0
+    @Published private(set) var transferIsKnown = false
     @Published private(set) var collectionStartedAt: Date?
     @Published private(set) var handoffID = ""
     @Published private(set) var handoffAcknowledged = false
@@ -108,6 +114,22 @@ final class CollectorModel: ObservableObject {
         "The percentage is reported by the iPhone for backup transfer, not the entire collection or account save. A remaining-time estimate is unavailable."
     }
 
+    static func byteDescription(_ value: Int64) -> String {
+        let bytes = Double(value)
+        for (unit, size) in [("TiB", 1_099_511_627_776.0), ("GiB", 1_073_741_824.0), ("MiB", 1_048_576.0), ("KiB", 1_024.0)] {
+            if bytes >= size { return String(format: "%.1f %@", bytes / size, unit) }
+        }
+        return "\(value) B"
+    }
+
+    var transferSummary: String {
+        "\(Self.byteDescription(transferBytes)) transferred · \(Self.byteDescription(retainedBytes)) retained locally"
+    }
+
+    var transferActivity: String {
+        "Observed average: \(Self.byteDescription(Int64(transferBytesPerSecond)))/s · \(transferFileCount) files received"
+    }
+
     func inspectResidue() {
         guard process == nil else { return }
         needsStorageReview = true
@@ -134,6 +156,12 @@ final class CollectorModel: ObservableObject {
         missingSources = []
         progress = 0
         progressIsKnown = false
+        transferBytes = 0
+        retainedBytes = 0
+        transferFileCount = 0
+        transferBytesPerSecond = 0
+        processedBytes = 0
+        transferIsKnown = false
         collectionStartedAt = Date()
         resetHandoff()
         lastErrorCode = nil
@@ -429,6 +457,28 @@ final class CollectorModel: ObservableObject {
                 progressIsKnown = true
                 phase = value == 100 ? .processing : .transferring
             } else { progressIsKnown = false; phase = .transferring }
+        case "transfer":
+            guard phase == .connecting || phase == .transferring || phase == .processing else { return }
+            if event.stage == "backup" {
+                guard let received = event.receivedBytes, let retained = event.retainedBytes,
+                      let discarded = event.discardedBytes, let files = event.filesReceived,
+                      let rate = event.bytesPerSecond, let elapsed = event.elapsedSeconds,
+                      received >= transferBytes, received <= 9_007_199_254_740_991,
+                      retained >= retainedBytes, retained <= received, discarded >= 0,
+                      discarded == received - retained, files >= transferFileCount,
+                      rate.isFinite, rate >= 0, rate <= 1_099_511_627_776,
+                      elapsed.isFinite, elapsed > 0 else { return }
+                transferBytes = received
+                retainedBytes = retained
+                transferFileCount = files
+                transferBytesPerSecond = rate
+                transferIsKnown = true
+                phase = .transferring
+            } else if event.stage == "processing", let bytes = event.processedBytes,
+                      bytes >= processedBytes, bytes <= 9_007_199_254_740_991 {
+                processedBytes = bytes
+                phase = .processing
+            }
         case "connection":
             connectionTransport = event.transport == "wifi" ? "Wi-Fi" : "USB"
         case "capture":
@@ -566,7 +616,7 @@ final class CollectorModel: ObservableObject {
         case .idle, .connecting, .error:
             return "Connect one iPhone by USB, unlock it, and approve Apple's Trust prompt on the phone if shown. Existing trusted Wi-Fi pairing can be used only when no cable is present. No new wireless pairing or security bypass is performed."
         case .transferring:
-            return "A full local backup can transfer unrelated bytes before they are discarded. Keep the phone connected. Productive transfer is not a stall; the guards are 15 minutes without backup bytes and four hours total."
+            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the phone connected. Data-aware guards allow larger active transfers; 15 minutes without file data or sustained very slow progress can stop the session."
         case .passwordRequired:
             return "Use the existing password for this iPhone's encrypted computer backup. It is not your phone passcode. This app does not enable, disable or reset encryption."
         case .processing:
@@ -590,8 +640,9 @@ final class CollectorModel: ObservableObject {
         }
         switch lastErrorCode {
         case "backup_password": return ["Check the existing encrypted computer-backup password with its owner.", "Reconnect and enter it only in this companion. Do not reset encryption to bypass this step."]
-        case "workspace_low_space": return ["Free at least 2 GiB on the volume used by this app's temporary storage.", "Keep other backups intact, then reconnect."]
-        case "workspace_size_limit": return ["This backup exceeds the 1 GiB retained-session guard; repeating the same backup will not remove that limit.", "Contact support for a supported collection path. No security or storage guard is bypassed."]
+        case "workspace_low_space": return ["Free space for retained source databases, their parsing copies and a further 2 GiB reserve on the temporary-storage volume.", "Keep other backups intact, then reconnect."]
+        case "workspace_size_limit": return ["This helper reported an older backup-size limit. Update the signed companion before retrying."]
+        case "source_capacity_limit": return ["A control-frame or metadata-count safety bound was reached, not the former backup-size ceiling.", "Contact support with the companion version; do not reset phone encryption or remove other backups."]
         case "workspace_unsafe": return ["Stop and contact support. Do not change permissions or delete an unverified folder."]
         case "workspace_unavailable", "workspace": return ["Reopen the signed companion and choose Check temporary data.", "If access still fails, reinstall the signed companion or contact support."]
         case "backup_stalled", "backup_time_limit", "connection_timeout", "phone_connection", "trust_required":
@@ -606,14 +657,15 @@ final class CollectorModel: ObservableObject {
         case "trust_required": return "Unlock the iPhone and approve its Trust prompt, then try again."
         case "backup_password": return "The existing encrypted-backup password was not accepted. Check it and retry."
         case "unsupported_schema": return "This iPhone backup format is not supported safely yet. No metadata was saved."
-        case "workspace_low_space": return "The Mac has less than 2 GiB free on the temporary-storage volume. Free space on that volume, then retry."
-        case "workspace_size_limit": return "The retained temporary backup exceeded the 1 GiB safety limit. Collection stopped without saving metadata. This backup cannot be collected within the current limit."
+        case "workspace_low_space": return "There is not enough free space for the next write, local parsing copies and the 2 GiB reserve. Free space on the temporary-storage volume, then retry."
+        case "workspace_size_limit": return "This helper reported an older backup-size limit. Update the signed companion before retrying."
+        case "source_capacity_limit": return "The backup control data or metadata count exceeded a supported safety bound. Collection stopped without uploading metadata. Contact support with the companion version."
         case "workspace_unsafe": return "The app's temporary-storage folder could not be verified as private and app-owned. Nothing there was changed. Contact support; do not change folder permissions or delete other backups."
         case "workspace_unavailable", "workspace": return "The app could not access its private temporary storage. Reopen the app and check temporary data. If it still fails, reinstall the signed companion or contact support."
         case "workspace_cleanup", "cleanup_incomplete": return "Temporary phone data could not be fully removed. Check temporary data before reconnecting."
         case "connection_timeout", "timeout": return "The iPhone connection timed out. Keep it unlocked, check the cable or trusted Wi-Fi connection, then retry."
         case "backup_stalled": return "No backup data arrived for 15 minutes. Collection stopped. Check the cable, unlock the iPhone, then reconnect."
-        case "backup_time_limit": return "The backup reached the four-hour safety limit. Collection stopped without saving metadata. Try a wired connection; if it repeats, contact support."
+        case "backup_time_limit": return "The backup made too little file-data progress within its data-aware time budget. Collection stopped. Use a direct USB cable and retry; if it repeats, contact support."
         case "cancelled": return "Collection was cancelled. No metadata was saved."
         default: return "Collection stopped. No metadata was saved. Reconnect and try again."
         }

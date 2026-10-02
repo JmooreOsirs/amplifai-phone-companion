@@ -1,28 +1,38 @@
-# AMPLIFai Phone companion source
+# AMPLIFai Phone macOS 2026.10.02-rc1 source
 
-This repository carries the authored-source view. The complete matching Mac
-source archive, including the exact 143 upstream source archives and 278
-notice files, is offered with the owner-test binaries at:
-https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.01-rc1
+This branch carries the authored-source view for the Apple Silicon, macOS 14+
+owner-test capacity release. The matching complete source archive, including
+143 upstream source archives and 278 notice files, is the designated source
+offer beside the app and DMG at:
+https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.02-rc1
 
-Download `AMPLIFai-Phone-macOS-Source-2026.10.01-rc1.tar.gz` and its checksums
-for the full offline package; upstream archives are not duplicated into Git.
+Use `AMPLIFai-Phone-macOS-Source-2026.10.02-rc1.tar.gz` and its checksums
+from that release for the full offline package; upstream archives are not
+duplicated into Git.
+The update replaces fixed 1 GiB session and 128 MiB database ceilings with
+disk-aware streaming and parsing. Apple accepted notarization submissions for
+the app and DMG. Normal fresh installation, physical iPhone capture, browser
+handoff and account-save/retention remain separate owner-operated gates. This
+is not a customer-ready or Windows release.
 
 The project-authored companion is Copyright (C) 2026 OSIRS LLC and licensed
 under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
 `LICENSE` for the GPLv3 text, and `THIRD-PARTY-NOTICES.txt` for retained upstream
 notices. The separate private website/backend source is not part of this package.
 
-This is a source release candidate for the macOS arm64 companion and its frozen
-Python helper. It is not a signed app or installer. It includes the source and
-build inputs matched to the selected artifact inventory; it does not claim a
-byte-for-byte reproducible binary build or verified operation on an owner phone.
+This repository is source, not an installer. Its macOS files are projected from
+the artifact-bound packet built from native source revision
+`248709bdf52e0d26561f914532b822ec3f560cd1`. The complete release archive
+contains the build inputs matched to the selected signed/stapled app inventory;
+it does not claim a byte-for-byte reproducible native build or verified
+operation on an owner phone.
 
 ## Complete source archive contents
 
 - `source/`: project-authored Swift/Python companion, tests, exact dependency
-  lock, logo and build/packaging scripts. No Android app or private account/web
-  implementation is included.
+  lock, logo and build/packaging scripts. This repository preserves earlier
+  Android source; the complete Mac release archive excludes Android and the
+  private account/web implementation.
 - `third_party/source_archives/`: checksum-verified exact Python, native and
   Rust source archives. The complete candidate contains 143 archives. All 102
   pinned Python build inputs remain available; the package matrix marks which
@@ -39,7 +49,7 @@ byte-for-byte reproducible binary build or verified operation on an owner phone.
 
 ## Build and test
 
-Requires an Apple Silicon Mac, Xcode Command Line Tools (Swift), Python 3.11+
+Requires an Apple Silicon Mac, Xcode Command Line Tools (Swift), Python 3.12+
 for the audit tools, and `uv`. Build tools are developer prerequisites, not
 requirements for eventual installer users. The portable helper uses Python
 3.12 and the exact hash-pinned lock. Upstream source archives, Cargo.lock,
@@ -51,16 +61,17 @@ native dependencies from source.
 ```sh
 cd source
 ./script/build_portable_candidate.sh --isolated
-PYTHONPATH=collector uv run --with-requirements collector/portable-requirements.lock \
-  --with pytest pytest -q collector/tests
+PYTHONPATH=collector:collector/tests uv run --python 3.12 \
+  --with-requirements collector/portable-requirements.lock \
+  python -m unittest discover -s collector/tests
 ```
 
 Isolated builds create a separate local ad-hoc-signed development candidate
 and preserve existing app copies. Building does not connect to a phone. The
 native Connect action requires the owner's own USB/Trust/backup decisions;
 refer to `source/collector/README.md` for retained-history limitations and
-temporary-data handling. Public distribution still requires review of the exact
-release artifact, signing/notarization and normal fresh-install/device tests.
+temporary-data handling. Normal fresh-install and device tests remain open
+before any customer-ready claim.
 
 ## Source integrity
 
@@ -68,6 +79,6 @@ The 143-archive candidate includes the 102 Python sdists, CPython 3.12.12 and
 its 20260203 standalone build recipe, OpenSSL 4.0.2 and 32 external Cargo
 packages identified by cryptography, plus bzip2 1.0.8, Expat 2.6.3, mpdecimal
 4.0.0, OpenSSL 3.5.5, SQLite 3.50.4 and xz 5.8.1 from the interpreter recipe.
-The original app inventory verifies 5,615 files and seven native paths.
+The signed/stapled app inventory verifies 5,627 files and seven native paths.
 The package contains all enumerated source inputs and 278 notice files;
 it does not equate manifest coverage with legal certainty or a binary rebuild.

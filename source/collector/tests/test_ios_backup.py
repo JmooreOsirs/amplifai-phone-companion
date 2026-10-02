@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import plistlib
+import sqlite3
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,30 +18,107 @@ from amplifai_phone.ios_backup import (
 from amplifai_phone.metadata import RETAINED_HISTORY_START, SourceResult
 
 
+async def fake_backup_control_files(**kwargs: object) -> None:
+    directory = Path(kwargs["backup_directory"]) / "SYNTHETIC-UDID"
+    directory.mkdir()
+    (directory / "Manifest.plist").write_bytes(plistlib.dumps({"IsEncrypted": False}))
+
+
+class ManifestFixtureIsolationTest(unittest.TestCase):
+    def test_history_fixture_leaves_real_sdk_construction_and_parsing_usable(
+        self,
+    ) -> None:
+        import pyiosbackup.manifest_dbs.sqlite3 as provider
+
+        sdk_class = provider.ManifestDbSqlite3
+        missing = object()
+        allocator_before = sdk_class.__dict__.get("__new__", missing)
+        fixture = IPhoneInterfaceTest(
+            "test_production_parser_requests_all_retained_history"
+        )
+        result = fixture.run()
+        self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
+
+        with tempfile.TemporaryDirectory(prefix="amplifai-sdk-isolation-") as temporary:
+            backup_path = Path(temporary) / "synthetic-backup"
+            backup_path.mkdir()
+            for name, value in (
+                ("Manifest.plist", {"IsEncrypted": False}),
+                ("Status.plist", {}),
+                ("Info.plist", {}),
+            ):
+                (backup_path / name).write_bytes(plistlib.dumps(value))
+            manifest_path = backup_path / "Manifest.db"
+            with sqlite3.connect(manifest_path) as db:
+                db.execute(
+                    "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
+                    "flags INTEGER, file BLOB)"
+                )
+
+            # Neither the SDK constructor nor the parser is mocked here.
+            manifest_db = sdk_class(manifest_path)
+            try:
+                count = manifest_db._conn.execute(
+                    "SELECT COUNT(*) FROM Files"
+                ).fetchone()[0]
+                self.assertEqual(count, 0)
+            finally:
+                manifest_db._conn.close()
+            capture = parse_selected_backup(
+                backup_path, "", now=datetime(2026, 10, 1, tzinfo=UTC)
+            )
+            self.assertEqual(capture.missing_sources, ("contacts", "calls", "messages"))
+            self.assertEqual(capture.since, RETAINED_HISTORY_START.isoformat())
+            self.assertEqual(list(backup_path.parent.glob("amplifai-db-*")), [])
+
+        self.assertIs(provider.ManifestDbSqlite3, sdk_class)
+        self.assertIs(sdk_class.__dict__.get("__new__", missing), allocator_before)
+
+
 class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
     def test_production_parser_requests_all_retained_history(self) -> None:
         import pyiosbackup
-        from pyiosbackup.manifest_dbs.sqlite3 import ManifestDbSqlite3
         from pyiosbackup.manifest_plist import ManifestPlist
 
         with tempfile.TemporaryDirectory(prefix="amplifai-history-test-") as temporary:
             backup_path = Path(temporary)
+            (backup_path / "Manifest.plist").write_bytes(
+                plistlib.dumps({"IsEncrypted": False})
+            )
             (backup_path / "Manifest.db").write_bytes(b"synthetic manifest")
             (backup_path / "Status.plist").write_bytes(plistlib.dumps({}))
             (backup_path / "Info.plist").write_bytes(plistlib.dumps({}))
             expected = IPhoneCapture(
-                SourceResult(0, (), 0), SourceResult(0, (), 0),
-                SourceResult(0, (), 0), "now", RETAINED_HISTORY_START.isoformat(), (),
+                SourceResult(0, (), 0),
+                SourceResult(0, (), 0),
+                SourceResult(0, (), 0),
+                "now",
+                RETAINED_HISTORY_START.isoformat(),
+                (),
             )
+            manifest_db = MagicMock()
             with (
-                patch.object(ManifestPlist, "from_path", return_value=SimpleNamespace(is_encrypted=False)),
-                patch.object(ManifestDbSqlite3, "__new__", return_value=MagicMock()),
+                patch.object(
+                    ManifestPlist,
+                    "from_path",
+                    return_value=SimpleNamespace(is_encrypted=False),
+                ),
+                patch(
+                    "pyiosbackup.manifest_dbs.sqlite3.ManifestDbSqlite3",
+                    return_value=manifest_db,
+                ) as manifest_factory,
                 patch.object(pyiosbackup, "Backup", return_value=MagicMock()),
-                patch("amplifai_phone.ios_backup._parse_entries", return_value=expected) as parse,
+                patch(
+                    "amplifai_phone.ios_backup._parse_entries", return_value=expected
+                ) as parse,
             ):
-                result = parse_selected_backup(backup_path, "", now=datetime(2026, 9, 25, tzinfo=timezone.utc))
+                result = parse_selected_backup(
+                    backup_path, "", now=datetime(2026, 9, 25, tzinfo=UTC)
+                )
             self.assertIs(result, expected)
             self.assertEqual(parse.call_args.args[3], RETAINED_HISTORY_START)
+            manifest_factory.assert_called_once()
+            manifest_db._conn.close.assert_called_once_with()
 
     async def test_filtered_backup_no_unback_and_password_only_if_encrypted(
         self,
@@ -63,7 +141,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service = MagicMock()
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
-        service.backup = AsyncMock()
+        service.backup = AsyncMock(side_effect=fake_backup_control_files)
         service.service._ensure_started = AsyncMock(
             return_value=(asyncio.StreamReader(), MagicMock())
         )
@@ -107,7 +185,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         ):
             result = await collect_iphone(
                 password_provider=lambda: asked.append(True) or "synthetic-password",
-                now=datetime(2026, 9, 23, tzinfo=timezone.utc),
+                now=datetime(2026, 9, 23, tzinfo=UTC),
                 sessions_root=Path(temporary) / "sessions",
             )
         self.assertIs(result, expected)
@@ -167,7 +245,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service = MagicMock()
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
-        service.backup = AsyncMock()
+        service.backup = AsyncMock(side_effect=fake_backup_control_files)
         service.service._ensure_started = AsyncMock(
             return_value=(asyncio.StreamReader(), MagicMock())
         )
@@ -245,7 +323,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service = MagicMock()
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
-        service.backup = AsyncMock()
+        service.backup = AsyncMock(side_effect=fake_backup_control_files)
         service.service._ensure_started = AsyncMock(
             return_value=(asyncio.StreamReader(), MagicMock())
         )
@@ -313,7 +391,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service = MagicMock()
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
-        service.backup = AsyncMock()
+        service.backup = AsyncMock(side_effect=fake_backup_control_files)
         service.service._ensure_started = AsyncMock(
             return_value=(asyncio.StreamReader(), MagicMock())
         )
@@ -327,7 +405,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         )
         transports: list[str] = []
         with (
-            tempfile.TemporaryDirectory(prefix="amplifai-network-only-test-") as temporary,
+            tempfile.TemporaryDirectory(
+                prefix="amplifai-network-only-test-"
+            ) as temporary,
             patch.object(
                 pymobiledevice3.usbmux,
                 "list_devices",
@@ -370,12 +450,16 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
 
         devices = [
             SimpleNamespace(
-                is_usb=False, is_network=True,
-                connection_type="Network", serial="SYNTHETIC-UDID",
+                is_usb=False,
+                is_network=True,
+                connection_type="Network",
+                serial="SYNTHETIC-UDID",
             ),
             SimpleNamespace(
-                is_usb=True, is_network=False,
-                connection_type="USB", serial="SYNTHETIC-UDID",
+                is_usb=True,
+                is_network=False,
+                connection_type="USB",
+                serial="SYNTHETIC-UDID",
             ),
         ]
         with (

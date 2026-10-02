@@ -6,21 +6,20 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import TypeVar
 
 MAX_BACKUP_ELAPSED_SECONDS = 4 * 60 * 60
 BACKUP_IDLE_SECONDS = 15 * 60
 CLEANUP_GRACE_SECONDS = 5
 RECEIVE_CHUNK_BYTES = 128 * 1024
-
-Result = TypeVar("Result")
+MAX_CONTROL_BYTES = 16 * 1024 * 1024
+MIN_PROGRESS_BYTES_PER_SECOND = 16 * 1024
 
 
 class BackupTimeLimit(TimeoutError):
     code = "backup_time_limit"
 
     def __init__(self) -> None:
-        super().__init__("Backup reached the four-hour elapsed limit")
+        super().__init__("Backup made too little data progress to continue safely")
 
 
 class BackupStalled(TimeoutError):
@@ -45,6 +44,8 @@ class BackupWatchdog:
         self._clock = clock
         self._started_at: float | None = None
         self._last_received_at: float | None = None
+        self._last_payload_at: float | None = None
+        self._payload_bytes = 0
         self._active = False
         self._aborted = False
         self._changed = asyncio.Event()
@@ -52,6 +53,8 @@ class BackupWatchdog:
     def start(self) -> None:
         self.raise_if_aborted()
         self._started_at = self._last_received_at = self._clock()
+        self._last_payload_at = None
+        self._payload_bytes = 0
         self._active = True
         self.wake()
 
@@ -60,6 +63,33 @@ class BackupWatchdog:
         if self._active and byte_count > 0:
             self._last_received_at = self._clock()
             self.wake()
+
+    def payload_received(self, byte_count: int) -> None:
+        """Only real file bytes extend the slow-transfer budget, not framing."""
+        self.raise_if_aborted()
+        if self._active and byte_count > 0:
+            self._payload_bytes += byte_count
+            self._last_payload_at = self._clock()
+            self.wake()
+
+    def payload_sent(self, byte_count: int) -> None:
+        # DeviceLink may request a retained file back during backup negotiation.
+        # Actual outbound file bytes are progress too, never a plist keepalive.
+        self.payload_received(byte_count)
+
+    def _deadline(self) -> float:
+        return (
+            self._started_at
+            + MAX_BACKUP_ELAPSED_SECONDS
+            + self._payload_bytes / MIN_PROGRESS_BYTES_PER_SECOND
+        )
+
+    def _activity_at(self) -> float:
+        return (
+            self._last_received_at
+            if self._last_payload_at is None
+            else self._last_payload_at
+        )
 
     def backup_completed(self) -> None:
         self.raise_if_aborted()
@@ -85,17 +115,17 @@ class BackupWatchdog:
             return None
         now = self._clock()
         return min(
-            self._started_at + MAX_BACKUP_ELAPSED_SECONDS - now,
-            self._last_received_at + BACKUP_IDLE_SECONDS - now,
+            self._deadline() - now,
+            self._activity_at() + BACKUP_IDLE_SECONDS - now,
         )
 
     def _expired(self) -> BackupTimeLimit | BackupStalled | None:
         if not self._active:
             return None
         now = self._clock()
-        if now - self._started_at >= MAX_BACKUP_ELAPSED_SECONDS:
+        if now >= self._deadline():
             return BackupTimeLimit()
-        if now - self._last_received_at >= BACKUP_IDLE_SECONDS:
+        if now - self._activity_at() >= BACKUP_IDLE_SECONDS:
             return BackupStalled()
         return None
 
@@ -129,6 +159,10 @@ class _ActivityReader:
     async def readexactly(self, size: int) -> bytes:
         if size < 0:
             raise ValueError("readexactly size must not be negative")
+        if size > MAX_CONTROL_BYTES:
+            from .metadata import SourceCapacityLimit
+
+            raise SourceCapacityLimit("Backup control frame exceeds safe memory bounds")
         payload = bytearray()
         while len(payload) < size:
             chunk = await self.read(min(RECEIVE_CHUNK_BYTES, size - len(payload)))
@@ -151,7 +185,7 @@ def _consume_task_error(task: asyncio.Task[object]) -> None:
         task.exception()
 
 
-async def _cancel_session(
+async def _cancel_session[Result](
     task: asyncio.Task[Result],
     watchdog: BackupWatchdog,
     reason: str,
@@ -172,7 +206,7 @@ async def _cancel_session(
     _consume_task_error(task)
 
 
-async def run_backup_session(
+async def run_backup_session[Result](
     operation: Awaitable[Result],
     watchdog: BackupWatchdog,
     preserve_for_recovery: Callable[[], None],

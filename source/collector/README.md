@@ -121,15 +121,26 @@ marked, abandoned sessions and requires an explicit cleanup action before
 another collection. The helper itself makes no cloud upload. The browser can
 save selected metadata only after separate per-source account consent.
 
-Unreleased recovery policy: received bytes refresh a 15-minute inactivity
-watchdog, including filtered payload bytes whose displayed percentage is
-unchanged. Four hours remains an absolute elapsed limit. Private workspace
-guards retain 2 GiB free-space and 1 GiB retained-session bounds. Low space,
-size cap, unsafe ownership, filesystem unavailability, byte stall, elapsed
-limit and incomplete cleanup have distinct safe errors. Cancellation and
+Capacity-candidate recovery policy: actual file bytes refresh a 15-minute
+inactivity watchdog, including discarded payload bytes with a flat percentage.
+Control chatter cannot hide a file-data stall. The slow-progress budget starts
+at four hours and extends by actual file bytes at a conservative 16 KiB/s floor;
+it is not an absolute four-hour cutoff for a productive large transfer.
+Selected input, discarded input, outbound files and parsing copies are streamed
+in 128 KiB chunks. Selected writes reserve their future parsing copy, and every
+write must preserve a further 2 GiB of real free space. There is no fixed 1 GiB
+session or 128 MiB database/manifest limit, nor an unrelated-file-count cap.
+Backup control/plist data retain a 16 MiB memory bound; metadata readers retain
+the explicit 1,000,000-row/source and 25,000-selected-contact safety frontiers.
+SQLite cursors avoid a second full row list; retained metadata records still
+reside in memory, so this is not an unlimited-history or paged-review claim.
+Low space, metadata/control capacity, unsupported format, unsafe ownership,
+filesystem unavailability, file-data stall, sustained slow progress and
+incomplete cleanup have distinct safe errors. Cancellation and
 owned-loop shutdown are bounded; incomplete cleanup retains a marked private
 session and blocks another collection until explicit inspection/recovery.
-The limits do not guarantee complete phone history or a five-to-ten-minute run.
+These policies do not guarantee complete phone history or a five-to-ten-minute
+run. Synthetic socket throughput is not a measured USB or phone speed.
 
 The current terminal review lets an operator choose contacts and reports
 matching retained available calls/messages without an arbitrary six-month cutoff.

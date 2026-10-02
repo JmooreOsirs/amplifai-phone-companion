@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import signal
 import sys
 from collections.abc import Awaitable, Callable
@@ -19,7 +20,7 @@ from .backup_watchdog import BackupCleanupIncomplete, BackupStalled, BackupTimeL
 from .bridge import BridgeError, BridgeServer
 from .capture_runtime import run_local_capture
 from .ios_backup import IPhoneCapture, collect_iphone
-from .metadata import MAX_SELECTED_CONTACTS, UnsupportedSchema
+from .metadata import MAX_SELECTED_CONTACTS, SourceCapacityLimit, UnsupportedSchema
 from .workspace import WorkspaceError, abandoned_sessions, clear_abandoned
 
 MAX_COMMAND_BYTES = 600_000
@@ -72,6 +73,8 @@ def _error_code(exc: BaseException) -> str:
         )
     if isinstance(exc, UnsupportedSchema):
         return "unsupported_schema"
+    if isinstance(exc, SourceCapacityLimit):
+        return "source_capacity_limit"
     if isinstance(exc, (BackupPasswordIsRequired, InvalidUnwrap)):
         return "backup_password"
     if isinstance(exc, PairingError):
@@ -120,7 +123,14 @@ def run_connect(
         return password
 
     def progress(value: float) -> None:
-        _emit(sink, {"kind": "progress", "value": max(0.0, min(100.0, float(value)))})
+        if math.isfinite(value):
+            _emit(
+                sink, {"kind": "progress", "value": max(0.0, min(100.0, float(value)))}
+            )
+
+    def transfer(value: dict[str, object]) -> None:
+        # The collector publishes only numeric counters and one allowlisted stage.
+        _emit(sink, {"kind": "transfer", **value})
 
     def connection(transport: str) -> None:
         _emit(sink, {"kind": "connection", "transport": transport})
@@ -133,6 +143,7 @@ def run_connect(
                 password_provider=password_provider,
                 progress_callback=progress,
                 connection_callback=connection,
+                transfer_callback=transfer,
             )
         )
         _emit(
@@ -167,8 +178,11 @@ def run_connect(
                 _emit(sink, {"kind": "state", "state": "pairing_revoked"})
                 continue
             if action in {"handoff-status", "finish"}:
-                if (set(command) != {"action", "handoffId"} or bridge is None
-                        or command.get("handoffId") != bridge.handoff_id):
+                if (
+                    set(command) != {"action", "handoffId"}
+                    or bridge is None
+                    or command.get("handoffId") != bridge.handoff_id
+                ):
                     _emit(sink, {"kind": "error", "code": "handoff_unconfirmed"})
                     continue
                 state = bridge.handoff_state()
@@ -178,7 +192,10 @@ def run_connect(
                         continue
                     _emit(sink, {"kind": "state", "state": "completed"})
                     return 0
-                _emit(sink, {"kind": "handoff", "state": state, "handoffId": bridge.handoff_id})
+                _emit(
+                    sink,
+                    {"kind": "handoff", "state": state, "handoffId": bridge.handoff_id},
+                )
                 continue
             if action == "pair":
                 if selected_ids is None:

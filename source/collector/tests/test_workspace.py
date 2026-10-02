@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from amplifai_phone import workspace as workspace_module
 from amplifai_phone.workspace import (
     MIN_FREE_BYTES,
     ROOT_MARKER,
@@ -17,6 +18,7 @@ from amplifai_phone.workspace import (
     abandoned_sessions,
     clear_abandoned,
 )
+from test_windows_storage import NativeBoundary, ace
 
 
 class WorkspaceTest(unittest.TestCase):
@@ -67,16 +69,19 @@ class WorkspaceTest(unittest.TestCase):
         self.assertFalse(directory.exists())
         self.assertEqual((unrelated / "keep").read_text(), "owner")
 
-    def test_bound_rejects_oversize_fixture(self) -> None:
+    def test_write_is_rejected_before_consuming_the_disk_reserve(self) -> None:
         workspace = SessionWorkspace(self.root)
         with workspace as directory:
             (directory / "synthetic-source").write_bytes(b"large-but-synthetic")
             with (
-                patch("amplifai_phone.workspace.MAX_SESSION_BYTES", 8),
-                self.assertRaisesRegex(WorkspaceError, "1 GB") as error,
+                patch(
+                    "amplifai_phone.workspace.shutil.disk_usage",
+                    return_value=SimpleNamespace(free=MIN_FREE_BYTES + 8),
+                ),
+                self.assertRaises(WorkspaceError) as error,
             ):
-                workspace.check_bound()
-            self.assertEqual(error.exception.code, "workspace_size_limit")
+                workspace.check_bound(9)
+            self.assertEqual(error.exception.code, "workspace_low_space")
 
     def test_entry_low_space_has_distinct_code_and_creates_no_session(self) -> None:
         workspace = SessionWorkspace(self.root)
@@ -135,17 +140,12 @@ class WorkspaceTest(unittest.TestCase):
             self.assertIs(error.exception.__cause__, original)
         self.assertFalse(directory.exists())
 
-    def test_directory_scan_failure_cannot_bypass_size_check(self) -> None:
+    def test_transfer_capacity_check_does_not_walk_the_backup_directory(self) -> None:
         workspace = SessionWorkspace(self.root)
         original = PermissionError("cannot scan /Users/private/backup")
-        with workspace:
-            with (
-                patch("amplifai_phone.workspace.os.scandir", side_effect=original),
-                self.assertRaises(WorkspaceError) as error,
-            ):
-                workspace.check_bound()
-            self.assertEqual(error.exception.code, "workspace_unavailable")
-            self.assertNotIn("/Users/private", str(error.exception))
+        with workspace, patch("amplifai_phone.workspace.os.scandir", side_effect=original) as scan:
+            workspace.check_bound()
+            scan.assert_not_called()
 
     def test_session_marker_failure_rolls_back_only_created_session(self) -> None:
         with SessionWorkspace(self.root):
@@ -189,6 +189,13 @@ class WorkspaceTest(unittest.TestCase):
             self.assertRaises(WorkspaceError),
         ):
             SessionWorkspace(self.root).__enter__()
+        if os.name == "nt":
+            self.assertTrue(self.root.is_dir())
+            self.assertEqual(list(self.root.iterdir()), [])
+            with self.assertRaises(WorkspaceError):
+                SessionWorkspace(self.root).__enter__()
+            self.assertEqual((unrelated / "keep").read_bytes(), b"owner")
+            return
         self.assertFalse(self.root.exists())
         self.assertEqual((unrelated / "keep").read_bytes(), b"owner")
         with SessionWorkspace(self.root):
@@ -260,6 +267,78 @@ class WorkspaceTest(unittest.TestCase):
             SessionWorkspace(self.root).__enter__()
         self.assertEqual(error.exception.code, "workspace_unsafe")
         self.assertEqual((self.root / "owner-backup").read_bytes(), b"do-not-touch")
+
+    def test_windows_root_is_atomic_private_and_pinned_until_marker_write(self) -> None:
+        native = NativeBoundary()
+        native.create_hook = self.root.mkdir
+        real_write = workspace_module._write_private
+
+        def write_while_pinned(path: Path, payload: bytes) -> None:
+            self.assertIsNotNone(native.created)
+            self.assertTrue(
+                native.descriptors, "fresh security readback precedes bytes"
+            )
+            self.assertEqual(
+                native.closed, [51], "identity pins cover the marker write"
+            )
+            real_write(path, payload)
+
+        with (
+            native.installed(),
+            patch(
+                "amplifai_phone.workspace._write_private",
+                side_effect=write_while_pinned,
+            ),
+        ):
+            self.assertTrue(workspace_module._owned_root(self.root, create=True))
+        self.assertEqual(
+            (self.root / ROOT_MARKER).read_bytes(), b"AMPLIFAI_PHONE_SESSIONS_V1\n"
+        )
+        self.assertEqual(set(native.closed), {51, *native.handles})
+
+    def test_windows_creation_race_or_bad_readback_never_writes_or_recursively_deletes(
+        self,
+    ) -> None:
+        for failure in ("race", "unsafe ACE"):
+            with self.subTest(failure=failure):
+                native = NativeBoundary()
+                if failure == "race":
+                    native.failure = "CreateDirectoryW"
+                else:
+                    native.aces.append(ace(native.other))
+                with (
+                    native.installed(),
+                    patch("amplifai_phone.workspace._write_private") as writer,
+                    patch("amplifai_phone.workspace.shutil.rmtree") as delete,
+                    self.assertRaises(WorkspaceError) as caught,
+                ):
+                    workspace_module._owned_root(self.root, create=True)
+                writer.assert_not_called()
+                delete.assert_not_called()
+                self.assertEqual(caught.exception.code, "workspace_unsafe")
+
+    def test_windows_marker_failure_retains_only_private_new_root_and_reports_no_phone_bytes(
+        self,
+    ) -> None:
+        native = NativeBoundary()
+        native.create_hook = self.root.mkdir
+        with (
+            native.installed(),
+            patch(
+                "amplifai_phone.workspace._write_private",
+                side_effect=OSError("sensitive path"),
+            ),
+            patch("amplifai_phone.workspace.shutil.rmtree") as delete,
+            self.assertRaises(WorkspaceError) as caught,
+        ):
+            workspace_module._owned_root(self.root, create=True)
+        delete.assert_not_called()
+        self.assertEqual(caught.exception.code, "workspace_marker")
+        self.assertIn("empty or marker-only", str(caught.exception))
+        self.assertIn("No phone data was written", str(caught.exception))
+        self.assertNotIn("sensitive path", str(caught.exception))
+        self.assertTrue(self.root.is_dir())
+        self.assertEqual(list(self.root.iterdir()), [])
 
 
 if __name__ == "__main__":

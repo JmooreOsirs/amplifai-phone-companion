@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -10,13 +11,17 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
-from .windows_storage import private_windows_directory, windows_process_alive
+from .windows_storage import (
+    create_private_windows_directory,
+    private_windows_directory,
+    windows_process_alive,
+)
 
 ROOT_MARKER = ".amplifai-phone-sessions-v1"
 SESSION_MARKER = ".amplifai-owned-session.json"
 SESSION_NAME = re.compile(r"^session-[0-9a-f]{32}$")
-MAX_SESSION_BYTES = 1024 * 1024 * 1024
 MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
 
@@ -77,10 +82,30 @@ def _owned_root(root: Path, *, create: bool) -> bool:
                 "App support directory cannot be a symlink", code="workspace_unsafe"
             )
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name == "nt":
+            # Create with a protected owner/DACL, not mkdir followed by repair.
+            # The native context pins parent/root identity through marker bytes.
+            # Races and unverified paths never enter recursive rollback.
+            try:
+                with create_private_windows_directory(root):
+                    try:
+                        _write_private(
+                            root / ROOT_MARKER, b"AMPLIFAI_PHONE_SESSIONS_V1\n"
+                        )
+                    except OSError:
+                        raise WorkspaceError(
+                            "The private storage root is empty or marker-only. "
+                            "No phone data was written; the folder was not removed.",
+                            code="workspace_marker",
+                        ) from None
+            except PermissionError as exc:
+                raise WorkspaceError(
+                    "New sessions root could not be verified; no phone data was written",
+                    code="workspace_unsafe",
+                ) from exc
+            return True
         root.mkdir(mode=0o700)
         try:
-            if os.name == "nt":
-                private_windows_directory(root, create=True)
             _write_private(root / ROOT_MARKER, b"AMPLIFAI_PHONE_SESSIONS_V1\n")
         except BaseException:
             # This root was just created here and has never held a phone session.
@@ -175,8 +200,6 @@ def _directory_size(directory: Path) -> int:
             if path.is_symlink():
                 continue
             total += path.stat().st_size
-            if total > MAX_SESSION_BYTES:
-                return total
     return total
 
 
@@ -232,6 +255,7 @@ class SessionWorkspace:
         self.root = root or default_sessions_root()
         self.directory: Path | None = None
         self._preserve_for_recovery = False
+        self._pending_copy_bytes = 0
 
     def __enter__(self) -> Path:
         try:
@@ -275,6 +299,7 @@ class SessionWorkspace:
             raise
         self.directory = directory
         self._preserve_for_recovery = False
+        self._pending_copy_bytes = 0
         return directory
 
     def preserve_for_recovery(self) -> None:
@@ -282,23 +307,153 @@ class SessionWorkspace:
             raise WorkspaceError("Workspace has not started")
         self._preserve_for_recovery = True
 
-    def check_bound(self) -> None:
+    def check_bound(self, required_bytes: int = 0, *, copy_delta: int = 0) -> None:
+        """Check real free space, including the outstanding parsing-copy budget.
+
+        No directory walk is performed in the transfer hot path. Logical backup
+        size is not a capacity ceiling; actual free space and a 2 GiB reserve are.
+        """
         if self.directory is None:
             raise WorkspaceError("Workspace has not started")
+        if (
+            isinstance(required_bytes, bool)
+            or not isinstance(required_bytes, int)
+            or required_bytes < 0
+        ):
+            raise ValueError("Invalid write size")
         try:
-            if _directory_size(self.directory) > MAX_SESSION_BYTES:
+            if _session_marker(self.directory) is None:
                 raise WorkspaceError(
-                    "Selected backup data exceeded the 1 GB local limit",
-                    code="workspace_size_limit",
+                    "Private backup workspace changed", code="workspace_unsafe"
                 )
-            if shutil.disk_usage(self.directory).free < MIN_FREE_BYTES:
+            pending = max(0, self._pending_copy_bytes + copy_delta)
+            if (
+                shutil.disk_usage(self.directory).free
+                < MIN_FREE_BYTES + pending + required_bytes
+            ):
                 raise WorkspaceError(
-                    "Less than 2 GB free disk space remains", code="workspace_low_space"
+                    "Not enough free disk space for this write, parsing copies and the 2 GB reserve",
+                    code="workspace_low_space",
                 )
         except OSError as exc:
             raise WorkspaceError(
                 "Backup workspace storage is unavailable", code="workspace_unavailable"
             ) from exc
+
+    def checked_path(self, path: Path, *, create_parents: bool = False) -> Path:
+        """Require a non-link path beneath this app-owned session, never its root."""
+        if self.directory is None:
+            raise WorkspaceError("Workspace has not started")
+        if path.is_absolute() != self.directory.is_absolute():
+            path = path.absolute()
+        try:
+            parts = path.relative_to(self.directory).parts
+        except ValueError:
+            raise WorkspaceError(
+                "Backup path is outside this session", code="workspace_unsafe"
+            ) from None
+        if not parts or len(parts) > 64 or any(part in (".", "..") for part in parts):
+            raise WorkspaceError("Invalid backup path", code="workspace_unsafe")
+        self.check_bound()
+        current = self.directory
+        try:
+            for index, part in enumerate(parts):
+                current = current / part
+                if current.is_symlink() or (os.name == "nt" and current.is_junction()):
+                    raise WorkspaceError(
+                        "Backup path contains a link", code="workspace_unsafe"
+                    )
+                if index < len(parts) - 1 and create_parents:
+                    current.mkdir(mode=0o700, exist_ok=True)
+            return current
+        except OSError as exc:
+            raise WorkspaceError(
+                "Private backup storage is unavailable", code="workspace_unavailable"
+            ) from exc
+
+    def open_private(self, path: Path) -> BinaryIO:
+        """Open an owned regular file without following links or truncating first."""
+        import stat
+
+        path = self.checked_path(path, create_parents=True)
+        handle = None
+        try:
+            handle = os.open(
+                path, os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600
+            )
+            info = os.fstat(handle)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise WorkspaceError(
+                    "Backup destination is not a private file", code="workspace_unsafe"
+                )
+            if os.name != "nt":
+                os.fchmod(handle, 0o600)
+            os.ftruncate(handle, 0)
+            result = os.fdopen(handle, "wb")
+            handle = None
+            return result
+        except OSError as exc:
+            raise WorkspaceError(
+                "Private backup storage is unavailable", code="workspace_unavailable"
+            ) from exc
+        finally:
+            if handle is not None:
+                os.close(handle)
+
+    def write_chunk(
+        self,
+        stream: BinaryIO,
+        payload: bytes,
+        *,
+        reserve_copy: bool = False,
+        consume_copy: bool = False,
+    ) -> None:
+        """Enforce disk headroom at the actual write, not after a whole file."""
+        if reserve_copy and consume_copy:
+            raise ValueError("A write cannot both reserve and consume a copy")
+        delta = (
+            len(payload)
+            if reserve_copy
+            else -min(len(payload), self._pending_copy_bytes)
+            if consume_copy
+            else 0
+        )
+        self.check_bound(len(payload), copy_delta=delta)
+        try:
+            if stream.write(payload) != len(payload):
+                raise OSError(errno.EIO, "Incomplete backup write")
+        except OSError as exc:
+            code = (
+                "workspace_low_space"
+                if exc.errno in {errno.ENOSPC, errno.EDQUOT}
+                else "workspace_unavailable"
+            )
+            raise WorkspaceError(
+                "Private backup write could not complete", code=code
+            ) from exc
+        self._pending_copy_bytes = max(0, self._pending_copy_bytes + delta)
+
+    def release_copy_budget(self, byte_count: int) -> None:
+        if (
+            isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count < 0
+        ):
+            raise ValueError("Invalid copy budget")
+        self._pending_copy_bytes = max(0, self._pending_copy_bytes - byte_count)
+
+    def available_transfer_bytes(self) -> int:
+        """Conservative selected-payload budget; excludes reserve and future copies."""
+        self.check_bound()
+        return max(
+            0,
+            (
+                shutil.disk_usage(self.directory).free
+                - MIN_FREE_BYTES
+                - self._pending_copy_bytes
+            )
+            // 2,
+        )
 
     def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
         if self._preserve_for_recovery:

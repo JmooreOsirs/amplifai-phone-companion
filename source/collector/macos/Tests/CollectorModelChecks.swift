@@ -169,12 +169,13 @@ struct CollectorModelChecks {
     private static func storageReasons() throws {
         let codes = [
             "workspace_low_space", "workspace_size_limit",
-            "workspace_unsafe", "workspace_unavailable",
+            "workspace_unsafe", "workspace_unavailable", "source_capacity_limit",
         ]
         let messages = codes.map { CollectorModel.message(for: $0) }
         try require(Set(messages).count == codes.count, "Storage failures need distinct recovery messages")
         try require(messages[0].contains("2 GiB"), "Low-space recovery must name the actual 2 GiB limit")
-        try require(messages[1].contains("1 GiB"), "Size recovery must name the actual 1 GiB limit")
+        try require(messages[1].contains("older") && !messages[1].contains("1 GiB"), "Legacy helper recovery must request an update, not claim a current 1 GiB ceiling")
+        try require(messages[4].contains("metadata count"), "Metadata capacity must be distinct from storage and format failures")
         try require(!messages[2].contains("2 GiB"), "Unsafe ownership must not be described as low space")
         try require(!messages[3].contains("2 GiB"), "Storage access failure must not be described as low space")
 
@@ -196,7 +197,7 @@ struct CollectorModelChecks {
             try require(!connection.contains(obsoleteLimit), "Connection timeout cannot claim a one-hour backup")
         }
         try require(stalled.range(of: #"15\s*min"#, options: .regularExpression) != nil, "Stall recovery must name the 15-minute policy")
-        try require(elapsed.range(of: #"(4|four)[\s-]*hour"#, options: .regularExpression) != nil, "Elapsed recovery must name the four-hour policy")
+        try require(elapsed.contains("data-aware") && !elapsed.contains("four-hour safety limit"), "Active transfer must not claim an absolute four-hour ceiling")
     }
 
     private static func cleanupRequiresInspection() throws {

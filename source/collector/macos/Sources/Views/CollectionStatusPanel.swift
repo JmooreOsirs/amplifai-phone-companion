@@ -24,6 +24,16 @@ struct CollectionStatusPanel: View {
                         .tint(Brand.lime)
                 }
                 Text(model.progressExplanation).font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                if model.transferIsKnown {
+                    Text(model.transferSummary).font(.custom("Arial", size: 13)).foregroundStyle(Brand.body)
+                    if model.phase == .transferring {
+                        Text(model.transferActivity).font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                    }
+                }
+                if model.phase == .processing && model.processedBytes > 0 {
+                    Text("Local parsing copies processed: \(CollectorModel.byteDescription(model.processedBytes))")
+                        .font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                }
                 if let started = model.collectionStartedAt {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         let seconds = max(0, Int(context.date.timeIntervalSince(started)))

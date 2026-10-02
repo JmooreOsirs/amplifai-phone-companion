@@ -14,7 +14,7 @@ struct CollectorFlowChecks {
         return try decoder.decode(AgentEvent.self, from: Data(json.utf8))
     }
     static func main() {
-        do { try checks(); print("11 macOS flow checks passed") }
+        do { try checks(); print("11 macOS flow checks plus byte-progress validation passed") }
         catch { FileHandle.standardError.write(Data("macOS flow check failed: \(error)\n".utf8)); Darwin.exit(1) }
     }
     private static func checks() throws {
@@ -29,6 +29,14 @@ struct CollectorFlowChecks {
         try require(model.progressExplanation.contains("estimate") && model.progressExplanation.contains("unavailable"), "Unknown ETA must be explicit")
         model.receive(try event(#"{"kind":"progress","value":100}"#))
         try require(model.phase == .processing && !model.statusTitle.contains("ready"), "100% backup is not finished metadata review")
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":2147483648,"retainedBytes":1073741824,"discardedBytes":1073741824,"filesReceived":9,"bytesPerSecond":1048576,"elapsedSeconds":10}"#))
+        try require(model.phase == .transferring && model.transferIsKnown && model.transferBytes == 2147483648,
+                    "Byte progress must advance even after a stale 100% report")
+        try require(model.transferSummary.contains("2.0 GiB") && model.transferSummary.contains("1.0 GiB"), "Transferred and retained bytes must remain distinct")
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":-1,"retainedBytes":0,"discardedBytes":-1,"filesReceived":10,"bytesPerSecond":0,"elapsedSeconds":11}"#))
+        try require(model.transferBytes == 2147483648, "Negative or inconsistent progress must not overwrite observed evidence")
+        model.receive(try event(#"{"kind":"transfer","stage":"processing","processedBytes":1234567890}"#))
+        try require(model.phase == .processing && model.processedBytes == 1234567890, "Parsing is a separate observed stage, not account completion")
         model.receive(try event(#"{"kind":"state","state":"password_required"}"#))
         try require(model.statusDetail.contains("existing") && !model.statusDetail.contains("Apple ID"), "Password recovery must name the existing backup password")
 

@@ -130,7 +130,7 @@ struct ContentView: View {
                 .foregroundStyle(Brand.heading)
                 .accessibilityAddTraits(.isHeader)
             Text("This Mac reads available contacts and retained call/message context. After collection, choose the people whose metadata you review. Context includes phone numbers, dates, participants, call duration, and message transport/direction—not message text in the review or browser handoff.")
-            Text("iPhone capture can temporarily copy a full private backup, including unrelated data and message content, before filtering. The guards are 2 GiB free and 1 GiB retained per session. Cleanup is attempted; an interruption can leave marked temporary phone data that you must inspect here.")
+            Text("iPhone capture temporarily receives full-backup bytes, including unrelated data and message content. Unselected files are discarded while streaming; selected source databases remain private until parsing finishes. Storage must fit those databases, parsing copies and a further 2 GiB reserve. Cleanup is attempted; an interruption can leave marked temporary phone data that you must inspect here.")
             Text("Agreeing permits this local collection only. It does not approve Apple's Trust prompt, provide an encrypted-backup password, permit browser sharing, or save anything to an account. Browser transfer has a separate confirmation; each optional source save needs its own approval in your account.")
             Toggle("I understand and agree to this one local collection", isOn: Binding(
                 get: { localCollectionChecked },
@@ -332,7 +332,7 @@ struct ContentView: View {
     }
 
     private var privacyNote: some View {
-        Text("Owner-test companion · Selected relationship context, not message content · Full local backup bytes are temporary and may include unrelated source data before filtering · 2 GiB free / 1 GiB retained-session guards · Physical coverage varies; Windows is unsupported")
+        Text("Owner-test companion · Selected relationship context, not message content · Unselected full-backup bytes are streamed and discarded · Private sources and parsing copies need disk space plus a 2 GiB reserve · Physical coverage varies; Windows is unsupported")
             .font(.custom("Arial", size: 12))
             .foregroundStyle(Brand.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
