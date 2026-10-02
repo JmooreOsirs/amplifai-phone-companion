@@ -22,7 +22,7 @@ notices. The separate private website/backend source is not part of this package
 
 This repository is source, not an installer. Its macOS files are projected from
 the artifact-bound packet built from native source revision
-`248709bdf52e0d26561f914532b822ec3f560cd1`. The complete release archive
+`f8c70d920d6896702ed492c852c4a320ca2486be`. The complete release archive
 contains the build inputs matched to the selected signed/stapled app inventory;
 it does not claim a byte-for-byte reproducible native build or verified
 operation on an owner phone.
