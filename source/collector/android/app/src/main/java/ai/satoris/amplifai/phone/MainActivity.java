@@ -2,6 +2,8 @@ package ai.satoris.amplifai.phone;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
@@ -14,6 +16,7 @@ import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.IBinder;
 import android.os.OperationCanceledException;
+import android.os.SystemClock;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.widget.Button;
@@ -53,6 +56,9 @@ public final class MainActivity extends Activity {
     private TextView status;
     private TextView coverage;
     private TextView review;
+    private TextView supportCodeView;
+    private Button copySupportCode;
+    private SupportCode supportCode;
     private LinearLayout choices;
     private EditText search;
     private EditText country;
@@ -86,6 +92,13 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        String build = "unknown";
+        try {
+            build = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (PackageManager.NameNotFoundException ignored) {
+            // Unknown build is still a safe and bounded diagnostic value.
+        }
+        supportCode = new SupportCode(build, SystemClock.elapsedRealtimeNanos());
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(BG);
@@ -127,6 +140,16 @@ public final class MainActivity extends Activity {
         body.addView(status);
         coverage = text("Contacts, calls and SMS are not yet observed.", 13, MUTED);
         body.addView(coverage);
+        supportCodeView = text("", 12, MUTED);
+        body.addView(supportCodeView);
+        copySupportCode = button("Copy safe support code", body);
+        copySupportCode.setEnabled(false);
+        copySupportCode.setOnClickListener(view -> {
+            if (!copySupportCode.isEnabled()) return;
+            getSystemService(ClipboardManager.class).setPrimaryClip(
+                    ClipData.newPlainText("AMPLIFai support code", supportCodeView.getText()));
+            status.setText("Safe support code copied. Submit it through AMPLIFai contact if you want help; it contains no phone records or account credentials.");
+        });
 
         body.addView(text("Select contacts", 21, TEXT));
         body.addView(text("Search by name or phone ending. Only selected contacts and their matched available interactions belong in a later, separately consented account transfer.", 13, MUTED));
@@ -198,13 +221,14 @@ public final class MainActivity extends Activity {
     }
 
     private void readSource(int source) {
-        if (handoff == null) { status.setText("Wait for the handoff controls to connect before reading a source."); return; }
+        if (handoff == null) { failure("handoff", "unavailable", "Wait for the handoff controls to connect before reading a source."); return; }
         String iso = country.getText().toString().trim().toUpperCase(Locale.ROOT);
         if (!iso.matches("[A-Z]{2}")) {
-            status.setText("Enter a two-letter country code before reading a source.");
+            failure("permission", "invalid", "Enter a two-letter country code before reading a source.");
             return;
         }
         if (cancellation != null) { status.setText("Cancel or finish the current source first."); return; }
+        clearSupportCode();
         invalidateReview();
         clearSource(source);
         if (checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
@@ -218,15 +242,16 @@ public final class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == NOTIFICATIONS_REQUEST) {
-            status.setText(grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED
-                    ? "Notifications enabled. Approve the handoff again when ready."
-                    : "Handoff needs its visible Cancel notification. No transfer was started.");
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED)
+                status.setText("Notifications enabled. Approve the handoff again when ready.");
+            else failure("notification", "denied", "Handoff needs its visible Cancel notification. No transfer was started.");
             return;
         }
         if (requestCode != CONTACTS_REQUEST && requestCode != CALLS_REQUEST && requestCode != SMS_REQUEST) return;
         if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED ||
                 checkSelfPermission(permissionFor(requestCode)) != PackageManager.PERMISSION_GRANTED) {
-            status.setText(sourceName(requestCode) + " unavailable: permission denied or installer-restricted. No provider query ran.");
+            failure(sourceStage(requestCode), "restricted", sourceName(requestCode) +
+                    " unavailable: permission denied or installer-restricted. No provider query ran.");
             return;
         }
         beginRead(requestCode, country.getText().toString().trim().toUpperCase(Locale.ROOT));
@@ -234,6 +259,22 @@ public final class MainActivity extends Activity {
 
     private String sourceName(int source) {
         return source == CONTACTS_REQUEST ? "Contacts" : source == CALLS_REQUEST ? "Calls" : "SMS";
+    }
+
+    private String sourceStage(int source) {
+        return source == CONTACTS_REQUEST ? "contacts" : source == CALLS_REQUEST ? "calls" : "sms";
+    }
+
+    private void clearSupportCode() {
+        supportCodeView.setText("");
+        copySupportCode.setEnabled(false);
+    }
+
+    private void failure(String stage, String category, String message) {
+        status.setText(message);
+        supportCodeView.setText("Safe support code: " + supportCode.format(stage, category,
+                SystemClock.elapsedRealtimeNanos()));
+        copySupportCode.setEnabled(true);
     }
 
     private void beginRead(int source, String iso) {
@@ -256,13 +297,13 @@ public final class MainActivity extends Activity {
                     publishRead(taskSignal, () -> { messages = result.records; messagesAvailable = true; finishRead(source, result); });
                 }
             } catch (OperationCanceledException ignored) {
-                publishRead(taskSignal, () -> finishFailure("Read cancelled. No new source was stored."));
+                publishRead(taskSignal, () -> finishFailure(source, "cancelled", "Read cancelled. No new source was stored."));
             } catch (SecurityException ignored) {
-                publishRead(taskSignal, () -> finishFailure(sourceName(source) + " unavailable: access was denied or revoked. No new source was stored."));
+                publishRead(taskSignal, () -> finishFailure(source, "revoked", sourceName(source) + " unavailable: access was denied or revoked. No new source was stored."));
             } catch (MetadataModel.SourceLimitExceededException ignored) {
-                publishRead(taskSignal, () -> finishFailure(sourceName(source) + " exceeds this test build's provider scan limit. Nothing from that source was transferred; its full history was not reviewed."));
+                publishRead(taskSignal, () -> finishFailure(source, "limit", sourceName(source) + " exceeds this build's source safety bound. Nothing from that source was transferred; its full history was not reviewed."));
             } catch (RuntimeException ignored) {
-                publishRead(taskSignal, () -> finishFailure(sourceName(source) + " provider unavailable or unsupported. No new source was stored."));
+                publishRead(taskSignal, () -> finishFailure(source, "provider", sourceName(source) + " provider unavailable or unsupported. No new source was stored."));
             }
         });
     }
@@ -270,7 +311,7 @@ public final class MainActivity extends Activity {
     private void publishRead(CancellationSignal signal, Runnable result) {
         runOnUiThread(() -> {
             if (isDestroyed() || cancellation != signal) return;
-            if (signal.isCanceled() || !started) finishFailure("Read cancelled. No new source was stored.");
+            if (signal.isCanceled() || !started) finishFailure(0, "cancelled", "Read cancelled. No new source was stored.");
             else result.run();
         });
     }
@@ -285,10 +326,10 @@ public final class MainActivity extends Activity {
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
     }
 
-    private void finishFailure(String message) {
+    private void finishFailure(int source, String category, String message) {
         cancellation = null;
         cancel.setEnabled(false);
-        status.setText(message);
+        failure(source == 0 ? "permission" : sourceStage(source), category, message);
         showCoverage();
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
     }
@@ -375,16 +416,16 @@ public final class MainActivity extends Activity {
                 (callsAvailable && checkSelfPermission(Manifest.permission.READ_CALL_LOG) != PackageManager.PERMISSION_GRANTED) ||
                 (messagesAvailable && checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED)) {
             invalidateReview();
-            status.setText("A source permission changed. Reread and review before pairing.");
+            failure("permission", "revoked", "A source permission changed. Reread and review before pairing.");
             return;
         }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            status.setText("Allow the handoff notification so Cancel stays visible while you use the browser.");
+            failure("notification", "denied", "Allow the handoff notification so Cancel stays visible while you use the browser.");
             requestPermissions(new String[]{ Manifest.permission.POST_NOTIFICATIONS }, NOTIFICATIONS_REQUEST);
             return;
         }
         if (!handoff.notificationsAvailable()) {
-            status.setText("Handoff notifications are disabled. No transfer started; its visible Cancel control is required.");
+            failure("notification", "unavailable", "Handoff notifications are disabled. No transfer started; its visible Cancel control is required.");
             return;
         }
         byte[] payload = null;
@@ -392,13 +433,13 @@ public final class MainActivity extends Activity {
             payload = NativePayload.selected(contacts, calls, messages, selectedIds,
                     callsAvailable, messagesAvailable, Instant.now());
         } catch (IllegalArgumentException invalidSelection) {
-            status.setText(invalidSelection.getMessage() + " Reduce the selection or reread and review it. No account save was made.");
+            failure("handoff", "limit", invalidSelection.getMessage() + " Reduce the selection or reread and review it. No account save was made.");
             return;
         }
         try {
             handoff.approve(payload);
         } catch (RuntimeException unavailable) {
-            status.setText("Local handoff could not start. Check notification access and review again. No account save was made.");
+            failure("handoff", "unavailable", "Local handoff could not start. Check notification access and review again. No account save was made.");
         } finally {
             if (payload != null) Arrays.fill(payload, (byte) 0);
         }
@@ -408,21 +449,26 @@ public final class MainActivity extends Activity {
         if (value.state().equals("idle")) return;
         handoffButton.setEnabled(false);
         if (value.state().equals("ready")) {
+            clearSupportCode();
             review.setText("One-use pairing code: " + value.code() +
                     ". Expires within 5 minutes of approval. Open AMPLIFai on this same Android phone, enter the code, review each source and separately approve each save. Cancel is available in the notification.");
             status.setText("Local handoff ready on this phone only. No cloud save has occurred.");
         } else if (value.state().equals("starting")) {
             status.setText("Starting the visible handoff notification…");
+        } else if (value.state().equals("received")) {
+            status.setText(R.string.handoff_received_status);
+            review.setText(R.string.handoff_received_review);
         } else {
             reviewed = false;
             String message = switch (value.state()) {
-                case "completed" -> "Reviewed metadata transferred to the browser. Account saves still require separate source approval.";
+                case "completed" -> getString(R.string.handoff_saved_status);
                 case "expired" -> "Browser handoff expired. Review again for a new pairing code.";
                 case "attempts_exhausted" -> "Browser handoff stopped after five incorrect pairing attempts. Review again for a new code.";
                 case "cancelled" -> "Browser handoff cancelled. Review again before a new transfer.";
                 default -> "Browser handoff stopped. Review again and check notification access before retrying.";
             };
-            status.setText(message);
+            if (value.state().equals("failed")) failure("handoff", "unavailable", message);
+            else status.setText(message);
             review.setText("The previous pairing code is no longer available. Nothing is saved to an account by this app.");
         }
     }
@@ -448,7 +494,7 @@ public final class MainActivity extends Activity {
         if (revoked) {
             // Binding completes asynchronously; revoke its handoff before showing any earlier code.
             if (handoff == null) cancelHandoffOnConnect = true;
-            status.setText("A source permission changed. That source is unavailable; reread and review permitted sources before pairing.");
+            failure("permission", "revoked", "A source permission changed. That source is unavailable; reread and review permitted sources before pairing.");
         }
     }
 

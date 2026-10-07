@@ -5,4 +5,7 @@
     <string name="handoff_notification_title">Phone handoff is active</string>
     <string name="handoff_notification_text">Same-phone browser only. Stops within five minutes.</string>
     <string name="handoff_cancel">Cancel handoff</string>
+    <string name="handoff_received_status">Reviewed metadata reached the browser. Keep this handoff active until saved sources are acknowledged, or cancel if you are using browser-only review.</string>
+    <string name="handoff_received_review">The one-use pairing code has been consumed. Nothing is saved to an account by delivery alone. Confirm each browser source save before ending this handoff.</string>
+    <string name="handoff_saved_status">The browser acknowledged confirmed account saves. The local handoff is closed.</string>
 </resources>

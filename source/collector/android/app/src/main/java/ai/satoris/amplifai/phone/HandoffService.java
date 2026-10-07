@@ -38,7 +38,7 @@ public final class HandoffService extends Service {
     private Snapshot snapshot = new Snapshot("idle", null);
 
     public record Snapshot(String state, String code) {
-        public boolean active() { return state.equals("starting") || state.equals("ready"); }
+        public boolean active() { return state.equals("starting") || state.equals("ready") || state.equals("received"); }
     }
 
     public final class LocalBinder extends Binder {
@@ -120,6 +120,8 @@ public final class HandoffService extends Service {
             bridge = new LocalBridge(pendingPayload, LocalBridge.ACCOUNT_ORIGIN, LocalBridge.PORT,
                     SystemClock::elapsedRealtimeNanos, reason -> handler.post(() -> {
                         if (activeSession.equals(sessionId)) finish(reason);
+                    }), () -> handler.post(() -> {
+                        if (activeSession.equals(sessionId)) publish("received", null);
                     }));
             clearPendingPayload();
             bridge.start();

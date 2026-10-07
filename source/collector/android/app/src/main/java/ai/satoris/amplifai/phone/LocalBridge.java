@@ -1,6 +1,7 @@
 package ai.satoris.amplifai.phone;
 
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -9,13 +10,18 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** One-use browser handoff bound to this phone's loopback interface only. */
 public final class LocalBridge implements AutoCloseable {
@@ -29,6 +35,8 @@ public final class LocalBridge implements AutoCloseable {
     public enum EndReason { COMPLETED, CANCELLED, EXPIRED, ATTEMPTS_EXHAUSTED, FAILED }
     private static final int MAX_ATTEMPTS = 5;
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final Pattern SAVED_ACKNOWLEDGMENT = Pattern.compile(
+            "\\s*\\{\\s*\"handoffId\"\\s*:\\s*\"([0-9a-f-]{36})\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*,\\s*\"saved\"\\s*:\\s*true\\s*\\}\\s*");
 
     private final ServerSocket listener;
     private final byte[] payload;
@@ -39,6 +47,9 @@ public final class LocalBridge implements AutoCloseable {
     private final int port;
     private final LongSupplier clock;
     private final Consumer<EndReason> onClosed;
+    private final Runnable onReceived;
+    private final String handoffId;
+    private final String payloadSha256;
     private volatile boolean closed;
     private Socket activeSocket;
     private String token;
@@ -52,6 +63,11 @@ public final class LocalBridge implements AutoCloseable {
 
     LocalBridge(byte[] selectedPayload, String allowedOrigin, int port,
                 LongSupplier clock, Consumer<EndReason> onClosed) throws IOException {
+        this(selectedPayload, allowedOrigin, port, clock, onClosed, () -> {});
+    }
+
+    LocalBridge(byte[] selectedPayload, String allowedOrigin, int port,
+                LongSupplier clock, Consumer<EndReason> onClosed, Runnable onReceived) throws IOException {
         if (selectedPayload.length == 0 || selectedPayload.length > 32 * 1024 * 1024) {
             throw new IllegalArgumentException("Local handoff size is invalid.");
         }
@@ -59,6 +75,9 @@ public final class LocalBridge implements AutoCloseable {
         origin = allowedOrigin;
         this.clock = clock;
         this.onClosed = onClosed;
+        this.onReceived = onReceived;
+        handoffId = UUID.randomUUID().toString();
+        payloadSha256 = sha256Hex(payload);
         listener = new ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"));
         this.port = listener.getLocalPort();
         listener.setSoTimeout(1000);
@@ -108,7 +127,11 @@ public final class LocalBridge implements AutoCloseable {
         boolean allowed = ("127.0.0.1:" + port()).equals(request.headers.get("host")) &&
                 origin.equals(request.headers.get("origin"));
         if (!allowed) { reply(output, 403, false, empty()); return; }
-        if (closed || clock.getAsLong() >= expiresAt || used) { reply(output, 410, true, empty()); return; }
+        boolean savedAcknowledgment = request.path.equals("/v1/acknowledge-save") &&
+                (request.method.equals("POST") || request.method.equals("OPTIONS"));
+        if (closed || clock.getAsLong() >= expiresAt || (used && !savedAcknowledgment)) {
+            reply(output, 410, true, empty()); return;
+        }
         if (request.method.equals("OPTIONS")) { preflight(output, request); return; }
         if (request.method.equals("POST") && request.path.equals("/v1/pair")) {
             pair(output, request, socket.getInputStream());
@@ -116,6 +139,8 @@ public final class LocalBridge implements AutoCloseable {
             metadata(output, request);
         } else if (request.method.equals("POST") && request.path.equals("/v1/complete")) {
             complete(output, request);
+        } else if (request.method.equals("POST") && request.path.equals("/v1/acknowledge-save")) {
+            acknowledgeSave(output, request, socket.getInputStream());
         } else {
             reply(output, 403, true, empty());
         }
@@ -123,7 +148,8 @@ public final class LocalBridge implements AutoCloseable {
 
     private void preflight(OutputStream output, Request request) throws IOException {
         String expected = request.path.matches("/v1/metadata(?:\\?cursor=(0|[1-9][0-9]{0,2}))?") ? "GET" : "POST";
-        if ((!request.path.equals("/v1/pair") && !request.path.equals("/v1/complete") && !expected.equals("GET")) ||
+        if ((!request.path.equals("/v1/pair") && !request.path.equals("/v1/complete") &&
+                !request.path.equals("/v1/acknowledge-save") && !expected.equals("GET")) ||
                 !expected.equals(request.headers.get("access-control-request-method"))) {
             reply(output, 403, true, empty());
             return;
@@ -145,13 +171,9 @@ public final class LocalBridge implements AutoCloseable {
         if (length < 1 || length > MAX_REQUEST_BYTES) {
             reply(output, length > MAX_REQUEST_BYTES ? 413 : 400, true, empty()); return;
         }
-        byte[] body = new byte[length];
-        int offset = 0;
-        while (offset < length) {
-            int count = input.read(body, offset, length - offset);
-            if (count < 0) { reply(output, 400, true, empty()); return; }
-            offset += count;
-        }
+        byte[] body;
+        try { body = readExactBody(input, length); }
+        catch (EOFException incomplete) { reply(output, 400, true, empty()); return; }
         String command = new String(body, StandardCharsets.US_ASCII);
         if (closed || clock.getAsLong() >= expiresAt) {
             reply(output, 410, true, empty());
@@ -174,7 +196,9 @@ public final class LocalBridge implements AutoCloseable {
         byte[] random = new byte[32];
         RANDOM.nextBytes(random);
         token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random);
-        String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + PAIR_SECONDS + "}";
+        long remaining = Math.max(1L, TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong()));
+        String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + remaining +
+                ",\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + payloadSha256 + "\"}";
         reply(output, 200, true, result.getBytes(StandardCharsets.US_ASCII));
     }
 
@@ -189,7 +213,7 @@ public final class LocalBridge implements AutoCloseable {
         }
         if (pageCount == 1) {
             used = true;
-            finishReply(output, payload);
+            deliveredReply(output, payload);
             return;
         }
         int start = cursor * PAGE_BYTES;
@@ -213,7 +237,67 @@ public final class LocalBridge implements AutoCloseable {
             reply(output, 409, true, empty()); return;
         }
         used = true;
-        finishReply(output, "{\"completed\":true}".getBytes(StandardCharsets.US_ASCII));
+        deliveredReply(output, "{\"completed\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void acknowledgeSave(OutputStream output, Request request, InputStream input) throws IOException {
+        if (!authorized(request)) { reply(output, 403, true, empty()); return; }
+        if (!"application/json".equals(request.headers.get("content-type")) ||
+                request.headers.containsKey("transfer-encoding")) {
+            reply(output, 415, true, empty()); return;
+        }
+        int length = contentLength(request);
+        if (length < 1 || length > MAX_REQUEST_BYTES) {
+            reply(output, length > MAX_REQUEST_BYTES ? 413 : 400, true, empty()); return;
+        }
+        byte[] body;
+        try { body = readExactBody(input, length); }
+        catch (EOFException incomplete) { reply(output, 400, true, empty()); return; }
+        String command = new String(body, StandardCharsets.US_ASCII);
+        Matcher saved = SAVED_ACKNOWLEDGMENT.matcher(command);
+        if (!saved.matches()) {
+            reply(output, 400, true, empty()); return;
+        }
+        if (!used || !constantTimeEquals(handoffId, saved.group(1)) ||
+                !constantTimeEquals(payloadSha256, saved.group(2))) {
+            reply(output, 409, true, empty()); return;
+        }
+        finishReply(output, "{\"acknowledged\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void deliveredReply(OutputStream output, byte[] response) throws IOException {
+        try {
+            reply(output, 200, true, response);
+            Arrays.fill(payload, (byte) 0);
+            onReceived.run();
+        } catch (IOException interruptedTransfer) {
+            close(EndReason.FAILED);
+            throw interruptedTransfer;
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        byte[] digest;
+        try { digest = MessageDigest.getInstance("SHA-256").digest(bytes); }
+        catch (NoSuchAlgorithmException missingPlatformPrimitive) { throw new IllegalStateException("SHA-256 is unavailable", missingPlatformPrimitive); }
+        char[] hex = new char[digest.length * 2];
+        char[] digits = "0123456789abcdef".toCharArray();
+        for (int index = 0; index < digest.length; index++) {
+            hex[index * 2] = digits[(digest[index] & 0xff) >>> 4];
+            hex[index * 2 + 1] = digits[digest[index] & 0x0f];
+        }
+        return new String(hex);
+    }
+
+    private static byte[] readExactBody(InputStream input, int length) throws IOException {
+        byte[] body = new byte[length];
+        int offset = 0;
+        while (offset < length) {
+            int count = input.read(body, offset, length - offset);
+            if (count < 0) throw new EOFException("Incomplete request body.");
+            offset += count;
+        }
+        return body;
     }
 
     private void finishReply(OutputStream output, byte[] response) throws IOException {

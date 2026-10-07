@@ -76,8 +76,7 @@ public final class PhoneMetadataReader {
                 long contactId = cursor.getLong(id);
                 MutableContact contact = grouped.computeIfAbsent(contactId,
                         key -> new MutableContact(key, cursor.getString(name)));
-                if (contact.phones.size() < 20) contact.phones.add(e164);
-                else rejected++;
+                MetadataModel.addContactPhone(contact.phones, e164);
             }
         }
         List<MetadataModel.Contact> records = new ArrayList<>();
