@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from amplifai_phone.agent import run_admin, run_connect
+from amplifai_phone.backup_stream import DeviceBackupRejected
 from amplifai_phone.backup_watchdog import (
     BackupCleanupIncomplete,
+    BackupNoFileProgress,
     BackupStalled,
     BackupTimeLimit,
 )
@@ -21,6 +23,7 @@ from amplifai_phone.metadata import (
     SourceResult,
 )
 from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
+from pymobiledevice3.exceptions import ConnectionTerminatedError
 
 
 def synthetic_capture() -> IPhoneCapture:
@@ -135,6 +138,59 @@ class AgentProtocolTest(unittest.TestCase):
         )
         self.assertNotIn("private connection detail", sink.getvalue())
 
+    def test_device_link_disconnect_is_not_a_generic_collection_failure(self) -> None:
+        async def failed_collector(**_kwargs: object) -> IPhoneCapture:
+            raise ConnectionTerminatedError("private transport detail")
+
+        sink = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), sink, failed_collector), 1)
+        self.assertEqual(
+            json.loads(sink.getvalue().splitlines()[-1]),
+            {"kind": "error", "code": "connection_lost", "stage": "connecting"},
+        )
+        self.assertNotIn("private transport detail", sink.getvalue())
+
+    def test_device_rejection_preserves_only_safe_status_and_backup_stage(self) -> None:
+        async def failed_collector(**kwargs: object) -> IPhoneCapture:
+            kwargs["transfer_callback"]({
+                "stage": "backup", "receivedBytes": 1024, "retainedBytes": 0,
+                "discardedBytes": 1024, "filesReceived": 1,
+                "elapsedSeconds": 1800, "bytesPerSecond": 0.5,
+            })
+            raise DeviceBackupRejected(205)
+
+        sink = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), sink, failed_collector), 1)
+        self.assertEqual(
+            json.loads(sink.getvalue().splitlines()[-1]),
+            {"kind": "error", "code": "device_backup_failed", "stage": "backup", "deviceCode": 205},
+        )
+
+    def test_incomplete_cleanup_keeps_transport_reason_and_review_gate(self) -> None:
+        async def failed_collector(**_kwargs: object) -> IPhoneCapture:
+            raise BackupCleanupIncomplete("connection_lost")
+
+        sink = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), sink, failed_collector), 1)
+        self.assertEqual(
+            json.loads(sink.getvalue().splitlines()[-1]),
+            {"kind": "error", "code": "connection_lost", "stage": "connecting", "cleanupRequired": True},
+        )
+
+    def test_incomplete_cleanup_keeps_first_numeric_device_status(self) -> None:
+        async def failed_collector(**_kwargs: object) -> IPhoneCapture:
+            try:
+                raise DeviceBackupRejected(205)
+            except DeviceBackupRejected as first:
+                raise BackupCleanupIncomplete("device_backup_failed") from first
+
+        sink = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), sink, failed_collector), 1)
+        self.assertEqual(
+            json.loads(sink.getvalue().splitlines()[-1]),
+            {"kind": "error", "code": "device_backup_failed", "stage": "connecting", "deviceCode": 205, "cleanupRequired": True},
+        )
+
     def test_cleanup_failure_keeps_the_primary_reason_and_requires_recovery(
         self,
     ) -> None:
@@ -160,6 +216,7 @@ class AgentProtocolTest(unittest.TestCase):
         cases = [
             (BackupStalled(), {"kind": "error", "code": "backup_stalled"}),
             (BackupTimeLimit(), {"kind": "error", "code": "backup_time_limit"}),
+            (BackupNoFileProgress(), {"kind": "error", "code": "backup_no_file_progress"}),
             (
                 BackupCleanupIncomplete("backup_stalled"),
                 {"kind": "error", "code": "backup_stalled", "cleanupRequired": True},

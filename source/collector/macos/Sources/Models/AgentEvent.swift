@@ -43,6 +43,7 @@ struct AgentEvent: Decodable {
     let sessions: [ResiduePreview]?
     let count: Int?
     let code: String?
+    let deviceCode: Int64?
     let cleanupRequired: Bool?
     let pairCode: String?
     let port: Int?

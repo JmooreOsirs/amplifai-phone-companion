@@ -44,6 +44,9 @@ struct CollectionStatusPanel: View {
             }
             if model.phase == .error {
                 Text(model.errorMessage).foregroundStyle(.red).accessibilityAddTraits(.isStaticText)
+                if !model.failureContext.isEmpty {
+                    Text(model.failureContext).font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                }
                 ForEach(Array(model.recoverySteps.enumerated()), id: \.offset) { index, step in
                     Text("\(index + 1). \(step)").font(.custom("Arial", size: 14))
                 }

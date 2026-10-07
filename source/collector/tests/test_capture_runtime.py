@@ -9,7 +9,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from amplifai_phone.backup_stream import DeviceBackupRejected
+from amplifai_phone.capture_runtime import _reason
 from amplifai_phone.workspace import SESSION_MARKER
+from pymobiledevice3.exceptions import ConnectionTerminatedError
 
 STUCK_SESSION = r"""
 import asyncio
@@ -99,6 +102,10 @@ else:
 
 
 class CaptureRuntimeTest(unittest.TestCase):
+    def test_incomplete_cleanup_preserves_first_transport_or_device_failure(self) -> None:
+        self.assertEqual(_reason(ConnectionTerminatedError("private path")), "connection_lost")
+        self.assertEqual(_reason(DeviceBackupRejected(205)), "device_backup_failed")
+
     def _environment(self) -> dict[str, str]:
         return {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
 

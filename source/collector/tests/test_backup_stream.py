@@ -10,10 +10,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from amplifai_phone.backup_stream import StreamedDeviceLink
+from amplifai_phone.backup_stream import DeviceBackupRejected, StreamedDeviceLink
 from amplifai_phone.backup_watchdog import (
     BACKUP_IDLE_SECONDS,
     MAX_BACKUP_ELAPSED_SECONDS,
+    MAX_CONTROL_ONLY_SECONDS,
+    BackupNoFileProgress,
     BackupStalled,
     BackupWatchdog,
 )
@@ -54,6 +56,37 @@ class Wire:
 
 
 class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_terminal_device_status_is_required_for_success(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-stream-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(b"")
+                wire.recv_plist = AsyncMock(return_value=[
+                    "DLMessageProcessMessage", {"ErrorCode": 0, "Content": None}
+                ])
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                self.assertIsNone(await link.dl_loop())
+                wire.recv_plist.assert_awaited_once()
+
+    async def test_device_backup_status_keeps_numeric_code_without_private_reason(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-stream-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(b"")
+                wire.recv_plist = AsyncMock(return_value=[
+                    "DLMessageProcessMessage",
+                    {"ErrorCode": 205, "PrivateReason": "phone owner secret"},
+                ])
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                with self.assertRaises(DeviceBackupRejected) as error:
+                    await link.dl_loop()
+                self.assertEqual(error.exception.device_code, 205)
+                self.assertNotIn("phone owner secret", str(error.exception))
+
     async def test_chunked_selected_and_discarded_frames_emit_private_numeric_progress(
         self,
     ) -> None:
@@ -405,6 +438,22 @@ class TransferDeadlineTest(unittest.TestCase):
         watchdog = BackupWatchdog(clock=lambda: clock[0])
         watchdog.start()
         watchdog.payload_received(128 * 1024)
+        watchdog.file_transfer_started()
         clock[0] = BACKUP_IDLE_SECONDS
         watchdog.received(4)
         self.assertIsInstance(watchdog._expired(), BackupStalled)
+
+    def test_completed_file_allows_bounded_live_control_finalization(self) -> None:
+        clock = [0.0]
+        watchdog = BackupWatchdog(clock=lambda: clock[0])
+        watchdog.start()
+        watchdog.file_transfer_started()
+        watchdog.payload_received(128 * 1024)
+        watchdog.file_transfer_completed()
+        for minute in range(1, 31):
+            clock[0] = minute * 60
+            watchdog.received(4)
+            self.assertIsNone(watchdog._expired())
+        clock[0] = MAX_CONTROL_ONLY_SECONDS
+        watchdog.received(4)
+        self.assertIsInstance(watchdog._expired(), BackupNoFileProgress)

@@ -2,12 +2,13 @@
 
 The public `/phone` and `/phone/account` setup links offer the signed Android
 `2026.10.01-rc1` APK and the signed, notarized, stapled Apple Silicon/macOS 14+
-`2026.09.25-rc1` DMG, with the original ZIP retained. The October 1 Android
-update retains the September 28 rc2 signing certificate and Java behavior;
-it updates only launcher artwork, version and source notice. The Mac DMG
-contains the unchanged September 25 app, not the newer opt-in/icon/recovery
-source. Both are owner/partner test releases, not universal
-physical-device acceptance. Exact public source, notices, checksums and release
+`2026.10.02-rc1` Mac owner-test release. The October 1 Android update retains
+the September 28 rc2 signing certificate and Java behavior; it updates only
+launcher artwork, version and source notice. The October 2 Mac release adds
+disk-aware streaming beyond the former fixed backup-size ceilings, but it does
+not contain this October 7 long-backup diagnostic repair. Both public assets
+remain owner/partner tests, not universal physical-device acceptance. Exact
+public source, notices, checksums and release
 receipts are in `PROJECT_PLAN.md`; Android-specific behavior is in
 [`android/README.md`](android/README.md). `/pilot` is a secondary manual-file
 importer, not the normal direct-phone path. No Windows or Intel Mac release exists.
@@ -22,12 +23,12 @@ This is a failed qualification, not Windows companion/installer readiness.
 Native Windows UI, safe cancellation, installer/signing, Apple USB prerequisites,
 browser transfer and physical-device acceptance remain separate gates.
 
-Current September 29 iPhone storage/watchdog/native recovery changes are
-**unreleased source**. They require a new corresponding-source package,
-Developer ID signature, notarization and stapled artifact; the older published
-app does not contain these fixes. Normal physical install, Trust/permissions,
-history coverage, browser handoff and consented account save remain separate
-operator acceptance gates.
+The October 7 long-backup diagnostic repair is a separate source-matched,
+locally signed and notarized owner-test candidate, not a published replacement.
+Its source/notices package and exact release artifacts must be reviewed and
+offered together before the public pointer changes. Normal physical install,
+Trust/permissions, history coverage, browser handoff and consented account save
+remain separate operator acceptance gates.
 
 Build the host-specific macOS app without opening or connecting to a phone:
 
@@ -121,10 +122,14 @@ marked, abandoned sessions and requires an explicit cleanup action before
 another collection. The helper itself makes no cloud upload. The browser can
 save selected metadata only after separate per-source account consent.
 
-Capacity-candidate recovery policy: actual file bytes refresh a 15-minute
-inactivity watchdog, including discarded payload bytes with a flat percentage.
-Control chatter cannot hide a file-data stall. The slow-progress budget starts
-at four hours and extends by actual file bytes at a conservative 16 KiB/s floor;
+Capacity-candidate recovery policy: received file or protocol bytes refresh a
+15-minute inactivity watchdog, including discarded payload bytes and live
+finalization responses with a flat percentage. During an active file frame,
+control bytes cannot hide a 15-minute file stall. Between file frames,
+control-only liveness is bounded to one hour since the last file bytes.
+Control chatter cannot extend the separate data-aware slow-progress budget,
+which starts at four hours and extends by actual file bytes at a conservative
+16 KiB/s floor;
 it is not an absolute four-hour cutoff for a productive large transfer.
 Selected input, discarded input, outbound files and parsing copies are streamed
 in 128 KiB chunks. Selected writes reserve their future parsing copy, and every
@@ -135,7 +140,7 @@ the explicit 1,000,000-row/source and 25,000-selected-contact safety frontiers.
 SQLite cursors avoid a second full row list; retained metadata records still
 reside in memory, so this is not an unlimited-history or paged-review claim.
 Low space, metadata/control capacity, unsupported format, unsafe ownership,
-filesystem unavailability, file-data stall, sustained slow progress and
+filesystem unavailability, device-response stall, sustained slow progress and
 incomplete cleanup have distinct safe errors. Cancellation and
 owned-loop shutdown are bounded; incomplete cleanup retains a marked private
 session and blocks another collection until explicit inspection/recovery.

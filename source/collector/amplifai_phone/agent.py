@@ -15,8 +15,16 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TextIO
 
+from pymobiledevice3.exceptions import ConnectionTerminatedError
+
 from .__main__ import review_capture
-from .backup_watchdog import BackupCleanupIncomplete, BackupStalled, BackupTimeLimit
+from .backup_stream import DeviceBackupRejected
+from .backup_watchdog import (
+    BackupCleanupIncomplete,
+    BackupNoFileProgress,
+    BackupStalled,
+    BackupTimeLimit,
+)
 from .bridge import BridgeError, BridgeServer
 from .capture_runtime import run_local_capture
 from .ios_backup import IPhoneCapture, collect_iphone
@@ -57,17 +65,24 @@ def _error_code(exc: BaseException) -> str:
         return "cancelled"
     if isinstance(exc, WorkspaceError):
         return exc.code
-    if isinstance(exc, (BackupStalled, BackupTimeLimit)):
+    if isinstance(exc, (BackupStalled, BackupTimeLimit, BackupNoFileProgress)):
         return exc.code
+    if isinstance(exc, DeviceBackupRejected):
+        return "device_backup_failed"
+    if isinstance(exc, (ConnectionTerminatedError, ConnectionError)):
+        return "connection_lost"
     if isinstance(exc, BackupCleanupIncomplete):
         return (
             exc.reason
             if exc.reason
             in {
                 "backup_stalled",
+                "backup_no_file_progress",
                 "backup_time_limit",
                 "cancelled",
                 "connection_timeout",
+                "connection_lost",
+                "device_backup_failed",
             }
             else "collection_failed"
         )
@@ -107,8 +122,11 @@ def run_connect(
     collector: Callable[..., Awaitable[IPhoneCapture]] = collect_iphone,
 ) -> int:
     _emit(sink, {"kind": "state", "state": "connecting"})
+    capture_stage = "connecting"
 
     def password_provider() -> str:
+        nonlocal capture_stage
+        capture_stage = "processing"
         _emit(sink, {"kind": "state", "state": "password_required"})
         command = _command(source)
         if command.get("action") != "password":
@@ -129,6 +147,9 @@ def run_connect(
             )
 
     def transfer(value: dict[str, object]) -> None:
+        nonlocal capture_stage
+        if value.get("stage") in ("backup", "processing"):
+            capture_stage = str(value["stage"])
         # The collector publishes only numeric counters and one allowlisted stage.
         _emit(sink, {"kind": "transfer", **value})
 
@@ -146,6 +167,7 @@ def run_connect(
                 transfer_callback=transfer,
             )
         )
+        capture_stage = "review"
         _emit(
             sink,
             {
@@ -251,7 +273,17 @@ def run_connect(
         _emit(sink, {"kind": "state", "state": "cancelled"})
         return 130
     except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - do not expose device errors
-        _emit(sink, _error_event(exc))
+        event = _error_event(exc)
+        if event["code"] in {"connection_lost", "device_backup_failed", "collection_failed"}:
+            event["stage"] = capture_stage
+        device_failure = (
+            exc if isinstance(exc, DeviceBackupRejected)
+            else exc.__cause__ if isinstance(exc.__cause__, DeviceBackupRejected)
+            else None
+        )
+        if device_failure is not None and device_failure.device_code is not None:
+            event["deviceCode"] = device_failure.device_code
+        _emit(sink, event)
         return 1
     finally:
         if bridge is not None:

@@ -22,7 +22,7 @@ struct CollectorModelChecks {
         do {
             try runChecks()
             try await approvedLaunchUsesExactRun()
-            print("15 macOS recovery and local-approval checks passed")
+            print("16 macOS recovery and local-approval checks passed")
         } catch {
             FileHandle.standardError.write(Data("macOS recovery check failed: \(error)\n".utf8))
             Darwin.exit(1)
@@ -40,6 +40,7 @@ struct CollectorModelChecks {
         try residueInspectionDoesNotRequireConsent()
         try storageReasons()
         try timeoutReasons()
+        try deviceFailureIsActionableWithoutPrivateDetails()
         try cleanupRequiresInspection()
         try emptyResidueClearsGate()
         try inspectedResidueBlocksConnection()
@@ -191,13 +192,26 @@ struct CollectorModelChecks {
         let connection = CollectorModel.message(for: "connection_timeout").lowercased()
         let stalled = CollectorModel.message(for: "backup_stalled").lowercased()
         let elapsed = CollectorModel.message(for: "backup_time_limit").lowercased()
+        let controlOnly = CollectorModel.message(for: "backup_no_file_progress").lowercased()
 
-        try require(Set([connection, stalled, elapsed]).count == 3, "Connection, stall and elapsed failures need distinct messages")
+        try require(Set([connection, stalled, elapsed, controlOnly]).count == 4, "Connection, stall, control-only and elapsed failures need distinct messages")
         for obsoleteLimit in ["one hour", "1 hour", "1h"] {
             try require(!connection.contains(obsoleteLimit), "Connection timeout cannot claim a one-hour backup")
         }
         try require(stalled.range(of: #"15\s*min"#, options: .regularExpression) != nil, "Stall recovery must name the 15-minute policy")
         try require(elapsed.contains("data-aware") && !elapsed.contains("four-hour safety limit"), "Active transfer must not claim an absolute four-hour ceiling")
+        try require(controlOnly.contains("one hour") && controlOnly.contains("kept responding"), "Live control-only expiry must not claim wire silence")
+    }
+
+    private static func deviceFailureIsActionableWithoutPrivateDetails() throws {
+        let model = CollectorModel()
+        model.phase = .transferring
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":0,"discardedBytes":1024,"filesReceived":1,"elapsedSeconds":1800,"bytesPerSecond":1}"#))
+        model.receive(try event(#"{"kind":"error","code":"device_backup_failed","stage":"backup","deviceCode":205}"#))
+        try require(model.phase == .error, "Device failure must stop collection")
+        try require(model.errorMessage.contains("iPhone reported") && model.errorMessage.contains("205"), "Device status must be actionable without raw phone text")
+        try require(model.failureContext.contains("1.0 KiB") && model.failureContext.contains("partial"), "Error view must retain last observed transfer and clarify no metadata save")
+        try require(!model.failureContext.contains("phone owner"), "No private device reason may be rendered")
     }
 
     private static func cleanupRequiresInspection() throws {

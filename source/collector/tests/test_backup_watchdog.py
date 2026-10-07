@@ -23,7 +23,7 @@ from amplifai_phone.backup_watchdog import (
 )
 from amplifai_phone.ios_backup import collect_iphone
 from amplifai_phone.windows_storage import private_windows_directory
-from amplifai_phone.workspace import SESSION_MARKER, WorkspaceError
+from amplifai_phone.workspace import SESSION_MARKER, SessionWorkspace, WorkspaceError
 
 
 async def checkpoint() -> None:
@@ -67,8 +67,8 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
     async def test_discarded_upload_bytes_survive_old_hour_cap_without_new_percent(
         self,
     ) -> None:
+        from amplifai_phone.backup_stream import StreamedDeviceLink
         from pymobiledevice3.service_connection import ServiceConnection, build_plist
-        from pymobiledevice3.services.device_link import DeviceLink
 
         clock = Clock()
         watchdog = BackupWatchdog(clock=clock)
@@ -94,29 +94,31 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
             connection.reader = reader
             connection.writer = MagicMock(drain=AsyncMock())
             await observe_backup_receives(SimpleNamespace(service=connection), watchdog)
-            with tempfile.TemporaryDirectory(
-                prefix="amplifai-receive-test-"
-            ) as temporary:
-                root = Path(temporary)
-                link = DeviceLink(connection, root, preserve_file=lambda *_: False)
-                progress: list[float] = []
+            with tempfile.TemporaryDirectory(prefix="amplifai-receive-test-") as temporary:
+                workspace = SessionWorkspace(Path(temporary) / "sessions")
+                with workspace as root:
+                    link = StreamedDeviceLink(
+                        connection, root, workspace=workspace, watchdog=watchdog,
+                        preserve_file=lambda *_: False,
+                    )
+                    progress: list[float] = []
 
-                async def backup() -> None:
-                    watchdog.start()
-                    try:
-                        await link.dl_loop(progress.append)
-                        watchdog.backup_completed()
-                    finally:
-                        link.cleanup_discarded_files()
+                    async def backup() -> None:
+                        watchdog.start()
+                        try:
+                            await link.dl_loop(progress.append)
+                            watchdog.backup_completed()
+                        finally:
+                            link.cleanup_discarded_files()
 
-                await run_backup_session(
-                    backup(), watchdog, lambda: self.fail("no residue")
-                )
-                self.assertEqual(progress, [7.0])
-                self.assertGreater(clock.now, 3600)
-                self.assertLess(clock.now, MAX_BACKUP_ELAPSED_SECONDS)
-                self.assertEqual(list(root.iterdir()), [])
-                self.assertLessEqual(max(reader.requests), RECEIVE_CHUNK_BYTES)
+                    await run_backup_session(
+                        backup(), watchdog, lambda: self.fail("no residue")
+                    )
+                    self.assertEqual(progress, [7.0])
+                    self.assertGreater(clock.now, 3600)
+                    self.assertLess(clock.now, MAX_BACKUP_ELAPSED_SECONDS)
+                    self.assertEqual({path.name for path in root.iterdir()}, {SESSION_MARKER})
+                    self.assertLessEqual(max(reader.requests), RECEIVE_CHUNK_BYTES)
         finally:
             local_socket.close()
             peer_socket.close()
@@ -144,6 +146,20 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertTrue(cleanup.is_set())
 
+    async def test_live_control_frames_do_not_look_like_a_stalled_finalization(self) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+        watchdog.start()
+        watchdog.file_transfer_started()
+        watchdog.payload_received(1024)
+        watchdog.file_transfer_completed()
+        for minute in range(1, 31):
+            clock.now = minute * 60
+            watchdog.received(1)
+            self.assertIsNone(watchdog._expired())
+        watchdog.backup_completed()
+
+
     async def test_absolute_limit_stops_even_with_continuing_bytes(self) -> None:
         clock = Clock()
         watchdog = BackupWatchdog(clock=clock)
@@ -155,7 +171,7 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
             try:
                 for _ in range(25):
                     clock.now += 600
-                    watchdog.received(1)
+                    watchdog.payload_received(1)
                     await checkpoint()
                 watchdog.backup_completed()
                 capture.append(True)

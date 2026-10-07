@@ -67,6 +67,7 @@ final class CollectorModel: ObservableObject {
     private var handoffPollTask: Task<Void, Never>?
     private var pairingRequested = false
     private var lastErrorCode: String?
+    private var lastErrorStage: String?
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -130,6 +131,21 @@ final class CollectorModel: ObservableObject {
         "Observed average: \(Self.byteDescription(Int64(transferBytesPerSecond)))/s · \(transferFileCount) files received"
     }
 
+    var failureContext: String {
+        guard phase == .error, let stage = lastErrorStage else { return "" }
+        let operation: String
+        switch stage {
+        case "backup": operation = "backup transfer"
+        case "processing": operation = "local metadata reading"
+        case "review": operation = "local review or handoff"
+        default: operation = "iPhone connection"
+        }
+        let transfer = transferIsKnown
+            ? " Last observed: \(transferSummary). These are partial, temporary backup bytes—not an account save."
+            : " No transfer bytes were observed by the companion."
+        return "Stopped during \(operation).\(transfer)"
+    }
+
     func inspectResidue() {
         guard process == nil else { return }
         needsStorageReview = true
@@ -144,6 +160,8 @@ final class CollectorModel: ObservableObject {
     func connect() {
         guard canConnect else { return }
         contacts = []
+        lastErrorCode = nil
+        lastErrorStage = nil
         selectedIDs = []
         availableCalls = 0
         availableMessages = 0
@@ -538,6 +556,7 @@ final class CollectorModel: ObservableObject {
             phase = .idle
         case "error":
             lastErrorCode = event.code
+            lastErrorStage = ["connecting", "backup", "processing", "review"].contains(event.stage ?? "") ? event.stage : nil
             if event.code == "selection" {
                 errorMessage = "Choose supported contacts from this phone."
             } else if event.code == "bridge_unavailable" {
@@ -554,7 +573,14 @@ final class CollectorModel: ObservableObject {
                 }
                 let cleanup = event.cleanupRequired == true
                     ? " Temporary phone data may remain. Check temporary data before reconnecting." : ""
-                fail(Self.message(for: event.code) + cleanup)
+                let deviceStatus: String
+                if event.code == "device_backup_failed", let code = event.deviceCode,
+                   (-2_147_483_648...4_294_967_295).contains(code) {
+                    deviceStatus = " Device status: \(code)."
+                } else {
+                    deviceStatus = ""
+                }
+                fail(Self.message(for: event.code) + deviceStatus + cleanup)
             }
         default:
             process?.terminate()
@@ -613,10 +639,12 @@ final class CollectorModel: ObservableObject {
 
     var statusDetail: String {
         switch phase {
-        case .idle, .connecting, .error:
+        case .idle, .connecting:
             return "Connect one iPhone by USB, unlock it, and approve Apple's Trust prompt on the phone if shown. Existing trusted Wi-Fi pairing can be used only when no cable is present. No new wireless pairing or security bypass is performed."
+        case .error:
+            return "This collection did not produce a verified completion. Review the failure and last observed transfer below before starting a new approved attempt."
         case .transferring:
-            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the phone connected. Data-aware guards allow larger active transfers; 15 minutes without file data or sustained very slow progress can stop the session."
+            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the phone connected. Data-aware guards allow larger active transfers; 15 minutes without any device response or sustained very slow progress can stop the session."
         case .passwordRequired:
             return "Use the existing password for this iPhone's encrypted computer backup. It is not your phone passcode. This app does not enable, disable or reset encryption."
         case .processing:
@@ -645,8 +673,11 @@ final class CollectorModel: ObservableObject {
         case "source_capacity_limit": return ["A control-frame or metadata-count safety bound was reached, not the former backup-size ceiling.", "Contact support with the companion version; do not reset phone encryption or remove other backups."]
         case "workspace_unsafe": return ["Stop and contact support. Do not change permissions or delete an unverified folder."]
         case "workspace_unavailable", "workspace": return ["Reopen the signed companion and choose Check temporary data.", "If access still fails, reinstall the signed companion or contact support."]
-        case "backup_stalled", "backup_time_limit", "connection_timeout", "phone_connection", "trust_required":
+        case "backup_stalled", "backup_time_limit", "backup_no_file_progress", "connection_timeout", "phone_connection", "trust_required":
             return ["Connect one phone by USB, keep it unlocked, and approve Trust on the phone if shown.", "Check the cable and use the phone's normal controls. Reconnect after the helper has stopped."]
+        case "connection_lost": return ["Check the direct USB cable and port and respond to any iPhone Trust prompt.", "After the helper stops, compare a normal Finder backup on the same Mac. If Finder succeeds but this fails again, share the companion version and last transfer details with support."]
+        case "device_backup_failed": return ["Note the device status and companion version.", "If the same iPhone cannot complete a normal Finder backup on this Mac, resolve that device backup issue first. Otherwise, share the status with support before repeating collection."]
+        case "collection_failed": return ["Note the companion version and last observed transfer stage.", "Contact support before repeating the same long collection; the cause was not classified."]
         default: return []
         }
     }
@@ -664,10 +695,13 @@ final class CollectorModel: ObservableObject {
         case "workspace_unavailable", "workspace": return "The app could not access its private temporary storage. Reopen the app and check temporary data. If it still fails, reinstall the signed companion or contact support."
         case "workspace_cleanup", "cleanup_incomplete": return "Temporary phone data could not be fully removed. Check temporary data before reconnecting."
         case "connection_timeout", "timeout": return "The iPhone connection timed out. Keep it unlocked, check the cable or trusted Wi-Fi connection, then retry."
+        case "connection_lost": return "The iPhone connection ended before backup completion. No metadata was saved. Check the cable and port, then reconnect after the helper stops."
+        case "device_backup_failed": return "The iPhone reported a backup failure. No metadata was saved."
         case "backup_stalled": return "No backup data arrived for 15 minutes. Collection stopped. Check the cable, unlock the iPhone, then reconnect."
+        case "backup_no_file_progress": return "The iPhone kept responding but no backup file data arrived for one hour. Collection stopped without saving metadata. Check the phone's normal backup status before retrying."
         case "backup_time_limit": return "The backup made too little file-data progress within its data-aware time budget. Collection stopped. Use a direct USB cable and retry; if it repeats, contact support."
         case "cancelled": return "Collection was cancelled. No metadata was saved."
-        default: return "Collection stopped. No metadata was saved. Reconnect and try again."
+        default: return "Collection stopped without a verified completion receipt. The cause was not classified; note the stage below before retrying."
         }
     }
 }

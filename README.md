@@ -1,19 +1,22 @@
-# AMPLIFai Phone macOS 2026.10.02-rc1 source
+# AMPLIFai Phone macOS 2026.10.07-rc1 source
 
 This branch carries the authored-source view for the Apple Silicon, macOS 14+
-owner-test capacity release. The matching complete source archive, including
+owner-test long-backup diagnostic release. The matching complete source archive, including
 143 upstream source archives and 278 notice files, is the designated source
 offer beside the app and DMG at:
-https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.02-rc1
+https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc1
 
-Use `AMPLIFai-Phone-macOS-Source-2026.10.02-rc1.tar.gz` and its checksums
+Use `AMPLIFai-Phone-macOS-Source-2026.10.07-rc1.tar.gz` and its checksums
 from that release for the full offline package; upstream archives are not
 duplicated into Git.
-The update replaces fixed 1 GiB session and 128 MiB database ceilings with
-disk-aware streaming and parsing. Apple accepted notarization submissions for
-the app and DMG. Normal fresh installation, physical iPhone capture, browser
-handoff and account-save/retention remain separate owner-operated gates. This
-is not a customer-ready or Windows release.
+The prior October 2 update removed fixed 1 GiB session and 128 MiB database
+ceilings. This revision distinguishes live backup finalization from a stalled
+file frame and reports safe device/connection failure categories instead of
+the generic retry instruction. Apple accepted notarization of the revised app
+and DMG. The partner's underlying 30-minute failure is not yet diagnosed;
+normal fresh installation, physical iPhone completion, browser handoff and
+account-save/retention remain separate owner-operated gates. This is not a
+customer-ready or Windows release.
 
 The project-authored companion is Copyright (C) 2026 OSIRS LLC and licensed
 under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
@@ -22,7 +25,7 @@ notices. The separate private website/backend source is not part of this package
 
 This repository is source, not an installer. Its macOS files are projected from
 the artifact-bound packet built from native source revision
-`f8c70d920d6896702ed492c852c4a320ca2486be`. The complete release archive
+`6b4b3da88f01c15bd19f4aa8b421554bf2cec9d0`. The complete release archive
 contains the build inputs matched to the selected signed/stapled app inventory;
 it does not claim a byte-for-byte reproducible native build or verified
 operation on an owner phone.
@@ -79,6 +82,6 @@ The 143-archive candidate includes the 102 Python sdists, CPython 3.12.12 and
 its 20260203 standalone build recipe, OpenSSL 4.0.2 and 32 external Cargo
 packages identified by cryptography, plus bzip2 1.0.8, Expat 2.6.3, mpdecimal
 4.0.0, OpenSSL 3.5.5, SQLite 3.50.4 and xz 5.8.1 from the interpreter recipe.
-The signed/stapled app inventory verifies 5,627 files and seven native paths.
+The signed/stapled app inventory verifies 5,622 files and seven native paths.
 The package contains all enumerated source inputs and 278 notice files;
 it does not equate manifest coverage with legal certainty or a binary rebuild.

@@ -9,6 +9,7 @@ from contextlib import suppress
 
 MAX_BACKUP_ELAPSED_SECONDS = 4 * 60 * 60
 BACKUP_IDLE_SECONDS = 15 * 60
+MAX_CONTROL_ONLY_SECONDS = 60 * 60
 CLEANUP_GRACE_SECONDS = 5
 RECEIVE_CHUNK_BYTES = 128 * 1024
 MAX_CONTROL_BYTES = 16 * 1024 * 1024
@@ -29,6 +30,13 @@ class BackupStalled(TimeoutError):
         super().__init__("No backup bytes were received for fifteen minutes")
 
 
+class BackupNoFileProgress(TimeoutError):
+    code = "backup_no_file_progress"
+
+    def __init__(self) -> None:
+        super().__init__("No backup file bytes were received for one hour")
+
+
 class BackupCleanupIncomplete(RuntimeError):
     code = "cleanup_incomplete"
 
@@ -46,6 +54,8 @@ class BackupWatchdog:
         self._last_received_at: float | None = None
         self._last_payload_at: float | None = None
         self._payload_bytes = 0
+        self._receiving_file = False
+        self._wire_payload_accounting = False
         self._active = False
         self._aborted = False
         self._changed = asyncio.Event()
@@ -53,8 +63,9 @@ class BackupWatchdog:
     def start(self) -> None:
         self.raise_if_aborted()
         self._started_at = self._last_received_at = self._clock()
-        self._last_payload_at = None
+        self._last_payload_at = self._started_at
         self._payload_bytes = 0
+        self._receiving_file = False
         self._active = True
         self.wake()
 
@@ -69,7 +80,7 @@ class BackupWatchdog:
         self.raise_if_aborted()
         if self._active and byte_count > 0:
             self._payload_bytes += byte_count
-            self._last_payload_at = self._clock()
+            self._last_received_at = self._last_payload_at = self._clock()
             self.wake()
 
     def payload_sent(self, byte_count: int) -> None:
@@ -77,18 +88,28 @@ class BackupWatchdog:
         # Actual outbound file bytes are progress too, never a plist keepalive.
         self.payload_received(byte_count)
 
+    def file_transfer_started(self) -> None:
+        if not self._receiving_file:
+            self._last_payload_at = self._clock()
+        self._receiving_file = True
+        self.wake()
+
+    def file_transfer_completed(self) -> None:
+        self._receiving_file = False
+        self.wake()
+
+    @property
+    def wire_payload_accounting(self) -> bool:
+        return self._wire_payload_accounting
+
+    def _activity_at(self) -> float:
+        return self._last_payload_at if self._receiving_file else self._last_received_at
+
     def _deadline(self) -> float:
         return (
             self._started_at
             + MAX_BACKUP_ELAPSED_SECONDS
             + self._payload_bytes / MIN_PROGRESS_BYTES_PER_SECOND
-        )
-
-    def _activity_at(self) -> float:
-        return (
-            self._last_received_at
-            if self._last_payload_at is None
-            else self._last_payload_at
         )
 
     def backup_completed(self) -> None:
@@ -117,9 +138,10 @@ class BackupWatchdog:
         return min(
             self._deadline() - now,
             self._activity_at() + BACKUP_IDLE_SECONDS - now,
+            self._last_payload_at + MAX_CONTROL_ONLY_SECONDS - now,
         )
 
-    def _expired(self) -> BackupTimeLimit | BackupStalled | None:
+    def _expired(self) -> BackupTimeLimit | BackupStalled | BackupNoFileProgress | None:
         if not self._active:
             return None
         now = self._clock()
@@ -127,9 +149,11 @@ class BackupWatchdog:
             return BackupTimeLimit()
         if now - self._activity_at() >= BACKUP_IDLE_SECONDS:
             return BackupStalled()
+        if now - self._last_payload_at >= MAX_CONTROL_ONLY_SECONDS:
+            return BackupNoFileProgress()
         return None
 
-    async def wait_expired(self) -> BackupTimeLimit | BackupStalled:
+    async def wait_expired(self) -> BackupTimeLimit | BackupStalled | BackupNoFileProgress:
         while True:
             self._changed.clear()
             error = self._expired()
@@ -153,7 +177,10 @@ class _ActivityReader:
     async def read(self, size: int = -1) -> bytes:
         self._watchdog.raise_if_aborted()
         payload = await self._reader.read(size)
-        self._watchdog.received(len(payload))
+        if self._watchdog._receiving_file:
+            self._watchdog.payload_received(len(payload))
+        else:
+            self._watchdog.received(len(payload))
         return payload
 
     async def readexactly(self, size: int) -> bytes:
@@ -178,6 +205,7 @@ async def observe_backup_receives(service: object, watchdog: BackupWatchdog) -> 
     connection = service.service
     reader, _writer = await connection._ensure_started()
     connection.reader = _ActivityReader(reader, watchdog)
+    watchdog._wire_payload_accounting = True
 
 
 def _consume_task_error(task: asyncio.Task[object]) -> None:

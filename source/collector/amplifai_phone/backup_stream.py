@@ -37,6 +37,12 @@ MAX_PATH_BYTES = 4096
 NO_COPY_METADATA = frozenset({"Info.plist", "Status.plist", "Manifest.plist"})
 
 
+class DeviceBackupRejected(RuntimeError):
+    def __init__(self, device_code: int | None) -> None:
+        self.device_code = device_code
+        super().__init__("The iPhone rejected the backup operation")
+
+
 @dataclass(frozen=True)
 class TransferProgress:
     receivedBytes: int
@@ -69,6 +75,22 @@ class StreamedDeviceLink(DeviceLink):
         self._received = self._retained = self._files = 0
         self._reserve_current_copy = False
         self._reserved_paths: dict[Path, int] = {}
+
+    async def receive_message(self):
+        message = await super().receive_message()
+        if message[0] == "DLMessageProcessMessage":
+            status = message[1]
+            if isinstance(status, dict) and status.get("ErrorCode") != 0:
+                raw_code = status.get("ErrorCode")
+                device_code = (
+                    raw_code
+                    if isinstance(raw_code, int)
+                    and not isinstance(raw_code, bool)
+                    and -(2**31) <= raw_code <= 2**32 - 1
+                    else None
+                )
+                raise DeviceBackupRejected(device_code)
+        return message
 
     def _path(self, name: str, *, create_parents: bool = False) -> Path:
         if not isinstance(name, str) or not name or len(name.encode()) > MAX_PATH_BYTES:
@@ -132,13 +154,15 @@ class StreamedDeviceLink(DeviceLink):
         while code == CODE_FILE_DATA:
             if size <= 0:
                 raise UnsupportedSchema("Invalid empty backup data frame")
+            self.watchdog.file_transfer_started()
             while size:
                 self.watchdog.raise_if_aborted()
                 payload = await self._recvall(min(size, RECEIVE_CHUNK_BYTES))
                 self.watchdog.raise_if_aborted()  # no late write after bounded teardown
                 if not payload:
                     raise UnsupportedSchema("Incomplete backup data frame")
-                self.watchdog.payload_received(len(payload))
+                if not self.watchdog.wire_payload_accounting:
+                    self.watchdog.payload_received(len(payload))
                 if destination is not None:
                     self.workspace.write_chunk(
                         destination, payload, reserve_copy=self._reserve_current_copy
@@ -148,6 +172,7 @@ class StreamedDeviceLink(DeviceLink):
                 size -= len(payload)
                 self.publish_progress()
                 await asyncio.sleep(0)  # bounded checkpoint even with a buffered socket
+            self.watchdog.file_transfer_completed()
             size, code = await self._frame()
         return size, code
 
