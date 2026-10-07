@@ -1,13 +1,19 @@
 # AMPLIFai Phone — Android owner/partner test
 
-`2026.10.07-rc2` (`26100702`) is an unpublished source candidate. It adds a
+`2026.10.07-rc3` (`26100703`) is an owner-test source candidate. It adds a
 payload-bound saved-account acknowledgement after browser delivery so the
 companion stays active until the browser confirms separately saved sources,
 the owner cancels, or five minutes elapse. It also adds a bounded pre-pair
 support code for permission, provider and handoff failures. The October 1 signed
-APK remains unchanged as rollback. A signed local candidate still needs normal
+APK remains unchanged as rollback. The signed candidate still needs normal
 published-download and physical-device acceptance. SMS/call coverage remains
 conditional on ordinary installer and device permissions.
+
+Support-code wire format is `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
+For this Android release, `build` is the exact dotted version name
+`2026.10.07-rc3`, bytes are `0|0` before pairing, and status is `-`. The
+numeric Mac build values remain distinct and backward-compatible; the website
+derives platform only from an explicit allowlist of exact build values.
 
 The published September 28 rc2 fixes an Android-only pairing crash in that day's
 rc1. Preserve rc2 as rollback/acquisition compatibility; never recommend the

@@ -1,4 +1,4 @@
-# AMPLIFai Phone Android 2026.10.07-rc2 source
+# AMPLIFai Phone Android 2026.10.07-rc3 source
 
 **Mac and Android owner/partner test builds.** Normal fresh installation,
 owner-operated phone collection and hosted-browser transfer still need
@@ -7,7 +7,7 @@ Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
 companions are not available.
 
 - [Mac Apple Silicon/macOS 14+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc3): separately notarized owner-test companion. The Mac release has its own exact source tag and complete source archive.
-- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.07-rc2): release-signed owner/partner test APK for same-phone browser handoff. This in-place update binds a saved-account acknowledgement to the delivered payload and adds a bounded, user-copied support code for pre-pair failures. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review. The account-saving web gate is still closed pending retention enforcement.
+- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.07-rc3): release-signed owner/partner test APK for same-phone browser handoff. This in-place update retains the payload-bound saved-account acknowledgement and corrects the bounded support-code wire format. Its exact dotted build distinguishes Android from numeric Mac builds. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review. The account-saving web gate is still closed pending retention enforcement.
 - Start through your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account), or use the separate [browser-only pilot](https://amplifai-database-engine.vercel.app/phone). The temporary app-generated pairing code is not a phone number or email verification code.
 
 ## Android source and build
@@ -19,8 +19,8 @@ remaining physical-device matrix. The Android release carries its matching
 source archive, license/notices and checksums beside the APK. No private signing
 key, password, account source or owner phone data is included.
 
-This branch projects the exact Android source for `2026.10.07-rc2` from native
-revision `e2210ad`. The APK is not Google Play-ready: this full-history build
+This branch projects the exact Android source for `2026.10.07-rc3` from native
+revision `d252eb4`. The APK is not Google Play-ready: this full-history build
 requests restricted SMS and call-log permissions without default-handler status
 or a reviewed Play exception. Ordinary download/install and physical-device
 permission behavior remain owner-operated release gates; do not turn off device
