@@ -1,19 +1,20 @@
-# AMPLIFai Phone macOS 2026.10.07-rc1 source
+# AMPLIFai Phone macOS 2026.10.07-rc2 source
 
 This branch carries the authored-source view for the Apple Silicon, macOS 14+
-owner-test long-backup diagnostic release. The matching complete source archive, including
+owner-test long-backup diagnostic and safe-report release. The matching complete source archive, including
 143 upstream source archives and 278 notice files, is the designated source
 offer beside the app and DMG at:
-https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc1
+https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc2
 
-Use `AMPLIFai-Phone-macOS-Source-2026.10.07-rc1.tar.gz` and its checksums
+Use `AMPLIFai-Phone-macOS-Source-2026.10.07-rc2.tar.gz` and its checksums
 from that release for the full offline package; upstream archives are not
 duplicated into Git.
-The prior October 2 update removed fixed 1 GiB session and 128 MiB database
-ceilings. This revision distinguishes live backup finalization from a stalled
-file frame and reports safe device/connection failure categories instead of
-the generic retry instruction. Apple accepted notarization of the revised app
-and DMG. The partner's underlying 30-minute failure is not yet diagnosed;
+The October 7 rc1 update distinguished live backup finalization from a stalled
+file frame and reported safe device/connection failure categories. This rc2
+revision adds a user-controlled, pre-pair safe support code with a random
+reference, static category/stage, elapsed time and byte counts. It does not
+send phone content or diagnostic text from the native app. Apple accepted
+notarization of the rc2 app and DMG. The partner's underlying 30-minute failure is not yet diagnosed;
 normal fresh installation, physical iPhone completion, browser handoff and
 account-save/retention remain separate owner-operated gates. This is not a
 customer-ready or Windows release.
@@ -25,7 +26,7 @@ notices. The separate private website/backend source is not part of this package
 
 This repository is source, not an installer. Its macOS files are projected from
 the artifact-bound packet built from native source revision
-`6b4b3da88f01c15bd19f4aa8b421554bf2cec9d0`. The complete release archive
+`c074a93d371f541a692414fef8f49102bf2e24e2`. The complete release archive
 contains the build inputs matched to the selected signed/stapled app inventory;
 it does not claim a byte-for-byte reproducible native build or verified
 operation on an owner phone.

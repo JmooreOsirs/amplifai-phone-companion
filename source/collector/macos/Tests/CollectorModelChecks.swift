@@ -212,6 +212,18 @@ struct CollectorModelChecks {
         try require(model.errorMessage.contains("iPhone reported") && model.errorMessage.contains("205"), "Device status must be actionable without raw phone text")
         try require(model.failureContext.contains("1.0 KiB") && model.failureContext.contains("partial"), "Error view must retain last observed transfer and clarify no metadata save")
         try require(!model.failureContext.contains("phone owner"), "No private device reason may be rendered")
+        let fields = model.safeSupportCode.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100702", "Support code must declare its bounded schema and exact build")
+        try require(fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil, "A fresh opaque report reference is required before browser pairing")
+        try require(fields[3...8].elementsEqual(["backup", "device_backup_failed", "1800", "1024", "0", "205"]), "Pre-pair failure report must preserve safe first code, stage, elapsed, bytes and device status")
+        try require(!model.safeSupportCode.contains("phone owner"), "Support code cannot include private phone text")
+        model.receive(try event(#"{"kind":"error","code":"workspace_cleanup","stage":"processing"}"#))
+        try require(model.safeSupportCode == fields.joined(separator: "|"), "A later cleanup error cannot replace the first terminal device failure or report reference")
+        let unknown = CollectorModel()
+        unknown.phase = .transferring
+        unknown.receive(try event(#"{"kind":"error","code":"private phone owner reason","stage":"backup"}"#))
+        try require(unknown.safeSupportCode.contains("|collection_failed|"), "Unexpected helper text must be reduced to a safe failure category")
+        try require(!unknown.safeSupportCode.contains("phone owner"), "Unexpected helper text cannot appear in the support code")
     }
 
     private static func cleanupRequiresInspection() throws {

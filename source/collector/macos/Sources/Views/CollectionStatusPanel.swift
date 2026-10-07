@@ -47,6 +47,15 @@ struct CollectionStatusPanel: View {
                 if !model.failureContext.isEmpty {
                     Text(model.failureContext).font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
                 }
+                if !model.safeSupportCode.isEmpty {
+                    Text("For a pre-pair failure, copy this safe support code and submit it at amplifai-database-engine.vercel.app/experience/contact. It contains the build, failure category, elapsed time and byte counts, not phone records or passwords.")
+                        .font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                    Button("Copy safe support code") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(model.safeSupportCode, forType: .string)
+                    }.buttonStyle(SecondaryButton())
+                    Text(model.safeSupportCode).font(.custom("Arial", size: 12)).textSelection(.enabled)
+                }
                 ForEach(Array(model.recoverySteps.enumerated()), id: \.offset) { index, step in
                     Text("\(index + 1). \(step)").font(.custom("Arial", size: 14))
                 }

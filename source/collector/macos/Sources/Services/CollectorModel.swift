@@ -28,6 +28,9 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var processedBytes: Int64 = 0
     @Published private(set) var transferIsKnown = false
     @Published private(set) var collectionStartedAt: Date?
+    @Published private(set) var transferElapsedSeconds = 0
+    @Published private(set) var diagnosticReference = ""
+    @Published private(set) var errorElapsedSeconds = 0
     @Published private(set) var handoffID = ""
     @Published private(set) var handoffAcknowledged = false
     @Published private(set) var browserReceived = false
@@ -68,6 +71,7 @@ final class CollectorModel: ObservableObject {
     private var pairingRequested = false
     private var lastErrorCode: String?
     private var lastErrorStage: String?
+    private var lastDeviceStatus: Int64?
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -146,6 +150,23 @@ final class CollectorModel: ObservableObject {
         return "Stopped during \(operation).\(transfer)"
     }
 
+    private static let reportCodes: Set<String> = [
+        "backup_password", "backup_stalled", "backup_no_file_progress", "backup_time_limit",
+        "bridge_unavailable", "collection_failed", "connection_lost", "connection_timeout",
+        "device_backup_failed", "phone_connection", "source_capacity_limit", "trust_required",
+        "unsupported_schema", "workspace_cleanup", "workspace_low_space", "workspace_size_limit",
+        "workspace_unavailable", "workspace_unsafe",
+    ]
+
+    var safeSupportCode: String {
+        guard phase == .error, !diagnosticReference.isEmpty else { return "" }
+        let stage = lastErrorStage ?? "connecting"
+        let code = lastErrorCode.flatMap { Self.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100702"
+        return "A1|\(build)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
+    }
+
     func inspectResidue() {
         guard process == nil else { return }
         needsStorageReview = true
@@ -159,6 +180,10 @@ final class CollectorModel: ObservableObject {
 
     func connect() {
         guard canConnect else { return }
+        diagnosticReference = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8))
+        transferElapsedSeconds = 0
+        errorElapsedSeconds = 0
+        lastDeviceStatus = nil
         contacts = []
         lastErrorCode = nil
         lastErrorStage = nil
@@ -490,6 +515,7 @@ final class CollectorModel: ObservableObject {
                 retainedBytes = retained
                 transferFileCount = files
                 transferBytesPerSecond = rate
+                if elapsed <= 172_800 { transferElapsedSeconds = Int(elapsed) }
                 transferIsKnown = true
                 phase = .transferring
             } else if event.stage == "processing", let bytes = event.processedBytes,
@@ -555,8 +581,11 @@ final class CollectorModel: ObservableObject {
             needsStorageReview = false
             phase = .idle
         case "error":
+            // A later cleanup/error frame must not replace the first terminal collection cause.
+            if phase == .error && lastErrorCode != nil { return }
             lastErrorCode = event.code
             lastErrorStage = ["connecting", "backup", "processing", "review"].contains(event.stage ?? "") ? event.stage : nil
+            lastDeviceStatus = event.code == "device_backup_failed" && event.deviceCode.map({ (-2_147_483_648...4_294_967_295).contains($0) }) == true ? event.deviceCode : nil
             if event.code == "selection" {
                 errorMessage = "Choose supported contacts from this phone."
             } else if event.code == "bridge_unavailable" {
@@ -617,6 +646,17 @@ final class CollectorModel: ObservableObject {
 
     private func fail(_ message: String) {
         declineLocalCollection()
+        if diagnosticReference.isEmpty { diagnosticReference = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)) }
+        let wallElapsed = collectionStartedAt.map { Int(max(0, min(172_800, Date().timeIntervalSince($0)))) } ?? 0
+        errorElapsedSeconds = max(transferElapsedSeconds, wallElapsed)
+        if lastErrorStage == nil {
+            switch phase {
+            case .transferring: lastErrorStage = "backup"
+            case .processing, .completing: lastErrorStage = "processing"
+            case .selecting, .reviewing: lastErrorStage = "review"
+            default: lastErrorStage = "connecting"
+            }
+        }
         errorMessage = message
         phase = .error
     }
