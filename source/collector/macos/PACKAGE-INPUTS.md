@@ -1,8 +1,8 @@
-# October 1 local native candidate inputs
+# October 7 local native candidate inputs
 
-Local candidate only: `2026.10.01-rc1`, build `26100101`. Existing bundle identifier
+Local candidate only: `2026.10.07-rc3`, build `26100703`. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
-publication, physical-device or authenticated browser proof is implied.
+publication, physical-device or authenticated browser proof is implied by this source file.
 This is not a final release candidate. The native unchecked, operation-bound
 pre-Connect collection approval is now source/model qualified: Agree alone does
 not collect, and Connect/helper launch require its fresh run-bound receipt.
@@ -80,6 +80,7 @@ Normal managed Auth, actual source-save transaction and packaged cross-layer
 acknowledgement remain release gates; offline fixture success is not those proofs.
 
 The Android `2026.10.01-rc1` / `26100101` launcher update is independently
-published with its matching source and the existing rc2 signing certificate.
-It does not qualify this newer Mac helper, Mac installation or physical phones;
-the previous Android rc2 and Mac September 25 release remain preserved.
+published with its matching source and existing signing certificate. The newer
+Android `2026.10.07-rc1` source candidate is not published. Neither qualifies
+this Mac helper, normal installation or physical phones; existing published
+Mac rc2 and Android October 1 releases remain rollback artifacts.

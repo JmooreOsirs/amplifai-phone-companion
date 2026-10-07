@@ -12,11 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifai_phone.backup_watchdog import (
     BACKUP_IDLE_SECONDS,
-    MAX_BACKUP_ELAPSED_SECONDS,
     RECEIVE_CHUNK_BYTES,
     BackupCleanupIncomplete,
     BackupStalled,
-    BackupTimeLimit,
     BackupWatchdog,
     observe_backup_receives,
     run_backup_session,
@@ -116,7 +114,7 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
                     )
                     self.assertEqual(progress, [7.0])
                     self.assertGreater(clock.now, 3600)
-                    self.assertLess(clock.now, MAX_BACKUP_ELAPSED_SECONDS)
+                    self.assertLess(clock.now, 4 * 60 * 60)
                     self.assertEqual({path.name for path in root.iterdir()}, {SESSION_MARKER})
                     self.assertLessEqual(max(reader.requests), RECEIVE_CHUNK_BYTES)
         finally:
@@ -160,7 +158,7 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
         watchdog.backup_completed()
 
 
-    async def test_absolute_limit_stops_even_with_continuing_bytes(self) -> None:
+    async def test_active_file_bytes_continue_past_old_total_budget(self) -> None:
         clock = Clock()
         watchdog = BackupWatchdog(clock=clock)
         capture: list[bool] = []
@@ -169,18 +167,17 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
         async def backup() -> None:
             watchdog.start()
             try:
-                for _ in range(25):
+                for _ in range(40):
                     clock.now += 600
-                    watchdog.payload_received(1)
+                    watchdog.payload_received(1024 * 1024)
                     await checkpoint()
                 watchdog.backup_completed()
                 capture.append(True)
             finally:
                 cleanup.set()
 
-        with self.assertRaises(BackupTimeLimit):
-            await run_backup_session(backup(), watchdog, lambda: self.fail("cleaned"))
-        self.assertEqual(capture, [])
+        await run_backup_session(backup(), watchdog, lambda: self.fail("cleaned"))
+        self.assertEqual(capture, [True])
         self.assertTrue(cleanup.is_set())
 
     async def test_incomplete_cancellation_flags_residue_and_blocks_late_reads(

@@ -1,20 +1,24 @@
-# AMPLIFai Phone macOS 2026.10.07-rc2 source
+# AMPLIFai Phone macOS 2026.10.07-rc3 source
 
 This branch carries the authored-source view for the Apple Silicon, macOS 14+
-owner-test long-backup diagnostic and safe-report release. The matching complete source archive, including
+owner-test long-backup, data-bound and safe-report release. The matching complete source archive, including
 143 upstream source archives and 278 notice files, is the designated source
 offer beside the app and DMG at:
-https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc2
+https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc3
 
-Use `AMPLIFai-Phone-macOS-Source-2026.10.07-rc2.tar.gz` and its checksums
+Use `AMPLIFai-Phone-macOS-Source-2026.10.07-rc3.tar.gz` and its checksums
 from that release for the full offline package; upstream archives are not
 duplicated into Git.
 The October 7 rc1 update distinguished live backup finalization from a stalled
 file frame and reported safe device/connection failure categories. This rc2
-revision adds a user-controlled, pre-pair safe support code with a random
+revision added a user-controlled, pre-pair safe support code with a random
 reference, static category/stage, elapsed time and byte counts. It does not
-send phone content or diagnostic text from the native app. Apple accepted
-notarization of the rc2 app and DMG. The partner's underlying 30-minute failure is not yet diagnosed;
+send phone content or diagnostic text from the native app. This rc3 candidate
+fails explicitly if one contact has more than 20 distinct normalized phone or
+email values, rather than silently dropping the excess, and it removes the
+total elapsed/data-rate cutoff during a still-progressing iPhone backup.
+The no-byte stall, control-only, cancellation and disk-reserve guards remain.
+Apple accepted notarization of the rc3 app and DMG. The partner's underlying 30-minute failure is not yet diagnosed;
 normal fresh installation, physical iPhone completion, browser handoff and
 account-save/retention remain separate owner-operated gates. This is not a
 customer-ready or Windows release.
@@ -26,7 +30,7 @@ notices. The separate private website/backend source is not part of this package
 
 This repository is source, not an installer. Its macOS files are projected from
 the artifact-bound packet built from native source revision
-`c074a93d371f541a692414fef8f49102bf2e24e2`. The complete release archive
+`2b283071b1e647e77fb29370e4b7d8b344275ce9`. The complete release archive
 contains the build inputs matched to the selected signed/stapled app inventory;
 it does not claim a byte-for-byte reproducible native build or verified
 operation on an owner phone.
@@ -83,6 +87,6 @@ The 143-archive candidate includes the 102 Python sdists, CPython 3.12.12 and
 its 20260203 standalone build recipe, OpenSSL 4.0.2 and 32 external Cargo
 packages identified by cryptography, plus bzip2 1.0.8, Expat 2.6.3, mpdecimal
 4.0.0, OpenSSL 3.5.5, SQLite 3.50.4 and xz 5.8.1 from the interpreter recipe.
-The signed/stapled app inventory verifies 5,622 files and seven native paths.
+The signed/stapled app inventory verifies 5,621 files and seven native paths.
 The package contains all enumerated source inputs and 278 notice files;
 it does not equate manifest coverage with legal certainty or a binary rebuild.

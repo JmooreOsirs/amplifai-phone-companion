@@ -10,7 +10,8 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,15 +74,19 @@ def normalize_phone(raw: object) -> str | None:
     return None
 
 
-def _open_readonly(path: Path) -> sqlite3.Connection:
+@contextmanager
+def _open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     if not path.is_file():
         raise UnsupportedSchema(f"Missing required database: {path.name}")
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
-    connection.execute("PRAGMA mmap_size=0")
-    connection.execute("PRAGMA cache_size=-2048")
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA mmap_size=0")
+        connection.execute("PRAGMA cache_size=-2048")
+        yield connection
+    finally:
+        connection.close()
 
 
 def _require_columns(
@@ -148,6 +153,10 @@ def read_contacts(
             if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
                 check_callback()
             fields = values.get(row["ROWID"], {"phones": set(), "emails": set()})
+            if len(fields["phones"]) > 20 or len(fields["emails"]) > 20:
+                raise SourceCapacityLimit(
+                    "Contact has more phone or email values than the handoff contract supports"
+                )
             name = " ".join(
                 part.strip()
                 for part in (row["First"], row["Last"])
@@ -158,8 +167,8 @@ def read_contacts(
                     Contact(
                         row["ROWID"],
                         name[:240],
-                        tuple(sorted(fields["phones"]))[:20],
-                        tuple(sorted(fields["emails"]))[:20],
+                        tuple(sorted(fields["phones"])),
+                        tuple(sorted(fields["emails"])),
                     )
                 )
         return SourceResult(row_count, tuple(contacts), row_count - len(contacts))

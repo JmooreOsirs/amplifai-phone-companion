@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, patch
 from amplifai_phone.backup_stream import DeviceBackupRejected, StreamedDeviceLink
 from amplifai_phone.backup_watchdog import (
     BACKUP_IDLE_SECONDS,
-    MAX_BACKUP_ELAPSED_SECONDS,
     MAX_CONTROL_ONLY_SECONDS,
     BackupNoFileProgress,
     BackupStalled,
@@ -427,7 +426,7 @@ class TransferDeadlineTest(unittest.TestCase):
         clock = [0.0]
         watchdog = BackupWatchdog(clock=lambda: clock[0])
         watchdog.start()
-        clock[0] = MAX_BACKUP_ELAPSED_SECONDS + 1
+        clock[0] = 4 * 60 * 60 + 1
         watchdog.payload_received(1024**3)
         self.assertIsNone(watchdog._expired())
         clock[0] += BACKUP_IDLE_SECONDS

@@ -219,7 +219,7 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         "blockers": [
             *([] if nested_complete else ["OpenSSL and external Rust sources/notices in cryptography SBOM require reconciliation."]),
             *([] if interpreter_complete else ["CPython static input source closure is missing."]),
-            "Revised candidate has no distribution signing/notarization or owner-operated fresh install/phone proof.",
+            "This source package alone does not establish matching distribution signing/notarization or owner-operated fresh install/phone proof.",
         ],
         "verification_limits": [
             "Native source inputs are checksum-matched to the artifact SBOM/Cargo.lock and interpreter build recipe; native binaries have not been rebuilt from source.",

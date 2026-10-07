@@ -12,6 +12,7 @@ from amplifai_phone.ios_backup import DATABASES, _parse_entries
 from amplifai_phone.metadata import (
     RETAINED_HISTORY_START,
     Contact,
+    SourceCapacityLimit,
     SourceResult,
     UnsupportedSchema,
     interactions_for_contacts,
@@ -171,6 +172,38 @@ class MetadataTest(unittest.TestCase):
         self.assertNotIn("SECRET", repr(result))
         self.assertEqual(normalize_phone("020 7946 0958"), None)
         self.assertEqual(normalize_phone("person5551234567@example.test"), None)
+
+    def test_contact_value_contract_cannot_silently_drop_the_twenty_first_value(self) -> None:
+        for property_id, values in (
+            (3, [f"+1202555{number:04d}" for number in range(21)]),
+            (4, [f"address{number}@example.test" for number in range(21)]),
+        ):
+            with self.subTest(property_id=property_id):
+                path = self.make_db(
+                    f"contact-values-{property_id}.db",
+                    [
+                        "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
+                        "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+                        "INSERT INTO ABPerson VALUES ('Many', 'Values')",
+                    ],
+                )
+                with sqlite3.connect(path) as db:
+                    db.executemany(
+                        "INSERT INTO ABMultiValue VALUES (1, ?, ?)",
+                        [(property_id, value) for value in values[:20]],
+                    )
+                complete = read_contacts(path)
+                self.assertEqual(
+                    len(complete.records[0].phones if property_id == 3 else complete.records[0].emails),
+                    20,
+                )
+                with sqlite3.connect(path) as db:
+                    db.execute(
+                        "INSERT INTO ABMultiValue VALUES (1, ?, ?)",
+                        (property_id, values[20]),
+                    )
+                with self.assertRaises(SourceCapacityLimit):
+                    read_contacts(path)
 
     def test_selection_can_exceed_the_old_fifty_contact_test_target(self) -> None:
         contacts = tuple(

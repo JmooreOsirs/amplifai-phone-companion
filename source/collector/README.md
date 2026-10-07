@@ -127,20 +127,21 @@ Capacity-candidate recovery policy: received file or protocol bytes refresh a
 finalization responses with a flat percentage. During an active file frame,
 control bytes cannot hide a 15-minute file stall. Between file frames,
 control-only liveness is bounded to one hour since the last file bytes.
-Control chatter cannot extend the separate data-aware slow-progress budget,
-which starts at four hours and extends by actual file bytes at a conservative
-16 KiB/s floor;
-it is not an absolute four-hour cutoff for a productive large transfer.
+There is no total elapsed-time cutoff for an actively receiving file transfer.
+An owner can cancel a slow transfer; the 15-minute no-byte and one-hour
+control-only guards still stop a genuinely stalled session.
 Selected input, discarded input, outbound files and parsing copies are streamed
 in 128 KiB chunks. Selected writes reserve their future parsing copy, and every
 write must preserve a further 2 GiB of real free space. There is no fixed 1 GiB
 session or 128 MiB database/manifest limit, nor an unrelated-file-count cap.
 Backup control/plist data retain a 16 MiB memory bound; metadata readers retain
 the explicit 1,000,000-row/source and 25,000-selected-contact safety frontiers.
+The 20 distinct phone/email values per contact contract also stops with an
+explicit incomplete-source error instead of silently dropping later values.
 SQLite cursors avoid a second full row list; retained metadata records still
 reside in memory, so this is not an unlimited-history or paged-review claim.
 Low space, metadata/control capacity, unsupported format, unsafe ownership,
-filesystem unavailability, device-response stall, sustained slow progress and
+filesystem unavailability, device-response stall and
 incomplete cleanup have distinct safe errors. Cancellation and
 owned-loop shutdown are bounded; incomplete cleanup retains a marked private
 session and blocks another collection until explicit inspection/recovery.
