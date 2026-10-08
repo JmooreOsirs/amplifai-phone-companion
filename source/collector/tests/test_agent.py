@@ -23,7 +23,7 @@ from amplifai_phone.metadata import (
     SourceResult,
 )
 from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
-from pymobiledevice3.exceptions import ConnectionTerminatedError
+from pymobiledevice3.exceptions import ConnectionTerminatedError, NotEnoughDiskSpaceError
 
 
 def synthetic_capture() -> IPhoneCapture:
@@ -66,6 +66,18 @@ def synthetic_capture() -> IPhoneCapture:
 
 
 class AgentProtocolTest(unittest.TestCase):
+    def test_device_host_space_refusal_is_specific_and_contains_no_private_detail(self) -> None:
+        async def failed_collector(**_kwargs: object) -> IPhoneCapture:
+            raise NotEnoughDiskSpaceError("private phone owner detail")
+
+        sink = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), sink, failed_collector), 1)
+        self.assertEqual(
+            json.loads(sink.getvalue().splitlines()[-1]),
+            {"kind": "error", "code": "backup_host_space", "stage": "connecting"},
+        )
+        self.assertNotIn("private", sink.getvalue())
+
     def test_metadata_capacity_error_is_distinct_and_never_emits_private_details(self) -> None:
         async def failed(**_kwargs):
             raise SourceCapacityLimit("private /Users/tester/source count detail")

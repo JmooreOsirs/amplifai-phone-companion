@@ -83,6 +83,32 @@ class WorkspaceTest(unittest.TestCase):
                 workspace.check_bound(9)
             self.assertEqual(error.exception.code, "workspace_low_space")
 
+    def test_stream_capacity_does_not_misstate_selected_write_headroom(self) -> None:
+        workspace = SessionWorkspace(self.root)
+        with workspace:
+            with patch(
+                "amplifai_phone.workspace.shutil.disk_usage",
+                return_value=SimpleNamespace(free=MIN_FREE_BYTES + 100),
+            ):
+                self.assertEqual(workspace.available_transfer_bytes(), 100)
+                self.assertGreaterEqual(workspace.advertised_stream_capacity_bytes(), 8 * 1024**4)
+                workspace._pending_copy_bytes = 96
+                self.assertEqual(workspace.available_transfer_bytes(), 4)
+                with self.assertRaises(WorkspaceError) as error:
+                    workspace.check_bound(5)
+                self.assertEqual(error.exception.code, "workspace_low_space")
+
+    def test_stream_capacity_never_bypasses_minimum_real_free_space(self) -> None:
+        workspace = SessionWorkspace(self.root)
+        with workspace:
+            with patch(
+                "amplifai_phone.workspace.shutil.disk_usage",
+                return_value=SimpleNamespace(free=MIN_FREE_BYTES - 1),
+            ):
+                with self.assertRaises(WorkspaceError) as error:
+                    workspace.advertised_stream_capacity_bytes()
+                self.assertEqual(error.exception.code, "workspace_low_space")
+
     def test_entry_low_space_has_distinct_code_and_creates_no_session(self) -> None:
         workspace = SessionWorkspace(self.root)
         with (

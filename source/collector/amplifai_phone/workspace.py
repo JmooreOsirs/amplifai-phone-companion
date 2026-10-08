@@ -23,6 +23,11 @@ ROOT_MARKER = ".amplifai-phone-sessions-v1"
 SESSION_MARKER = ".amplifai-owned-session.json"
 SESSION_NAME = re.compile(r"^session-[0-9a-f]{32}$")
 MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+# DeviceLink asks for the capacity of the backup receiver, not the size of the
+# selected files we retain. The filtered receiver drains unrelated files; it
+# cannot be represented by the physical selected-file budget. Keep this below
+# signed 64-bit plist limits and enforce physical space separately per write.
+STREAM_RECEIVER_CAPACITY_BYTES = 8 * 1024**4
 
 
 class WorkspaceError(RuntimeError):
@@ -453,17 +458,25 @@ class SessionWorkspace:
         self._pending_copy_bytes = max(0, self._pending_copy_bytes - byte_count)
 
     def available_transfer_bytes(self) -> int:
-        """Conservative selected-payload budget; excludes reserve and future copies."""
+        """Actual selected-file budget after reserve and pending parsing copies."""
         self.check_bound()
         return max(
             0,
-            (
-                shutil.disk_usage(self.directory).free
-                - MIN_FREE_BYTES
-                - self._pending_copy_bytes
-            )
-            // 2,
+            shutil.disk_usage(self.directory).free
+            - MIN_FREE_BYTES
+            - self._pending_copy_bytes,
         )
+
+    def advertised_stream_capacity_bytes(self) -> int:
+        """Logical DeviceLink stream capacity, never a physical-write allowance.
+
+        A full iPhone backup still streams nonselected files through this app,
+        but those bytes are discarded instead of occupying the host volume.
+        The device's full-backup size preflight must not compare those bytes to
+        the much smaller selected-file budget. Every retained write and copy
+        still passes check_bound and preserves the real 2 GiB disk reserve.
+        """
+        return max(STREAM_RECEIVER_CAPACITY_BYTES, self.available_transfer_bytes())
 
     def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
         if self._preserve_for_recovery:

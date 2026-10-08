@@ -116,6 +116,10 @@ class StreamedDeviceLink(DeviceLink):
 
     def publish_progress(self, *, final: bool = False) -> None:
         now = self._clock()
+        # A DeviceLink handshake/preflight failure must not look like a backup
+        # file transfer merely because the context manager is closing.
+        if self._received == 0 and self._files == 0:
+            return
         if self._transfer_callback is None or (
             not final and now - self._last_emitted < 0.5
         ):
@@ -227,9 +231,10 @@ class StreamedDeviceLink(DeviceLink):
         await self.status_response(0)
 
     async def get_free_disk_space(self, _message) -> None:
-        # Real writable free space, not optimistic APFS purgeable capacity.
+        # DeviceLink preflights the complete logical stream, while only selected
+        # files consume disk. Real writes remain guarded by workspace.check_bound.
         await self.status_response(
-            0, status_dict=self.workspace.available_transfer_bytes()
+            0, status_dict=self.workspace.advertised_stream_capacity_bytes()
         )
 
     async def create_directory(self, message) -> None:

@@ -48,8 +48,17 @@ struct CollectionStatusPanel: View {
                     Text(model.failureContext).font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
                 }
                 if !model.safeSupportCode.isEmpty {
-                    Text("For a pre-pair failure, copy this safe support code and submit it at amplifai-database-engine.vercel.app/experience/contact. It contains the build, failure category, elapsed time and byte counts, not phone records or passwords.")
+                    Text("The app sends this bounded failure code automatically. It contains the build, random reference, failure category, elapsed time and byte counts, not phone records or passwords.")
                         .font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                    if model.diagnosticDelivery == .sending {
+                        Text("Sending safe diagnostic…").font(.custom("Arial", size: 13)).foregroundStyle(Brand.muted)
+                    } else if model.diagnosticDelivery == .sent {
+                        Text("Safe diagnostic received. Keep the reference below for support.").font(.custom("Arial", size: 13)).foregroundStyle(Brand.body)
+                    } else if model.diagnosticDelivery == .failed {
+                        Text("Automatic report could not be delivered. Copy the code or retry; collection remains stopped safely.").font(.custom("Arial", size: 13)).foregroundStyle(Brand.body)
+                        Button("Retry safe report") { Task { await model.reportDiagnosticIfNeeded(forceRetry: true) } }
+                            .buttonStyle(SecondaryButton())
+                    }
                     Button("Copy safe support code") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(model.safeSupportCode, forType: .string)
@@ -66,6 +75,7 @@ struct CollectionStatusPanel: View {
             }
         }
         .panel()
+        .task(id: model.safeSupportCode) { await model.reportDiagnosticIfNeeded() }
         .confirmationDialog("Discard the local unsaved review?", isPresented: $confirmingDiscard) {
             Button("Discard review and disconnect", role: .destructive) { model.disconnect() }
             Button("Keep review", role: .cancel) {}

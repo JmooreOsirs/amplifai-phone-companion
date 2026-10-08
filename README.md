@@ -6,7 +6,7 @@ acceptance. These are not verified customer-ready downloads. Do not bypass
 Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
 companions are not available.
 
-- [Mac Apple Silicon/macOS 14+ ACK2 prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.08-rc4-ack2): Apple-notarized iPhone companion with the two-phase browser saved-acknowledgment handoff. The previous rc4 release remains available as rollback. A real owner iPhone and account-save run is still required.
+- [Mac Apple Silicon/macOS 14+ rc5 prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.08-rc5): Apple-notarized iPhone companion with a distinct early host-space error, guarded selected-file writes and bounded automatic safe-code failure reporting. ACK2 remains available as rollback. A real owner iPhone and account-save run is still required.
 - [Android 8+ rc4 prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.08-rc4): release-signed owner/partner test APK for same-phone browser handoff. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review.
 - Start through your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account), or use the separate [browser-only pilot](https://amplifai-database-engine.vercel.app/phone). The temporary app-generated pairing code is not a phone number or email verification code.
 
@@ -37,7 +37,7 @@ under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
 `LICENSE` for the GPLv3 text, and `THIRD-PARTY-NOTICES.txt` for retained upstream
 notices. The separate private website/backend source is not part of this package.
 
-The Mac ACK2 release is built from the updated Mac source in this tag. Its
+The Mac rc5 release is built from the updated Mac source in this tag. Its
 complete corresponding-source ZIP beside the binary is authoritative for
 upstream archives, notices and the exact selected inventory. This repository
 also retains the separate Android project; the Mac ZIP does not include it.

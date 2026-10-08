@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TextIO
 
-from pymobiledevice3.exceptions import ConnectionTerminatedError
+from pymobiledevice3.exceptions import ConnectionTerminatedError, NotEnoughDiskSpaceError
 
 from .__main__ import review_capture
 from .backup_stream import DeviceBackupRejected
@@ -69,6 +69,8 @@ def _error_code(exc: BaseException) -> str:
         return exc.code
     if isinstance(exc, DeviceBackupRejected):
         return "device_backup_failed"
+    if isinstance(exc, NotEnoughDiskSpaceError):
+        return "backup_host_space"
     if isinstance(exc, (ConnectionTerminatedError, ConnectionError)):
         return "connection_lost"
     if isinstance(exc, BackupCleanupIncomplete):
@@ -83,6 +85,7 @@ def _error_code(exc: BaseException) -> str:
                 "connection_timeout",
                 "connection_lost",
                 "device_backup_failed",
+                "backup_host_space",
             }
             else "collection_failed"
         )
@@ -274,7 +277,7 @@ def run_connect(
         return 130
     except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - do not expose device errors
         event = _error_event(exc)
-        if event["code"] in {"connection_lost", "device_backup_failed", "collection_failed"}:
+        if event["code"] in {"connection_lost", "device_backup_failed", "backup_host_space", "collection_failed"}:
             event["stage"] = capture_stage
         device_failure = (
             exc if isinstance(exc, DeviceBackupRejected)

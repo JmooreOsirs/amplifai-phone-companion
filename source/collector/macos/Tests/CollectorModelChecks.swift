@@ -41,6 +41,7 @@ struct CollectorModelChecks {
         try storageReasons()
         try timeoutReasons()
         try deviceFailureIsActionableWithoutPrivateDetails()
+        try automaticDiagnosticUsesOnlySafeCode()
         try cleanupRequiresInspection()
         try emptyResidueClearsGate()
         try inspectedResidueBlocksConnection()
@@ -66,7 +67,7 @@ struct CollectorModelChecks {
         guard let receipt = model.localCollectionApproval else { throw RecoveryCheckError.failed("Explicit agreement needs a local receipt") }
         try require(receipt.runID == run && receipt.disclosureVersion == CollectorModel.collectionDisclosureVersion, "Approval must bind the actual current run and disclosure")
         try require(receipt.approvedAt >= before && receipt.approvedAt <= Date(), "Approval timestamp must be operator-action time")
-        try require(receipt.scopes == ["contacts", "call-context", "message-context", "temporary-full-backup"], "Local approval scopes must describe the actual local collection")
+        try require(receipt.scopes == ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"], "Local approval scopes must describe collection and its bounded automatic failure report")
         try require(model.canConnect && !model.helperRunning && model.collectionStartedAt == nil, "Agree unlocks Connect; it must not collect automatically")
         try require(model.pairCode.isEmpty && !model.handoffAcknowledged, "Local collection approval cannot approve browser transfer or account save")
     }
@@ -213,7 +214,7 @@ struct CollectorModelChecks {
         try require(model.failureContext.contains("1.0 KiB") && model.failureContext.contains("partial"), "Error view must retain last observed transfer and clarify no metadata save")
         try require(!model.failureContext.contains("phone owner"), "No private device reason may be rendered")
         let fields = model.safeSupportCode.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100804", "Support code must declare its bounded schema and exact build")
+        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100805", "Support code must declare its bounded schema and exact build")
         try require(fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil, "A fresh opaque report reference is required before browser pairing")
         try require(fields[3...8].elementsEqual(["backup", "device_backup_failed", "1800", "1024", "0", "205"]), "Pre-pair failure report must preserve safe first code, stage, elapsed, bytes and device status")
         try require(!model.safeSupportCode.contains("phone owner"), "Support code cannot include private phone text")
@@ -224,6 +225,21 @@ struct CollectorModelChecks {
         unknown.receive(try event(#"{"kind":"error","code":"private phone owner reason","stage":"backup"}"#))
         try require(unknown.safeSupportCode.contains("|collection_failed|"), "Unexpected helper text must be reduced to a safe failure category")
         try require(!unknown.safeSupportCode.contains("phone owner"), "Unexpected helper text cannot appear in the support code")
+    }
+
+    private static func automaticDiagnosticUsesOnlySafeCode() throws {
+        let model = CollectorModel()
+        model.receive(try event(#"{"kind":"error","code":"backup_host_space","stage":"connecting"}"#))
+        let code = model.safeSupportCode
+        guard let request = SupportDiagnosticReporter.request(for: code),
+              let body = request.httpBody,
+              let parsed = try JSONSerialization.jsonObject(with: body) as? [String: String] else {
+            throw RecoveryCheckError.failed("A bounded native diagnostic request is required")
+        }
+        try require(request.url?.absoluteString == "https://amplifai-database-engine.vercel.app/api/v1/companion-diagnostics", "Diagnostic endpoint must be fixed HTTPS")
+        try require(parsed == ["code": code] && code.contains("|backup_host_space|"), "Only the safe support code may leave the app")
+        try require(SupportDiagnosticReporter.request(for: code + "|phone owner@example.com") == nil, "Extra private fields must be rejected locally")
+        try require(SupportDiagnosticReporter.request(for: code.replacingOccurrences(of: "backup_host_space", with: "owner_private_error")) == nil, "Raw helper reason must never be sent")
     }
 
     private static func cleanupRequiresInspection() throws {

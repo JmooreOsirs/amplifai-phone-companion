@@ -99,7 +99,7 @@ struct ContentView: View {
             Text("Phone companion")
                 .font(.custom("Arial", size: 28).weight(.bold))
                 .foregroundStyle(Brand.heading)
-            Text("Local iPhone collector candidate")
+            Text("Private iPhone collection on this Mac")
                 .font(.custom("Arial", size: 14))
                 .foregroundStyle(Brand.muted)
         }
@@ -129,10 +129,12 @@ struct ContentView: View {
                 .font(.custom("Arial", size: 18).weight(.bold))
                 .foregroundStyle(Brand.heading)
                 .accessibilityAddTraits(.isHeader)
+            Text("Requirements: an Apple M-series Mac running macOS 14 or later, a data-capable USB cable, an iPhone unlocked for initial connection and Trust, and real free Mac storage for selected databases, parsing copies and a further 2 GiB reserve. Internet is needed later for failure reporting, browser handoff and account save; the USB backup itself runs locally.")
             Text("This Mac reads available contacts and retained call/message context. After collection, choose the people whose metadata you review. Context includes phone numbers, dates, participants, call duration, and message transport/direction—not message text in the review or browser handoff.")
             Text("iPhone capture temporarily receives full-backup bytes, including unrelated data and message content. Unselected files are discarded while streaming; selected source databases remain private until parsing finishes. Storage must fit those databases, parsing copies and a further 2 GiB reserve. Cleanup is attempted; an interruption can leave marked temporary phone data that you must inspect here.")
             Text("Agreeing permits this local collection only. It does not approve Apple's Trust prompt, provide an encrypted-backup password, permit browser sharing, or save anything to an account. Browser transfer has a separate confirmation; each optional source save needs its own approval in your account.")
-            Toggle("I understand and agree to this one local collection", isOn: Binding(
+            Text("If collection fails, this app automatically sends only a safe diagnostic code to AMPLIFai/PostHog: build, random reference, failure category and stage, elapsed time, byte counts and optional numeric device status. It never sends phone records, names, message content, passwords, backup files, paths or raw errors. Delivery status and a retry appear after a failure; a failed report never blocks a new collection.")
+            Toggle("I agree to this collection and its safe failure diagnostic", isOn: Binding(
                 get: { localCollectionChecked },
                 set: { checked in
                     localCollectionChecked = checked
@@ -332,7 +334,7 @@ struct ContentView: View {
     }
 
     private var privacyNote: some View {
-        Text("Owner-test companion · Selected relationship context, not message content · Unselected full-backup bytes are streamed and discarded · Private sources and parsing copies need disk space plus a 2 GiB reserve · Physical coverage varies; Windows is unsupported")
+        Text("Mac companion · Selected relationship context, not message content · Unselected full-backup bytes are streamed and discarded · Private sources and parsing copies need disk space plus a 2 GiB reserve · Physical coverage varies; Windows is unsupported")
             .font(.custom("Arial", size: 12))
             .foregroundStyle(Brand.muted)
             .frame(maxWidth: .infinity, alignment: .leading)

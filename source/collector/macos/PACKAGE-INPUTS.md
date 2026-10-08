@@ -1,6 +1,6 @@
 # October 8 local native candidate inputs
 
-Local candidate only: `2026.10.08-rc4`, build `26100804`. Existing bundle identifier
+Local incident-repair candidate only: `2026.10.08-rc5`, build `26100805`. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
@@ -23,6 +23,30 @@ cannot replace this local collection approval.
 - Keep the existing logo PNG resource for the in-window brand mark.
 - Run `sh collector/macos/Tests/check_flow.sh` and the existing
   `sh scripts/test_macos_recovery.sh` against actual model/protocol source.
+
+## Early-backup incident repair
+
+The previous public ACK2 build (`26100804`) remains the rollback candidate until
+this source is separately packaged and released. Two owner attempts in ACK2 ended
+with the generic `collection_failed` code at the backup stage and zero received
+bytes; this does **not** prove a backup file began transferring. The current helper
+maps an upstream host-space rejection to `backup_host_space`, and suppresses a
+zero-byte final progress event after a DeviceLink handshake/preflight failure.
+The filtered DeviceLink receiver now advertises logical stream capacity to the
+phone because it discards unselected backup bytes. Every selected-file write and
+parsing copy still checks real host free space and preserves a 2 GiB reserve.
+Synthetic tests cover a 275 GiB announced backup with small selected-file
+headroom; they are not physical-device completion evidence.
+
+The Mac app's fresh collection approval now includes automatic delivery of only
+its bounded support code after an error. The fixed HTTPS endpoint accepts the
+exact current build/code shape, forwards only allowlisted stage/category/counts
+to existing telemetry, and gives an explicit delivered/failed state with retry.
+It sends no backup bytes, source rows, phone identifier, account credentials or
+password. The website endpoint must be live before distributing this build.
+Each actual collection retry requires its own fresh local approval. Initial
+unlock/Trust is required to establish a connection; a later screen lock alone
+does not prove the connection failed.
 
 ## Browser completion contract
 

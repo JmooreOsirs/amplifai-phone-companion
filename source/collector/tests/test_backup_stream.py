@@ -21,6 +21,7 @@ from amplifai_phone.backup_watchdog import (
 )
 from amplifai_phone.metadata import SourceCapacityLimit, UnsupportedSchema
 from amplifai_phone.workspace import MIN_FREE_BYTES, SessionWorkspace, WorkspaceError
+from pymobiledevice3.exceptions import NotEnoughDiskSpaceError
 
 
 def prefixed(value: str) -> bytes:
@@ -56,6 +57,73 @@ class Wire:
 
 
 class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_iphone_space_query_uses_stream_capacity_not_selected_file_budget(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-stream-space-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(b"")
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                with patch(
+                    "amplifai_phone.workspace.shutil.disk_usage",
+                    return_value=SimpleNamespace(free=MIN_FREE_BYTES + 100),
+                ):
+                    await link.get_free_disk_space([])
+                self.assertGreaterEqual(wire.send_plist.await_args.args[0][3], 8 * 1024**4)
+
+    async def test_large_announced_backup_streams_without_claiming_that_disk_can_store_it(self) -> None:
+        announced_full_backup = 275 * 1024**3
+        selected_headroom = 128 * 1024**2
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-preflight-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(
+                    file_transfer("phone/selected", b"selected")
+                    + file_transfer("phone/discarded", b"unrelated")
+                    + prefixed("")
+                )
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace,
+                    watchdog=BackupWatchdog(),
+                    preserve_file=lambda name, _: name.endswith("selected"),
+                )
+                with patch(
+                    "amplifai_phone.workspace.shutil.disk_usage",
+                    return_value=SimpleNamespace(free=MIN_FREE_BYTES + selected_headroom),
+                ):
+                    self.assertEqual(workspace.available_transfer_bytes(), selected_headroom)
+                    await link.get_free_disk_space(["DLMessageGetFreeDiskSpace", announced_full_backup])
+                    self.assertGreater(wire.send_plist.await_args.args[0][3], announced_full_backup)
+                    await link.upload_files([])
+                    self.assertEqual((directory / "phone/selected").read_bytes(), b"selected")
+                    self.assertEqual((directory / "phone/discarded").stat().st_size, 0)
+                    with self.assertRaises(WorkspaceError) as error:
+                        workspace.check_bound(selected_headroom + 1)
+                    self.assertEqual(error.exception.code, "workspace_low_space")
+
+    async def test_purge_request_remains_a_specific_host_space_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-purge-preflight-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                link = StreamedDeviceLink(
+                    Wire(b""), directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                with self.assertRaises(NotEnoughDiskSpaceError):
+                    await link.purge_disk_space(["DLMessagePurgeDiskSpace"])
+
+    async def test_no_zero_byte_backup_progress_when_protocol_fails_before_file_frame(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-stream-preflight-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                events = []
+                link = StreamedDeviceLink(
+                    Wire(b""), directory, workspace=workspace,
+                    watchdog=BackupWatchdog(), transfer_callback=events.append,
+                )
+                link.publish_progress(final=True)
+                self.assertEqual(events, [])
+
     async def test_filtered_file_readback_returns_empty_success_until_removed(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-readback-test-") as temporary:
             workspace = SessionWorkspace(Path(temporary) / "sessions")

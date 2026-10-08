@@ -5,8 +5,8 @@ import Darwin
 @MainActor
 final class CollectorModel: ObservableObject {
     private let maxSelectedContacts = 25_000
-    static let collectionDisclosureVersion = "native-local-collection-v1"
-    private static let localCollectionScopes = ["contacts", "call-context", "message-context", "temporary-full-backup"]
+    static let collectionDisclosureVersion = "native-local-collection-v2"
+    private static let localCollectionScopes = ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"]
     struct LocalCollectionApproval: Equatable {
         let runID: UUID
         let disclosureVersion: String
@@ -17,6 +17,7 @@ final class CollectorModel: ObservableObject {
         case idle, connecting, transferring, passwordRequired, processing
         case selecting, reviewing, completing, completed, cancelling, error
     }
+    enum DiagnosticDelivery: Equatable { case idle, sending, sent, failed }
 
     @Published var phase: Phase = .idle
     @Published var progress = 0.0
@@ -57,6 +58,7 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var needsStorageReview = false
     @Published private(set) var collectionApprovalRunID = UUID()
     @Published private(set) var localCollectionApproval: LocalCollectionApproval?
+    @Published private(set) var diagnosticDelivery: DiagnosticDelivery = .idle
 
     private var process: Process?
     private var inputHandle: FileHandle?
@@ -72,6 +74,7 @@ final class CollectorModel: ObservableObject {
     private var lastErrorCode: String?
     private var lastErrorStage: String?
     private var lastDeviceStatus: Int64?
+    private var attemptedDiagnosticCode: String?
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -150,21 +153,24 @@ final class CollectorModel: ObservableObject {
         return "Stopped during \(operation).\(transfer)"
     }
 
-    private static let reportCodes: Set<String> = [
-        "backup_password", "backup_stalled", "backup_no_file_progress", "backup_time_limit",
-        "bridge_unavailable", "collection_failed", "connection_lost", "connection_timeout",
-        "device_backup_failed", "phone_connection", "source_capacity_limit", "trust_required",
-        "unsupported_schema", "workspace_cleanup", "workspace_low_space", "workspace_size_limit",
-        "workspace_unavailable", "workspace_unsafe",
-    ]
-
     var safeSupportCode: String {
         guard phase == .error, !diagnosticReference.isEmpty else { return "" }
         let stage = lastErrorStage ?? "connecting"
-        let code = lastErrorCode.flatMap { Self.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
+        let code = lastErrorCode.flatMap { SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100804"
+            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100805"
         return "A1|\(build)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
+    }
+
+    func reportDiagnosticIfNeeded(forceRetry: Bool = false) async {
+        let code = safeSupportCode
+        guard phase == .error, !code.isEmpty, diagnosticDelivery != .sending,
+              forceRetry || attemptedDiagnosticCode != code else { return }
+        attemptedDiagnosticCode = code
+        diagnosticDelivery = .sending
+        let delivered = await SupportDiagnosticReporter.send(code)
+        guard phase == .error, safeSupportCode == code else { return }
+        diagnosticDelivery = delivered ? .sent : .failed
     }
 
     func inspectResidue() {
@@ -180,6 +186,8 @@ final class CollectorModel: ObservableObject {
 
     func connect() {
         guard canConnect else { return }
+        attemptedDiagnosticCode = nil
+        diagnosticDelivery = .idle
         diagnosticReference = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8))
         transferElapsedSeconds = 0
         errorElapsedSeconds = 0
@@ -680,11 +688,11 @@ final class CollectorModel: ObservableObject {
     var statusDetail: String {
         switch phase {
         case .idle, .connecting:
-            return "Connect one iPhone by USB, unlock it, and approve Apple's Trust prompt on the phone if shown. Existing trusted Wi-Fi pairing can be used only when no cable is present. No new wireless pairing or security bypass is performed."
+            return "Connect one iPhone by USB and unlock it to establish the connection. Respond to Apple's Trust/passcode prompt on the phone if shown. Existing trusted Wi-Fi pairing is used only when no cable is present. A later screen lock alone does not prove a failure; no security bypass is performed."
         case .error:
             return "This collection did not produce a verified completion. Review the failure and last observed transfer below before starting a new approved attempt."
         case .transferring:
-            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the phone connected. Data-aware guards allow larger active transfers; 15 minutes without any device response or sustained very slow progress can stop the session."
+            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the cable connected and respond to any phone prompts. Data-aware guards allow larger active transfers; 15 minutes without any device response or sustained very slow progress can stop the session."
         case .passwordRequired:
             return "Use the existing password for this iPhone's encrypted computer backup. It is not your phone passcode. This app does not enable, disable or reset encryption."
         case .processing:
@@ -709,6 +717,7 @@ final class CollectorModel: ObservableObject {
         switch lastErrorCode {
         case "backup_password": return ["Check the existing encrypted computer-backup password with its owner.", "Reconnect and enter it only in this companion. Do not reset encryption to bypass this step."]
         case "workspace_low_space": return ["Free space for retained source databases, their parsing copies and a further 2 GiB reserve on the temporary-storage volume.", "Keep other backups intact, then reconnect."]
+        case "backup_host_space": return ["The iPhone refused the host-space answer before a verified backup completion. Check available space on the Mac's temporary-storage volume; do not delete other backups just to satisfy this app.", "If a normal Finder backup works on this Mac but collection repeats this code, share the safe reference with support before another long retry."]
         case "workspace_size_limit": return ["This helper reported an older backup-size limit. Update the signed companion before retrying."]
         case "source_capacity_limit": return ["A control-frame or metadata-count safety bound was reached, not the former backup-size ceiling.", "Contact support with the companion version; do not reset phone encryption or remove other backups."]
         case "workspace_unsafe": return ["Stop and contact support. Do not change permissions or delete an unverified folder."]
@@ -729,6 +738,7 @@ final class CollectorModel: ObservableObject {
         case "backup_password": return "The existing encrypted-backup password was not accepted. Check it and retry."
         case "unsupported_schema": return "This iPhone backup format is not supported safely yet. No metadata was saved."
         case "workspace_low_space": return "There is not enough free space for the next write, local parsing copies and the 2 GiB reserve. Free space on the temporary-storage volume, then retry."
+        case "backup_host_space": return "The iPhone refused the backup receiver's space preflight. No metadata was saved. Check available Mac space and share the safe reference if it repeats."
         case "workspace_size_limit": return "This helper reported an older backup-size limit. Update the signed companion before retrying."
         case "source_capacity_limit": return "The backup control data or metadata count exceeded a supported safety bound. Collection stopped without uploading metadata. Contact support with the companion version."
         case "workspace_unsafe": return "The app's temporary-storage folder could not be verified as private and app-owned. Nothing there was changed. Contact support; do not change folder permissions or delete other backups."
