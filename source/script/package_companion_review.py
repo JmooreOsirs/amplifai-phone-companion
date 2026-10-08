@@ -22,7 +22,7 @@ PACKAGE_SCRIPTS = (
     "build_and_run.sh", "build_portable_candidate.sh", "collect_portable_sources.py",
     "record_native_sources.py", "inventory_portable_helper.py", "extract_companion_notices.py",
     "render_companion_coverage.py", "scan_companion_bundle.py", "companion_release_preflight.sh",
-    "package_companion_review.py", "test_companion_review_package.py",
+    "package_companion_review.py", "test_companion_review_package.py", "package_macos_dmg.sh",
     "collect_companion_native_closure.py", "verify_frozen_metadata.py",
 )
 LEGAL_FILES = (
