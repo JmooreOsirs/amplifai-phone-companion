@@ -28,11 +28,16 @@ final class PagedTransfer implements LocalBridge.PagedSource {
     record BuildProgress(String category, long rows, int pages) {}
 
     PagedTransfer(Context context, SanitizedStore source, Set<Long> selectedIds) {
-        this(context, source, selectedIds, ignored -> {});
+        this(context, source, selectedIds, Instant.now(), ignored -> {});
     }
 
     PagedTransfer(Context context, SanitizedStore source, Set<Long> selectedIds,
                   Consumer<BuildProgress> progress) {
+        this(context, source, selectedIds, Instant.now(), progress);
+    }
+
+    PagedTransfer(Context context, SanitizedStore source, Set<Long> selectedIds,
+                  Instant snapshotCollectedAt, Consumer<BuildProgress> progress) {
         if (selectedIds.isEmpty() || !source.coverage("contacts").available) throw new IllegalArgumentException("unreviewed_selection");
         file = new File(context.getNoBackupFilesDir(), "phone-transfer.sqlite");
         SanitizedStore.deleteFiles(file);
@@ -57,7 +62,7 @@ final class PagedTransfer implements LocalBridge.PagedSource {
                     pageCounts[index] = summaries[index].pages;
                 }
                 if (summaries[0].included == 0) throw new IllegalArgumentException("empty_selected_contacts");
-                built = manifest(summaries, samples, source);
+                built = manifest(summaries, samples, source, snapshotCollectedAt);
                 if (built.length() > 8192) throw new IllegalArgumentException("manifest_outside_protocol");
                 db.setTransactionSuccessful();
             } finally { db.endTransaction(); }
@@ -172,9 +177,10 @@ final class PagedTransfer implements LocalBridge.PagedSource {
         return result.toString();
     }
 
-    private static String manifest(Source[] sources, List<String> samples, SanitizedStore store) {
+    private static String manifest(Source[] sources, List<String> samples, SanitizedStore store,
+                                   Instant snapshotCollectedAt) {
         StringBuilder result = new StringBuilder("{\"schema\":2,\"platform\":\"android\",\"since\":\"1970-01-01T00:00:00Z\",\"collectedAt\":");
-        NativePayload.quote(result, Instant.now().toString());
+        NativePayload.quote(result, snapshotCollectedAt.toString());
         result.append(",\"missingSources\":[");
         String[] categories = {"contacts", "calls", "messages"};
         boolean first = true;

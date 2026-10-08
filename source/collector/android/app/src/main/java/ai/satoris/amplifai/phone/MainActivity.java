@@ -58,6 +58,7 @@ public final class MainActivity extends Activity {
     private Button nextPage;
     private boolean preparingTransfer;
     private int reviewGeneration;
+    private Instant snapshotCollectedAt = Instant.now();
     private volatile int choicesGeneration;
     private TextView status;
     private TextView coverage;
@@ -287,7 +288,7 @@ public final class MainActivity extends Activity {
         }
         if (cancellation != null || preparingTransfer || store == null) { status.setText("Cancel or finish the current operation first."); return; }
         clearSupportCode();
-        invalidateReview();
+        noteReviewDataChanged();
         if (!clearSource(source)) return;
         approvedSource = source;
         if (checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
@@ -430,7 +431,7 @@ public final class MainActivity extends Activity {
     }
 
     private void finishRead(int source, SanitizedStore.Coverage result) {
-        invalidateReview();
+        noteReviewDataChanged();
         cancellation = null;
         cancel.setEnabled(false);
         status.setText(sourceName(source) + ": " + result.seen + " provider rows inspected; " +
@@ -509,7 +510,7 @@ public final class MainActivity extends Activity {
             choice.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
             choice.setChecked(selectedIds.contains(contact.sourceId));
             choice.setOnCheckedChangeListener((button, checked) -> {
-                invalidateReview();
+                noteReviewDataChanged();
                 if (checked) selectedIds.add(contact.sourceId); else selectedIds.remove(contact.sourceId);
             });
             choices.addView(choice);
@@ -555,6 +556,11 @@ public final class MainActivity extends Activity {
         reviewed = false;
         if (handoffButton != null) handoffButton.setEnabled(false);
         if (handoff != null && handoff.snapshot().active()) handoff.cancel();
+    }
+
+    private void noteReviewDataChanged() {
+        snapshotCollectedAt = Instant.now();
+        invalidateReview();
     }
 
     private boolean clearSource(int source) {
@@ -622,12 +628,13 @@ public final class MainActivity extends Activity {
         preparingTransfer = true;
         handoffButton.setEnabled(false);
         Set<Long> ids = new HashSet<>(selectedIds);
+        Instant frozenCollectedAt = snapshotCollectedAt;
         int generation = reviewGeneration;
         status.setText("Preparing immutable selected-source pages locally…");
         executor.execute(() -> {
             PagedTransfer transfer = null;
             try {
-                transfer = new PagedTransfer(this, store, ids, progress -> runOnUiThread(() -> {
+                transfer = new PagedTransfer(this, store, ids, frozenCollectedAt, progress -> runOnUiThread(() -> {
                     if (!isDestroyed() && preparingTransfer && generation == reviewGeneration)
                         status.setText("Preparing " + progress.category() + " locally: " +
                                 progress.rows() + " selected records in " + progress.pages() + " pages…");
@@ -706,7 +713,7 @@ public final class MainActivity extends Activity {
             boolean available = source == CONTACTS_REQUEST ? contactsAvailable
                     : source == CALLS_REQUEST ? callsAvailable : messagesAvailable;
             if (available && checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
-                invalidateReview();
+                noteReviewDataChanged();
                 if (!clearSource(source)) return;
                 revoked = true;
             }

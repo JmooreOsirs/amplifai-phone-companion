@@ -8,6 +8,7 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -89,7 +90,22 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
             source.interaction("calls", 10, "+15551234567", 1_750_000_000_000L, "incoming", 31L);
             source.commit("calls", 1, 0);
             source.review(Set.of(1L));
-            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L));
+            Instant frozen = Instant.parse("2026-10-08T17:00:00Z");
+            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L), frozen, ignored -> {});
+            String firstManifest = transfer.manifestJson();
+            String firstDigest = transfer.manifestSha256();
+            transfer.close();
+            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L), frozen, ignored -> {});
+            require(transfer.manifestJson().equals(firstManifest) && transfer.manifestSha256().equals(firstDigest),
+                    "unchanged reviewed snapshot changed retry identity after re-pair");
+            require(transfer.pageJson("contacts", 0) != null, "re-paired contact page missing");
+            transfer.close();
+            try (PagedTransfer changed = new PagedTransfer(getTargetContext(), source, Set.of(1L),
+                    frozen.plusSeconds(1), ignored -> {})) {
+                require(!changed.manifestSha256().equals(firstDigest),
+                        "changed reviewed snapshot reused the prior retry identity");
+            }
+            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L), frozen, ignored -> {});
             require(transfer.manifestJson().contains("\"platform\":\"android\""), "Android manifest missing");
             require(transfer.manifestJson().contains("\"rowsSeen\":1,\"rowsIncluded\":1,\"providerRowsSeen\":2"),
                     "phone rows were misreported as excluded contact records");
