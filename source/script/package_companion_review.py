@@ -25,6 +25,10 @@ PACKAGE_SCRIPTS = (
     "package_companion_review.py", "test_companion_review_package.py",
     "collect_companion_native_closure.py", "verify_frozen_metadata.py",
 )
+LEGAL_FILES = (
+    "LICENSE", "COPYRIGHT", "SOURCE-README.md", "THIRD-PARTY-NOTICES.txt",
+    "source-package-file-manifest.json",
+)
 
 
 def digest(path: Path) -> str:
@@ -73,6 +77,25 @@ def verify_app(app: Path, inventory: dict) -> int:
     return len(expected)
 
 
+def verify_legal_offer(app: Path, repo: Path) -> None:
+    legal = app / "Contents/Resources/Legal"
+    for name in LEGAL_FILES:
+        path = contained_file(legal, name)
+        if path.stat().st_size == 0:
+            raise ValueError(f"empty in-app legal offer: {name}")
+    for name, source in (("LICENSE", "COMPANION-LICENSE.txt"),
+                         ("COPYRIGHT", "COMPANION-COPYRIGHT.txt"),
+                         ("SOURCE-README.md", "COMPANION-SOURCE-RELEASE-README.md")):
+        if digest(legal / name) != digest(repo / "docs" / source):
+            raise ValueError(f"in-app legal offer differs from source: {name}")
+    manifest = json.loads((legal / "source-package-file-manifest.json").read_text())
+    if not isinstance(manifest.get("files"), list) or not any(
+        record.get("path", "").startswith("source/collector/amplifai_phone/")
+        for record in manifest["files"]
+    ):
+        raise ValueError("in-app source offer manifest has no collector files")
+
+
 def authored_paths(repo: Path) -> list[Path]:
     tracked = subprocess.check_output([
         "git", "-C", str(repo), "ls-files", "-z", "collector/amplifai_phone",
@@ -115,6 +138,7 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         raise ValueError("output must be a new directory; existing packages are never replaced")
     inventory = json.loads(inventory_path.read_text())
     app_files = verify_app(app, inventory)
+    verify_legal_offer(app, repo)
     sources = json.loads(contained_file(evidence, "third_party/source-archive-manifest.json").read_text())
     native = json.loads(contained_file(evidence, "third_party/native-source-manifest.json").read_text())
     notices = json.loads(contained_file(evidence, "third_party/notice-extraction-manifest.json").read_text())
@@ -241,6 +265,8 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
                            f"Source: {record.get('source_archive', record.get('source_url'))}; SHA-256: {record['sha256']}\n")
         notice_text.append(payload.decode("utf-8", errors="replace") + "\n")
     (output / "THIRD-PARTY-NOTICES.txt").write_text("".join(notice_text))
+    if digest(app / "Contents/Resources/Legal/THIRD-PARTY-NOTICES.txt") != digest(output / "THIRD-PARTY-NOTICES.txt"):
+        raise ValueError("in-app notices differ from matching source package")
     write_json(output / "third_party/source-archive-manifest.json", sources)
     write_json(output / "third_party/native-source-manifest.json", {**native, "records": native_records})
     write_json(output / "third_party/notice-extraction-manifest.json", {**notices, "native_extracted": native_notices})

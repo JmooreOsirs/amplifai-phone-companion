@@ -14,6 +14,7 @@ from package_companion_review import (
     native_input_records,
     verify_app,
     verify_file,
+    verify_legal_offer,
 )
 
 
@@ -43,6 +44,10 @@ class PackageEvidenceTests(unittest.TestCase):
         (helper.parent / "extra").write_bytes(b"extra")
         with self.assertRaisesRegex(ValueError, "file set"):
             verify_app(self.root, inventory)
+
+    def test_release_refuses_missing_in_app_legal_offer(self):
+        with self.assertRaisesRegex(ValueError, "missing or outside evidence file"):
+            verify_legal_offer(self.root, self.root)
 
     def test_rejects_manifest_traversal_and_symlink(self):
         for relative in ("../outside", "/absolute", "dir/../../outside", "dir\\outside"):
