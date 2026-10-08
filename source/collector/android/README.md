@@ -1,8 +1,27 @@
 # AMPLIFai Phone — Android owner/partner test
 
-`2026.09.28-rc2` (`26092802`) is an owner/partner test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
+`2026.10.08-rc5` (`26100805`) is a signed owner/partner test build. It keeps
+rc4's exact support-code wire value and fresh, unchecked per-source approval,
+adds the in-app public Account Privacy Notice link, and separates the five-minute
+one-use pairing-code lifetime from a bounded two-hour post-delivery account-save
+acknowledgment window. The payload is cleared after browser delivery; the
+foreground listener remains only for the matching saved acknowledgment or
+explicit cancellation. The Android success screen now distinguishes confirmed
+account saves from a mere browser preview. Signed rc4 remains the in-place-update
+rollback. Physical-device and restricted-permission acceptance remain open.
 
-This version fixes an Android-only pairing crash in rc1. Install the signed rc2 APK as an update over rc1; do not uninstall or clear app data to recover. The update must retain the same application ID and signing certificate with a higher version code. After updating, open the app, review the selected sources and approve a fresh one-use browser handoff.
+Support-code wire format is `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
+For this Android release, `build` is the exact dotted version name
+`2026.10.08-rc5`, bytes are `0|0` before pairing, and status is `-`. The
+numeric Mac build values remain distinct and backward-compatible; the website
+derives platform only from an explicit allowlist of exact build values.
+
+The published September 28 rc2 fixes an Android-only pairing crash in that day's
+rc1. Preserve rc2 and October 7 rc3 as recovery history; never recommend the
+broken September 28 rc1. Install rc5 as an in-place
+update, without uninstalling or clearing app data. Updates retain the application
+ID and signing certificate with a higher version code. After updating, open the
+app, review the selected sources and approve a fresh one-use browser handoff.
 
 ## Owner flow
 
@@ -11,22 +30,29 @@ Use the signed APK's normal Android download/install flow. No developer mode, US
 1. Choose **Read contacts**, **Read call history**, and/or **Read SMS metadata** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
 2. Select contacts, then **Review selected metadata**. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
 3. Choose **Approve same-phone browser handoff**. On Android 13+, allow notifications and press Approve again. Disabled app/channel notifications block handoff because its visible Cancel control is required.
-4. Use **Open AMPLIFai account in browser** on this same phone. Enter the **One-use pairing code** within five minutes. Review each browser source and approve its account save separately. This Android app makes no cloud upload.
-5. **Cancel browser handoff**, the notification's **Cancel handoff**, or dismissing that notification stops the local handoff. Cancelling cannot retract metadata already delivered to the browser or separately saved to the account.
+4. Use **Open AMPLIFai account in browser** on this same phone. Enter the **One-use pairing code** within five minutes. After the browser receives the preview, review each source and approve its account save separately within the two-hour acknowledgment window. This Android app makes no cloud upload.
+5. After delivery, browser-only users can **Cancel browser handoff**. Signed-in users separately save or decline each source, then use **Confirm saved sources and finish**; only a matching browser acknowledgement closes the companion as saved. Cancelling or notification dismissal cannot retract metadata already delivered or separately saved.
+
+For a blocked permission or pre-pair handoff, **Copy safe support code** gives
+the owner an optional code to submit through AMPLIFai contact. It contains only
+the build, a random short reference, fixed stage/category, elapsed seconds and
+zero-byte/status placeholders. It does not contain phone numbers, contact names,
+message content, account identity, pairing secrets or raw exception text.
 
 ## Permission and coverage boundaries
 
 - `READ_SMS` and `READ_CALL_LOG` are hard-restricted permissions: an installer allowlist and an actual runtime grant are separate conditions. The official installer API defaults to allowlisting requested restricted permissions, but an OEM installer can apply different restrictions. A normal sideload can work; installation alone does not prove source access. [Permission reference](https://developer.android.com/reference/android/Manifest.permission#READ_SMS), [installer API](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setWhitelistedRestrictedPermissions(java.util.Set%3Cjava.lang.String%3E)).
+- Google Play is the normal distribution path for most users, but this exact full-history APK is not Play-ready: it is not a default SMS/Phone/Assistant handler, and Google's [current SMS/call-log policy](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en) requires a declared, reviewed permitted use or exception. The enterprise CRM exception lists call-log permissions for CRM, not `READ_SMS`; neither a signed APK nor successful sideload establishes Play eligibility. Keep the broad-release path and any reduced-permission variant separate from this owner-test artifact.
 - Covered downloaded/local-file apps on Android 15/16 can also encounter Restricted Settings for the SMS permission group. This build does not guide users around it; unavailable SMS must leave contacts and permitted calls usable. [Android 16 security requirements](https://source.android.com/docs/compatibility/16/android-16-cdd#225_security_model).
 - Grants are checked before provider queries, after permission results, before handoff, and when returning to the Activity. Revoked local sources are dropped and their handoff cancelled. Provider refusal is unavailable, not an empty successful read.
 - A readable source with zero observed records remains available and distinct from denied/not-read history. `missingSources` identifies unavailable history; unavailable sources cannot export stale interactions. Available metadata is observed coverage, never proof of completeness.
-- Provider scans stop before a partial result can be reviewed when they exceed 100,000 contact-phone rows or 256,000 call/SMS rows per source. A 32 MB selected-metadata handoff bound can also reject an unusually large review; reducing the selected contacts is the only supported retry. Neither condition silently exports incomplete history.
+- Provider scans stop before a partial result can be reviewed when they exceed 100,000 contact-phone rows or 256,000 call/SMS rows per source. More than 20 distinct normalized phones on one contact also stops the source rather than silently dropping a value. A 32 MB selected-metadata handoff bound can reject an unusually large review; reducing the selected contacts is the only supported retry. None of these conditions silently exports incomplete history.
 
 ## Bounded handoff lifecycle
 
 An unexported, owner-started `dataSync` foreground service holds only a reviewed in-memory payload while the Activity yields to the same-phone browser. The service performs no provider queries. Leaving the Activity cancels unfinished provider reads; completion after cancellation is discarded.
 
-The bridge binds only `127.0.0.1:48751`, checks the exact Host and `https://amplifai-database-engine.vercel.app` Origin, limits pairing attempts, and requires the one-use bearer token and ordered page contract. It closes its listener and active socket and zeroes its payload buffer on completion, cancellation, five bad codes, or expiry. A monotonic clock includes device sleep. The service removes its notification and stops; five minutes is an upper bound for useful authorization, not a guaranteed browser-transfer window under OS termination.
+The bridge binds only `127.0.0.1:48751`, checks the exact Host and `https://amplifai-database-engine.vercel.app` Origin, limits pairing attempts, and requires the one-use bearer token and ordered page contract. Pairing binds an immutable handoff ID and SHA-256 of the reviewed payload. The code and undelivered preview expire after five minutes. Successful browser delivery consumes the metadata read, clears its payload buffer and extends only the matching saved-acknowledgment listener for at most two hours. The foreground service uses the bridge's monotonic deadline, including device sleep; it does not reset the clock on browser activity. Cancellation, five bad codes, saved acknowledgement, expiry or I/O failure closes the listener/active socket and clears the grant. The service removes its notification and stops. OS termination can shorten either window; it never asserts a save from delivery alone.
 
 The notification contains no contacts or pairing code. Disabling notifications, removing the app's task, or service timeout stops the transfer. Activity recreation does not own or close an active bridge. `START_NOT_STICKY`, no boot receiver, and no persisted payload/code mean process loss cannot silently restart collection or transfer. The service requests only foreground-service/data-sync and notification permissions in addition to the existing contacts/call/SMS/Internet permissions. [Foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
 
@@ -63,15 +89,15 @@ Partial configuration is rejected. This Android project disables the configurati
 
 ## Remaining physical acceptance
 
-No emulator or device run is represented by JVM socket tests. Use the actual published signed APK through the normal download/install path, with owner-approved synthetic test contacts/history where practical. Record device model, Android/OEM version, browser version, APK hash and per-source outcome; never capture bodies, credentials, or pairing tokens in evidence.
+JVM socket tests and emulator runs do not establish physical-device acceptance. Use the actual published signed APK through the normal download/install path, with owner-approved synthetic test contacts/history where practical. Record device model, Android/OEM version, browser version, APK hash and per-source outcome; never capture bodies, credentials, or pairing tokens in evidence.
 
-Pairing release regression: on the existing Pixel 8 emulator, install rc1, start a reviewed synthetic handoff, and observe that its first valid `POST /v1/pair` crashes the bridge thread with Android `PatternSyntaxException`. Install rc2 with `adb install -r` (no uninstall), start a new reviewed handoff, and require HTTP 200 for pairing and metadata plus listener closure after the one-use transfer. Keep the code/token and synthetic contact identity out of logs. Host-JVM socket tests do not catch Android's stricter regex parser; this emulator check is mandatory for the next pairing change.
+Pairing release regression: a prior Android rc1 crashed its first valid `POST /v1/pair` on the Pixel 8 emulator with `PatternSyntaxException`; September 28 rc2 repaired it. The formerly incomplete official ARM64 Android 37.2 image was installed on October 7. On the API 37 `sdk_gphone16k_arm64` emulator, the debug APK launched, the ordinary contacts and notification prompts were approved, one synthetic contact was read/selected/reviewed, and the visible foreground handoff started. An Android instrumentation run passed pairing, delivery, wrong-ack rejection, saved acknowledgement and listener closure. Separately, a loopback API probe against the actual foreground service matched the received payload hash, saw the Activity's received state, rejected a wrong digest, accepted the matching acknowledgment and saw the terminal UI state. This is Android OS/runtime evidence, not same-phone Chrome, cloud-save, signed installer, OEM or physical-device acceptance. Host-JVM tests alone could not catch the original regex crash. Keep code/token and synthetic contact identity out of logs.
 
 - Samsung and Pixel: install without developer tools; confirm contacts-only, contacts+calls, and permitted SMS independently. Denied/installer-restricted sources must stay unavailable and must not block permitted sources. A genuinely empty readable history must say zero observed, not denied.
 - Android 13+: deny notifications (no listener); allow and explicitly approve again (visible notification + Cancel). Disable app/channel notifications or dismiss the notification during transfer (stop). Confirm older API 26–28 two-argument and API 29+ typed foreground-service behavior when those devices are available.
 - Switch app → same-phone Chrome and complete small and paged transfers; verify the account's separate consent/receipt flow. Browser local-network denial must remain an honest transport failure, not source-access denial or successful pairing.
-- Recreate the Activity while ready; the existing code/session survives without re-collection. Cancel from the notification, finish the Activity, remove the app task, force process death, and wait past five minutes including screen-off time: no new read, replay, silent restart, or stale usable code.
+- Recreate the Activity while ready; the existing code/session survives without re-collection. Cancel from the notification, finish the Activity, remove the app task, force process death, and wait past five minutes before delivery: no new read, replay, silent restart, or stale usable code. After delivery, the consumed code cannot reopen metadata, but a matching saved acknowledgment remains available for up to two hours while the foreground service survives; check expiry, cancellation and notification-loss behavior separately.
 - Revoke a previously read permission, return, and confirm that source is dropped and an existing handoff is cancelled before a new review. Simulate cancellation during a slow provider query: no completed source is retained.
-- Confirm exact Host/Origin rejection, bad-code exhaustion, token replay rejection, ordered-page retry, and listener closure on completion. JVM tests cover the local protocol; these do not establish browser/OEM interoperability.
+- Confirm exact Host/Origin rejection, bad-code exhaustion, token replay rejection, ordered-page retry, one-use delivery, wrong and correct saved acknowledgements, and listener closure only after acknowledgement/cancel/expiry. JVM tests cover the local protocol; these do not establish browser/OEM interoperability.
 
 Until those checks pass, describe the release only as an owner/partner **test build** with source coverage conditional on the device's normal permission rules.

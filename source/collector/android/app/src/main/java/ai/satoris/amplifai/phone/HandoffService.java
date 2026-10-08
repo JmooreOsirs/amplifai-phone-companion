@@ -38,7 +38,7 @@ public final class HandoffService extends Service {
     private Snapshot snapshot = new Snapshot("idle", null);
 
     public record Snapshot(String state, String code) {
-        public boolean active() { return state.equals("starting") || state.equals("ready"); }
+        public boolean active() { return state.equals("starting") || state.equals("ready") || state.equals("received"); }
     }
 
     public final class LocalBinder extends Binder {
@@ -120,6 +120,11 @@ public final class HandoffService extends Service {
             bridge = new LocalBridge(pendingPayload, LocalBridge.ACCOUNT_ORIGIN, LocalBridge.PORT,
                     SystemClock::elapsedRealtimeNanos, reason -> handler.post(() -> {
                         if (activeSession.equals(sessionId)) finish(reason);
+                    }), () -> handler.post(() -> {
+                        if (activeSession.equals(sessionId)) {
+                            publish("received", null);
+                            getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
+                        }
                     }));
             clearPendingPayload();
             bridge.start();
@@ -140,7 +145,8 @@ public final class HandoffService extends Service {
         Notification.Builder builder = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentTitle(getString(R.string.handoff_notification_title))
-                .setContentText(getString(R.string.handoff_notification_text))
+                .setContentText(getString(snapshot.state().equals("received")
+                        ? R.string.handoff_notification_received_text : R.string.handoff_notification_text))
                 .setContentIntent(open)
                 .setDeleteIntent(cancelAction)
                 .setOngoing(true)
@@ -154,7 +160,7 @@ public final class HandoffService extends Service {
     private final Runnable checkLifetime = new Runnable() {
         @Override public void run() {
             if (!snapshot.active()) return;
-            long remaining = deadline - SystemClock.elapsedRealtime();
+            long remaining = bridge == null ? deadline - SystemClock.elapsedRealtime() : bridge.remainingMillis();
             if (remaining <= 0) finish(LocalBridge.EndReason.EXPIRED);
             else if (!notificationsAvailable()) finish(LocalBridge.EndReason.FAILED);
             else handler.postDelayed(this, Math.min(remaining, 1000L));
