@@ -26,7 +26,7 @@ struct CollectorFlowChecks {
         try require(!model.progressIsKnown, "Missing progress is indeterminate, not zero")
         model.receive(try event(#"{"kind":"progress","value":42}"#))
         try require(model.progressIsKnown && model.progress == 42, "Observed backup progress must survive")
-        try require(model.progressExplanation.contains("estimate") && model.progressExplanation.contains("unavailable"), "Unknown ETA must be explicit")
+        try require(model.backupRemainingEstimate(at: Date()) == nil, "One device percentage cannot create a time estimate")
         model.receive(try event(#"{"kind":"progress","value":100}"#))
         try require(model.phase == .processing && !model.statusTitle.contains("ready"), "100% backup is not finished metadata review")
         model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":2147483648,"retainedBytes":1073741824,"discardedBytes":1073741824,"filesReceived":9,"bytesPerSecond":1048576,"elapsedSeconds":10}"#))

@@ -108,7 +108,7 @@ def _error_code(exc: BaseException) -> str:
     if isinstance(exc, UnsupportedSchema):
         return "unsupported_schema"
     if isinstance(exc, SourceCapacityLimit):
-        return "source_capacity_limit"
+        return exc.code
     if isinstance(exc, (BackupPasswordIsRequired, InvalidUnwrap)):
         return "backup_password"
     if isinstance(exc, PairingError):
@@ -297,6 +297,9 @@ def run_connect(
             "connection_lost", "device_backup_failed", "backup_host_space",
             "collection_failed", "backup_control_invalid", "selected_payload_missing",
             "selected_payload_invalid", "contacts_schema", "unsupported_schema",
+            "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit",
+            "backup_control_frame_limit", "backup_control_metadata_limit",
+            "backup_control_path_limit",
         }:
             event["stage"] = capture_stage
         device_failure = (

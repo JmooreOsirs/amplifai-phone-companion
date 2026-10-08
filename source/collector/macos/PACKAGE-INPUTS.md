@@ -1,6 +1,6 @@
-# October 8 processing-repair candidate inputs
+# October 8 capacity-repair candidate inputs
 
-Local processing-repair candidate only: `2026.10.08-rc6`, build `26100806`. Existing bundle identifier
+Local capacity-repair candidate only: `2026.10.08-rc7`, build `26100807`. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
@@ -26,7 +26,7 @@ cannot replace this local collection approval.
 
 ## Earlier backup repair and current processing incident
 
-The public rc5 build (`26100805`) remains the rollback candidate until this
+The public rc6 build (`26100806`) remains the rollback candidate until this
 source is separately packaged and released. Two earlier owner attempts in ACK2 ended
 with the generic `collection_failed` code at the backup stage and zero received
 bytes; this does **not** prove a backup file began transferring. The current helper
@@ -44,7 +44,13 @@ manifest-listed but missing optional call/SMS payloads while retaining valid
 contacts, rejects malformed selected-file entry types, and gives distinct safe
 categories for backup-control, required-contact, missing-file and integrity
 failures. It cannot identify the exact cause of that private run from the old
-generic code, and no physical retry of this candidate has occurred.
+generic code. A later owner rc6 run stopped with `source_capacity_limit` after
+21.73 GB received and 616.82 MB retained. The generic code cannot identify
+which capacity guard fired. The rc7 source candidate fixes three plausible
+avoidable control-volume failures with bounded file-backed/plist reads and
+private-error draining; it leaves path, disk, schema and finite parsing guards
+intact, and adds distinct safe capacity categories. The exact owner failure
+is not attributed to one guard and rc7 has not passed physical collection.
 
 The Mac app's fresh collection approval now includes automatic delivery of only
 its bounded support code after an error. The fixed HTTPS endpoint accepts the

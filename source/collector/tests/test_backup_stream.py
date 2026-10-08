@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import io
+import plistlib
 import shutil
 import struct
 import tempfile
@@ -14,7 +15,9 @@ from unittest.mock import AsyncMock, patch
 from amplifai_phone.backup_stream import DeviceBackupRejected, StreamedDeviceLink
 from amplifai_phone.backup_watchdog import (
     BACKUP_IDLE_SECONDS,
+    MAX_CONTROL_BYTES,
     MAX_CONTROL_ONLY_SECONDS,
+    RECEIVE_CHUNK_BYTES,
     BackupNoFileProgress,
     BackupStalled,
     BackupWatchdog,
@@ -22,6 +25,7 @@ from amplifai_phone.backup_watchdog import (
 from amplifai_phone.metadata import SourceCapacityLimit, UnsupportedSchema
 from amplifai_phone.workspace import MIN_FREE_BYTES, SessionWorkspace, WorkspaceError
 from pymobiledevice3.exceptions import NotEnoughDiskSpaceError
+from pymobiledevice3.services.device_link import CODE_ERROR_REMOTE
 
 
 def prefixed(value: str) -> bytes:
@@ -55,8 +59,66 @@ class Wire:
             self.after_read(payload)
         return payload
 
+    async def recv_plist(self):
+        (size,) = struct.unpack(">I", await self.recvall(4))
+        if size > MAX_CONTROL_BYTES:
+            raise SourceCapacityLimit("Backup control frame exceeds safe memory bounds")
+        return plistlib.loads(await self.recvall(size))
+
 
 class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_large_legitimate_control_frame_streams_in_bounded_chunks(self) -> None:
+        content = "x" * (MAX_CONTROL_BYTES + 1)
+        payload = plistlib.dumps(
+            ["DLMessageProcessMessage", {"ErrorCode": 0, "Content": content}]
+        )
+        self.assertGreater(len(payload), MAX_CONTROL_BYTES)
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-control-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(struct.pack(">I", len(payload)) + payload)
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                message = await link.receive_message()
+                self.assertEqual(len(message[1]["Content"]), len(content))
+                self.assertLessEqual(max(wire.requests), RECEIVE_CHUNK_BYTES)
+
+    async def test_extreme_control_frame_still_fails_before_allocating_or_reading_it(self) -> None:
+        from amplifai_phone.backup_stream import MAX_CONTROL_MESSAGE_BYTES
+
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-control-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(struct.pack(">I", MAX_CONTROL_MESSAGE_BYTES + 1))
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                with self.assertRaises(SourceCapacityLimit):
+                    await link.receive_message()
+                self.assertEqual(wire.requests, [4])
+                self.assertEqual(tuple(directory.iterdir()), (directory / ".amplifai-owned-session.json",))
+
+    async def test_large_private_error_for_discarded_file_is_drained_not_retained(self) -> None:
+        private_error = b"x" * 8192
+        failed_file = (
+            prefixed("synthetic-device-entry")
+            + prefixed("phone/discarded")
+            + struct.pack(">IB", len(private_error) + 1, CODE_ERROR_REMOTE)
+            + private_error
+        )
+        with tempfile.TemporaryDirectory(prefix="amplifai-error-drain-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(failed_file + file_transfer("phone/selected", b"ok") + prefixed(""))
+                link = StreamedDeviceLink(
+                    wire, directory, workspace=workspace, watchdog=BackupWatchdog(),
+                    preserve_file=lambda name, _: name.endswith("selected"),
+                )
+                await link.upload_files([])
+                self.assertEqual((directory / "phone/selected").read_bytes(), b"ok")
+                self.assertLessEqual(max(wire.requests), RECEIVE_CHUNK_BYTES)
+
     async def test_iphone_space_query_uses_stream_capacity_not_selected_file_budget(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-stream-space-") as temporary:
             workspace = SessionWorkspace(Path(temporary) / "sessions")
@@ -181,25 +243,25 @@ class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory(prefix="amplifai-stream-test-") as temporary:
             workspace = SessionWorkspace(Path(temporary) / "sessions")
             with workspace as directory:
-                wire = Wire(b"")
-                wire.recv_plist = AsyncMock(return_value=[
-                    "DLMessageProcessMessage", {"ErrorCode": 0, "Content": None}
-                ])
+                status = ["DLMessageProcessMessage", {"ErrorCode": 0}]
+                payload = plistlib.dumps(status)
+                wire = Wire(struct.pack(">I", len(payload)) + payload)
                 link = StreamedDeviceLink(
                     wire, directory, workspace=workspace, watchdog=BackupWatchdog()
                 )
                 self.assertIsNone(await link.dl_loop())
-                wire.recv_plist.assert_awaited_once()
+                self.assertEqual(wire.requests, [4, len(payload)])
 
     async def test_device_backup_status_keeps_numeric_code_without_private_reason(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-stream-test-") as temporary:
             workspace = SessionWorkspace(Path(temporary) / "sessions")
             with workspace as directory:
-                wire = Wire(b"")
-                wire.recv_plist = AsyncMock(return_value=[
+                status = [
                     "DLMessageProcessMessage",
                     {"ErrorCode": 205, "PrivateReason": "phone owner secret"},
-                ])
+                ]
+                payload = plistlib.dumps(status)
+                wire = Wire(struct.pack(">I", len(payload)) + payload)
                 link = StreamedDeviceLink(
                     wire, directory, workspace=workspace, watchdog=BackupWatchdog()
                 )

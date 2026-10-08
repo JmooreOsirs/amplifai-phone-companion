@@ -13,11 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from amplifai_phone.ios_backup import (
     DATABASES,
     IPhoneCapture,
+    MAX_PLIST_BYTES,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
     _extract_database,
     _parse_entries,
     _manifest_plist_path,
+    _read_plist,
     collect_iphone,
     parse_selected_backup,
 )
@@ -50,6 +52,21 @@ async def fake_snapshot_backup_control_files(**kwargs: object) -> None:
 
 
 class ManifestFixtureIsolationTest(unittest.TestCase):
+    def test_large_valid_control_plist_is_read_from_disk_without_old_16m_ceiling(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-plist-") as temporary:
+            path = Path(temporary) / "Info.plist"
+            path.write_bytes(plistlib.dumps({"SyntheticApplications": "x" * (17 * 1024 * 1024)}))
+            self.assertEqual(len(_read_plist(path)["SyntheticApplications"]), 17 * 1024 * 1024)
+
+    def test_extreme_control_plist_still_has_a_finite_parsing_bound(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-plist-") as temporary:
+            path = Path(temporary) / "Info.plist"
+            with path.open("wb") as output:
+                output.seek(MAX_PLIST_BYTES)
+                output.write(b"x")
+            with self.assertRaises(SourceCapacityLimit):
+                _read_plist(path)
+
     def test_invalid_manifest_control_and_contacts_shape_are_source_specific(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-control-category-") as temporary:
             directory = Path(temporary)

@@ -29,6 +29,8 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var processedBytes: Int64 = 0
     @Published private(set) var transferIsKnown = false
     @Published private(set) var collectionStartedAt: Date?
+    @Published private(set) var lastBackupActivityAt: Date?
+    @Published private(set) var lastParsingActivityAt: Date?
     @Published private(set) var transferElapsedSeconds = 0
     @Published private(set) var diagnosticReference = ""
     @Published private(set) var errorElapsedSeconds = 0
@@ -75,6 +77,7 @@ final class CollectorModel: ObservableObject {
     private var lastErrorStage: String?
     private var lastDeviceStatus: Int64?
     private var attemptedDiagnosticCode: String?
+    private var backupProgressSamples: [(date: Date, percent: Double)] = []
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -118,10 +121,6 @@ final class CollectorModel: ObservableObject {
     var hasUnsavedReview: Bool { !contacts.isEmpty && !handoffAcknowledged }
     var activeFlow: Bool { helperRunning || hasUnsavedReview }
 
-    var progressExplanation: String {
-        "The percentage is reported by the iPhone for backup transfer, not the entire collection or account save. A remaining-time estimate is unavailable."
-    }
-
     static func byteDescription(_ value: Int64) -> String {
         let bytes = Double(value)
         for (unit, size) in [("TiB", 1_099_511_627_776.0), ("GiB", 1_073_741_824.0), ("MiB", 1_048_576.0), ("KiB", 1_024.0)] {
@@ -134,8 +133,40 @@ final class CollectorModel: ObservableObject {
         "\(Self.byteDescription(transferBytes)) transferred · \(Self.byteDescription(retainedBytes)) retained locally"
     }
 
-    var transferActivity: String {
-        "Observed average: \(Self.byteDescription(Int64(transferBytesPerSecond)))/s · \(transferFileCount) files received"
+    var lastCollectionActivityAt: Date? {
+        phase == .processing ? lastParsingActivityAt ?? lastBackupActivityAt : lastBackupActivityAt
+    }
+
+    func backupRemainingEstimate(at now: Date) -> ClosedRange<Int>? {
+        guard phase == .transferring, progressIsKnown, progress >= 15, progress < 90,
+              backupProgressSamples.count >= 3, let first = backupProgressSamples.first,
+              let last = backupProgressSamples.last,
+              (0...60).contains(now.timeIntervalSince(last.date)) else { return nil }
+        let span = last.date.timeIntervalSince(first.date)
+        let gain = last.percent - first.percent
+        guard span >= 120, gain >= 5, abs(last.percent - progress) < 0.1 else { return nil }
+        let rates = zip(backupProgressSamples, backupProgressSamples.dropFirst()).compactMap { earlier, later -> Double? in
+            let seconds = later.date.timeIntervalSince(earlier.date)
+            let percentage = later.percent - earlier.percent
+            return seconds >= 30 && percentage > 0 ? percentage / seconds : nil
+        }
+        guard rates.count >= 2, let slowest = rates.min(), let fastest = rates.max(),
+              slowest > 0, fastest / slowest <= 2 else { return nil }
+        let remaining = 100 - progress
+        let lower = Int((remaining / fastest / 60 * 0.75).rounded(.down))
+        let upper = Int((remaining / slowest / 60 * 1.5).rounded(.up))
+        guard upper > 0, upper <= 720 else { return nil }
+        return max(1, lower)...max(2, upper)
+    }
+
+    func observeBackupProgress(_ value: Double, at date: Date) {
+        guard value.isFinite, (0..<100).contains(value) else { return }
+        if let previous = backupProgressSamples.last {
+            if value < previous.percent { backupProgressSamples = [] }
+            else if value <= previous.percent || date.timeIntervalSince(previous.date) < 30 { return }
+        }
+        backupProgressSamples.append((date, value))
+        if backupProgressSamples.count > 8 { backupProgressSamples.removeFirst() }
     }
 
     var failureContext: String {
@@ -158,7 +189,7 @@ final class CollectorModel: ObservableObject {
         let stage = lastErrorStage ?? "connecting"
         let code = lastErrorCode.flatMap { SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100806"
+            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100807"
         return "A1|\(build)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
     }
 
@@ -213,6 +244,9 @@ final class CollectorModel: ObservableObject {
         transferBytesPerSecond = 0
         processedBytes = 0
         transferIsKnown = false
+        lastBackupActivityAt = nil
+        lastParsingActivityAt = nil
+        backupProgressSamples = []
         collectionStartedAt = Date()
         resetHandoff()
         lastErrorCode = nil
@@ -504,6 +538,7 @@ final class CollectorModel: ObservableObject {
             }
         case "progress":
             if let value = event.value, value.isFinite, (0...100).contains(value) {
+                observeBackupProgress(value, at: Date())
                 progress = value
                 progressIsKnown = true
                 phase = value == 100 ? .processing : .transferring
@@ -519,6 +554,7 @@ final class CollectorModel: ObservableObject {
                       discarded == received - retained, files >= transferFileCount,
                       rate.isFinite, rate >= 0, rate <= 1_099_511_627_776,
                       elapsed.isFinite, elapsed > 0 else { return }
+                if received > transferBytes || files > transferFileCount { lastBackupActivityAt = Date() }
                 transferBytes = received
                 retainedBytes = retained
                 transferFileCount = files
@@ -528,6 +564,7 @@ final class CollectorModel: ObservableObject {
                 phase = .transferring
             } else if event.stage == "processing", let bytes = event.processedBytes,
                       bytes >= processedBytes, bytes <= 9_007_199_254_740_991 {
+                if bytes > processedBytes { lastParsingActivityAt = Date() }
                 processedBytes = bytes
                 phase = .processing
             }
@@ -719,7 +756,8 @@ final class CollectorModel: ObservableObject {
         case "workspace_low_space": return ["Free space for retained source databases, their parsing copies and a further 2 GiB reserve on the temporary-storage volume.", "Keep other backups intact, then reconnect."]
         case "backup_host_space": return ["The iPhone refused the host-space answer before a verified backup completion. Check available space on the Mac's temporary-storage volume; do not delete other backups just to satisfy this app.", "If a normal Finder backup works on this Mac but collection repeats this code, share the safe reference with support before another long retry."]
         case "workspace_size_limit": return ["This helper reported an older backup-size limit. Update the signed companion before retrying."]
-        case "source_capacity_limit": return ["A control-frame or metadata-count safety bound was reached, not the former backup-size ceiling.", "Contact support with the companion version; do not reset phone encryption or remove other backups."]
+        case "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit":
+            return ["A bounded control or source-reading safety limit was reached, not the former backup-size ceiling.", "Share the safe support code before another long run; do not reset phone encryption or remove other backups."]
         case "backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "contacts_schema", "unsupported_schema":
             return ["Share the safe support code and companion build with support before repeating a long collection.", "Do not reset backup encryption, remove other backups or treat the partial transfer as saved data."]
         case "workspace_unsafe": return ["Stop and contact support. Do not change permissions or delete an unverified folder."]
@@ -747,6 +785,11 @@ final class CollectorModel: ObservableObject {
         case "backup_host_space": return "The iPhone refused the backup receiver's space preflight. No metadata was saved. Check available Mac space and share the safe reference if it repeats."
         case "workspace_size_limit": return "This helper reported an older backup-size limit. Update the signed companion before retrying."
         case "source_capacity_limit": return "The backup control data or metadata count exceeded a supported safety bound. Collection stopped without uploading metadata. Contact support with the companion version."
+        case "backup_control_frame_limit": return "An iPhone backup control frame exceeded the companion's safe parsing bound. No metadata was saved. Share the safe support code before another long run."
+        case "backup_control_metadata_limit": return "A backup control file exceeded the companion's safe parsing bound. No metadata was saved. Share the safe support code before another long run."
+        case "backup_control_path_limit": return "An iPhone backup path exceeded the companion's safe path bound. No metadata was saved. Share the safe support code before another long run."
+        case "contacts_capacity_limit": return "The required contact source exceeded a safe local reader bound. No metadata was saved. Share the safe support code before another long run."
+        case "source_read_capacity_limit": return "A phone source exceeded a safe local reader bound. No metadata was saved. Share the safe support code before another long run."
         case "workspace_unsafe": return "The app's temporary-storage folder could not be verified as private and app-owned. Nothing there was changed. Contact support; do not change folder permissions or delete other backups."
         case "workspace_unavailable", "workspace": return "The app could not access its private temporary storage. Reopen the app and check temporary data. If it still fails, reinstall the signed companion or contact support."
         case "workspace_cleanup", "cleanup_incomplete": return "Temporary phone data could not be fully removed. Check temporary data before reconnecting."

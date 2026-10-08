@@ -12,6 +12,7 @@ import re
 import sqlite3
 import tempfile
 import time
+import xml.parsers.expat
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,12 +25,12 @@ from .backup_watchdog import (
     run_backup_session,
 )
 from .metadata import (
+    BackupControlMetadataLimit,
     BackupControlInvalid,
     ContactsSchemaUnsupported,
     RETAINED_HISTORY_START,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
-    SourceCapacityLimit,
     SourceReadCapacityLimit,
     SourceResult,
     UnsupportedSchema,
@@ -39,7 +40,10 @@ from .metadata import (
 )
 from .workspace import SessionWorkspace
 
-MAX_PLIST_BYTES = 16 * 1024 * 1024
+# Info.plist can grow with the installed-application inventory. It is already a
+# selected, private on-disk control file; parse it from disk under a separate
+# finite object bound rather than allocating a second raw 16 MiB-limited copy.
+MAX_PLIST_BYTES = 128 * 1024 * 1024
 HOME_DOMAIN = "HomeDomain"
 DATABASES = {
     "contacts": "Library/AddressBook/AddressBook.sqlitedb",
@@ -62,10 +66,11 @@ def _read_plist(path: Path) -> dict:
     if path.is_symlink() or not path.is_file():
         raise BackupControlInvalid("Required backup control metadata is unavailable")
     if path.stat().st_size > MAX_PLIST_BYTES:
-        raise SourceCapacityLimit("Backup control metadata exceeds safe memory bounds")
+        raise BackupControlMetadataLimit("Backup control metadata exceeds safe memory bounds")
     try:
-        value = plistlib.loads(path.read_bytes())
-    except (plistlib.InvalidFileException, ValueError) as error:
+        with path.open("rb") as stream:
+            value = plistlib.load(stream)
+    except (plistlib.InvalidFileException, ValueError, xml.parsers.expat.ExpatError) as error:
         raise BackupControlInvalid("Invalid backup control metadata") from error
     if not isinstance(value, dict):
         raise BackupControlInvalid("Invalid backup control metadata")

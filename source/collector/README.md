@@ -1,8 +1,8 @@
 # AMPLIFai phone collectors
 
 The public `/phone` and `/phone/account` setup links offer the signed Android
-`2026.10.08-rc4` APK and signed, notarized Mac `2026.10.08-rc5` build `26100805`.
-This tree contains the unpublished `2026.10.08-rc6` processing-repair candidate;
+`2026.10.08-rc4` APK and signed, notarized Mac `2026.10.08-rc6` build `26100806`.
+This tree contains the unpublished `2026.10.08-rc7` capacity-repair candidate;
 its source checks do not sign, notarize or update that public download.
 The prior `2026.10.08-rc4-ack2` Mac distribution remains a rollback;
 its contained About/build metadata says rc4/26100804. Neither platform has
@@ -38,9 +38,16 @@ delivery succeeded. The rc5 public package was independently verified, but
 synthetic coverage does not replace a normal
 owner-operated iPhone retry. A subsequent build `26100804` owner run completed
 the transfer but stopped in processing with `unsupported_schema`; the rc5
-parser is unchanged from that build. The local rc6 candidate narrows safe
-failure categories and isolates a missing optional selected payload, but has
-not been exercised on the owner's iPhone or published.
+parser is unchanged from that build. The published rc6 candidate narrows safe
+failure categories and isolates a missing optional selected payload. An owner
+retry of rc6 reached 21.73 GB received/616.82 MB retained, then stopped with
+`source_capacity_limit`; that code does not identify which guard fired. The
+local rc7 candidate streams oversized DeviceLink control frames to private
+temporary storage under a finite parsing bound, drains long private device
+error text without retaining it, and reads larger on-disk control plists
+without a second raw copy. Distinct safe capacity codes identify a future
+guard without phone content. This is synthetic repair evidence, not a proven
+fix for that exact owner run or complete-history/device-to-account success.
 
 Build the host-specific macOS app without opening or connecting to a phone:
 

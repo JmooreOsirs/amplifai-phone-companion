@@ -1,7 +1,7 @@
-# AMPLIFai Phone 2026.10.08-rc6 companion source
+# AMPLIFai Phone 2026.10.08-rc7 companion source
 
-This package is prepared for the matching `2026.10.08-rc6` Mac app, build
-`26100806`; publication and binary checksums are separate release steps. The
+This package is prepared for the matching `2026.10.08-rc7` Mac app, build
+`26100807`; publication and binary checksums are separate release steps. The
 filtered receiver drains unselected full-backup bytes, while every retained
 write and parsing copy checks real Mac storage with a further 2 GiB reserve.
 It distinguishes an early host-space refusal from generic collection failure
@@ -15,10 +15,15 @@ explicit unavailable source rather than discarding otherwise valid captured
 sources. A missing contacts database and any invalid selected-file size,
 identity, or decryption still stop processing. The app reports bounded distinct
 processing codes for malformed backup controls, selected payload failures, and
-unsupported contacts schema; these codes do not disclose phone data or prove
-the owner's previously observed generic processing failure is fixed.
-This revision also preserves a contact's complete supported phone/email set
-instead of slicing after 20 values, and keeps an actively receiving backup
+unsupported contacts schema. A later owner rc6 run stopped with a generic
+`source_capacity_limit` after 21.73 GB received; no private trigger subtype
+was available. This revision streams larger DeviceLink control frames to a
+private temporary file, reads larger on-disk control plists without duplicating
+their raw bytes, drains private device error text in bounded chunks, and emits
+distinct safe capacity codes if a guard still stops collection. It does not
+prove the owner's exact failure is fixed. A contact with more than 20 distinct
+phone or email values remains an explicit capacity failure, not a silent slice.
+The collector keeps an actively receiving backup
 alive without a total elapsed-time cutoff. Explicit safety bounds still stop
 unsupported source volumes; this is not unlimited-history proof.
 The current local bridge also reports observed source rows separately from
@@ -31,11 +36,8 @@ under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
 `LICENSE` for the GPLv3 text, and `THIRD-PARTY-NOTICES.txt` for retained upstream
 notices. The separate private website/backend source is not part of this package.
 
-This repository also retains Android source from its separate release; the
-matching rc6 source ZIP is the Mac-only corresponding-source package.
-
-This is the corresponding-source view for the macOS arm64 companion and its
-frozen Python helper. It is not the signed app or installer. The release ZIP includes the source and
+This is a source release candidate for the macOS arm64 companion and its frozen
+Python helper. It is not a signed app or installer. It includes the source and
 build inputs matched to the selected artifact inventory; it does not claim a
 byte-for-byte reproducible binary build or verified operation on an owner phone.
 

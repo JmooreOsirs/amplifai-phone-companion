@@ -47,9 +47,37 @@ class SelectedPayloadIntegrityError(UnsupportedSchema):
 class SourceCapacityLimit(ValueError):
     """A bounded metadata/control frontier, not an unsupported phone schema."""
 
+    code = "source_capacity_limit"
+
 
 class SourceReadCapacityLimit(SourceCapacityLimit):
     """A per-source reader bound, distinct from backup/session safety bounds."""
+
+    code = "source_read_capacity_limit"
+
+
+class ContactsCapacityLimit(SourceReadCapacityLimit):
+    """The required contacts source exceeded its bounded in-memory reader."""
+
+    code = "contacts_capacity_limit"
+
+
+class BackupControlFrameLimit(SourceCapacityLimit):
+    """A DeviceLink control frame exceeded its finite parsing bound."""
+
+    code = "backup_control_frame_limit"
+
+
+class BackupControlMetadataLimit(SourceCapacityLimit):
+    """An on-disk backup control plist exceeded its finite parsing bound."""
+
+    code = "backup_control_metadata_limit"
+
+
+class BackupControlPathLimit(SourceCapacityLimit):
+    """A DeviceLink path exceeded the supported path safety bound."""
+
+    code = "backup_control_path_limit"
 
 
 @dataclass(frozen=True)
@@ -147,7 +175,7 @@ def read_contacts(
             )
         ):
             if index >= MAX_ROWS_PER_SOURCE:
-                raise SourceReadCapacityLimit("Contact value row limit exceeded")
+                raise ContactsCapacityLimit("Contact value row limit exceeded")
             if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
                 check_callback()
             owner = values.setdefault(
@@ -169,12 +197,12 @@ def read_contacts(
         row_count = 0
         for row_count, row in enumerate(rows, 1):
             if row_count > MAX_ROWS_PER_SOURCE:
-                raise SourceReadCapacityLimit("Contact row limit exceeded")
+                raise ContactsCapacityLimit("Contact row limit exceeded")
             if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
                 check_callback()
             fields = values.get(row["ROWID"], {"phones": set(), "emails": set()})
             if len(fields["phones"]) > 20 or len(fields["emails"]) > 20:
-                raise SourceReadCapacityLimit(
+                raise ContactsCapacityLimit(
                     "Contact has more phone or email values than the handoff contract supports"
                 )
             name = " ".join(

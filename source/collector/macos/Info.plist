@@ -11,9 +11,9 @@
   <key>CFBundleIconFile</key>
   <string>AmplifaiPhone.icns</string>
   <key>CFBundleShortVersionString</key>
-  <string>2026.10.08-rc6</string>
+  <string>2026.10.08-rc7</string>
   <key>CFBundleVersion</key>
-  <string>26100806</string>
+  <string>26100807</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>

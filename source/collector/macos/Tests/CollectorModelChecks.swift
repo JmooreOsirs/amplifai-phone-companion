@@ -22,7 +22,7 @@ struct CollectorModelChecks {
         do {
             try runChecks()
             try await approvedLaunchUsesExactRun()
-            print("16 macOS recovery and local-approval checks passed")
+            print("18 macOS recovery, progress and local-approval checks passed")
         } catch {
             FileHandle.standardError.write(Data("macOS recovery check failed: \(error)\n".utf8))
             Darwin.exit(1)
@@ -46,6 +46,43 @@ struct CollectorModelChecks {
         try emptyResidueClearsGate()
         try inspectedResidueBlocksConnection()
         try cancellationClearsPrivateReview()
+        try backupEstimateNeedsStableMeasuredProgress()
+        try activityTimestampNeedsRealDataProgress()
+    }
+
+    private static func backupEstimateNeedsStableMeasuredProgress() throws {
+        let model = CollectorModel()
+        let now = Date()
+        model.observeBackupProgress(20, at: now.addingTimeInterval(-180))
+        model.observeBackupProgress(25, at: now.addingTimeInterval(-90))
+        try require(model.backupRemainingEstimate(at: now) == nil, "Two observed samples cannot create an ETA")
+        model.receive(try event(#"{"kind":"progress","value":30}"#))
+        let observedAt = Date()
+        guard let range = model.backupRemainingEstimate(at: observedAt) else {
+            throw RecoveryCheckError.failed("Three stable, spaced iPhone samples should qualify a bounded backup-only estimate")
+        }
+        try require(range.lowerBound > 0 && range.upperBound > range.lowerBound,
+                    "A measured backup estimate must have a positive, visible range")
+        try require(model.backupRemainingEstimate(at: observedAt.addingTimeInterval(61)) == nil,
+                    "Stale backup percentage must withdraw the estimate")
+        model.receive(try event(#"{"kind":"progress","value":10}"#))
+        try require(model.backupRemainingEstimate(at: Date()) == nil,
+                    "A regressed device percentage must withdraw the estimate")
+    }
+
+    private static func activityTimestampNeedsRealDataProgress() throws {
+        let model = CollectorModel()
+        model.phase = .transferring
+        try require(model.lastCollectionActivityAt == nil, "No file bytes cannot look like observed data progress")
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":512,"discardedBytes":512,"filesReceived":1,"elapsedSeconds":2,"bytesPerSecond":512}"#))
+        guard let backupActivity = model.lastCollectionActivityAt else {
+            throw RecoveryCheckError.failed("An increasing file transfer should record real activity")
+        }
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":512,"discardedBytes":512,"filesReceived":1,"elapsedSeconds":3,"bytesPerSecond":341}"#))
+        try require(model.lastCollectionActivityAt == backupActivity, "Repeated counters cannot refresh last data activity")
+        model.receive(try event(#"{"kind":"transfer","stage":"processing","processedBytes":4096}"#))
+        try require(model.lastParsingActivityAt != nil && model.lastCollectionActivityAt == model.lastParsingActivityAt,
+                    "Local parsing must report its own measured activity")
     }
 
     private static func uncheckedCollectionCannotStart() throws {
@@ -172,6 +209,8 @@ struct CollectorModelChecks {
         let codes = [
             "workspace_low_space", "workspace_size_limit",
             "workspace_unsafe", "workspace_unavailable", "source_capacity_limit",
+            "backup_control_frame_limit", "backup_control_metadata_limit",
+            "backup_control_path_limit", "contacts_capacity_limit", "source_read_capacity_limit",
         ]
         let messages = codes.map { CollectorModel.message(for: $0) }
         try require(Set(messages).count == codes.count, "Storage failures need distinct recovery messages")
@@ -214,7 +253,7 @@ struct CollectorModelChecks {
         try require(model.failureContext.contains("1.0 KiB") && model.failureContext.contains("partial"), "Error view must retain last observed transfer and clarify no metadata save")
         try require(!model.failureContext.contains("phone owner"), "No private device reason may be rendered")
         let fields = model.safeSupportCode.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100806", "Support code must declare its bounded schema and exact build")
+        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100807", "Support code must declare its bounded schema and exact build")
         try require(fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil, "A fresh opaque report reference is required before browser pairing")
         try require(fields[3...8].elementsEqual(["backup", "device_backup_failed", "1800", "1024", "0", "205"]), "Pre-pair failure report must preserve safe first code, stage, elapsed, bytes and device status")
         try require(!model.safeSupportCode.contains("phone owner"), "Support code cannot include private phone text")
@@ -240,7 +279,7 @@ struct CollectorModelChecks {
         try require(parsed == ["code": code] && code.contains("|backup_host_space|"), "Only the safe support code may leave the app")
         try require(SupportDiagnosticReporter.request(for: code + "|phone owner@example.com") == nil, "Extra private fields must be rejected locally")
         try require(SupportDiagnosticReporter.request(for: code.replacingOccurrences(of: "backup_host_space", with: "owner_private_error")) == nil, "Raw helper reason must never be sent")
-        for category in ["backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "contacts_schema"] {
+        for category in ["backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "contacts_schema", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit", "contacts_capacity_limit", "source_read_capacity_limit"] {
             let candidate = code.replacingOccurrences(of: "backup_host_space", with: category)
             try require(SupportDiagnosticReporter.request(for: candidate) != nil, "Specific processing failures must retain their safe diagnostic category")
             let processing = CollectorModel()

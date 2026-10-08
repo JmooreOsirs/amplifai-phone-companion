@@ -17,8 +17,12 @@ from amplifai_phone.backup_watchdog import (
 )
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import (
+    BackupControlFrameLimit,
     BackupControlInvalid,
+    BackupControlMetadataLimit,
+    BackupControlPathLimit,
     Contact,
+    ContactsCapacityLimit,
     ContactsSchemaUnsupported,
     Interaction,
     SelectedPayloadIntegrityError,
@@ -111,8 +115,29 @@ class AgentProtocolTest(unittest.TestCase):
 
         output = io.StringIO()
         self.assertEqual(run_connect(io.StringIO(), output, failed), 1)
-        self.assertEqual(json.loads(output.getvalue().splitlines()[-1]), {"kind": "error", "code": "source_capacity_limit"})
+        self.assertEqual(json.loads(output.getvalue().splitlines()[-1]), {"kind": "error", "code": "source_capacity_limit", "stage": "connecting"})
         self.assertNotIn("/Users/tester", output.getvalue())
+
+    def test_capacity_subtypes_preserve_safe_stage_without_private_details(self) -> None:
+        cases = (
+            (BackupControlFrameLimit, "backup_control_frame_limit", "backup"),
+            (BackupControlPathLimit, "backup_control_path_limit", "backup"),
+            (BackupControlMetadataLimit, "backup_control_metadata_limit", "processing"),
+            (ContactsCapacityLimit, "contacts_capacity_limit", "processing"),
+        )
+        for failure_type, expected_code, stage in cases:
+            with self.subTest(code=expected_code):
+                async def failed(**kwargs):
+                    kwargs["transfer_callback"]({"stage": stage, "processedBytes": 0})
+                    raise failure_type("private /Users/tester/source detail")
+
+                output = io.StringIO()
+                self.assertEqual(run_connect(io.StringIO(), output, failed), 1)
+                self.assertEqual(
+                    json.loads(output.getvalue().splitlines()[-1]),
+                    {"kind": "error", "code": expected_code, "stage": stage},
+                )
+                self.assertNotIn("/Users/tester", output.getvalue())
 
     def test_byte_progress_advances_independently_of_flat_backup_percentage(self) -> None:
         async def capture(**kwargs):
