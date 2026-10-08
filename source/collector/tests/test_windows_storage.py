@@ -316,19 +316,19 @@ class WindowsNativePolicyTest(unittest.TestCase):
         self.assertEqual(native.loads[1][0], r"C:\Windows\System32\advapi32.dll")
         for name, args in native.calls:
             if name == "CreateFileW":
-                self.assertEqual(args[1], 0x20080 if args[0] == str(self.path) else 0x80)
+                self.assertEqual(args[1], 0x20080 if args[0] == str(self.path) else 0)
                 self.assertEqual(args[2], 3, "no share-delete or privilege-granting access")
                 self.assertEqual(args[4], 3)
                 self.assertEqual(args[5], 0x02200000)
             if name == "GetSecurityInfo":
                 self.assertEqual(args[1:3], (1, 5))
 
-    def test_ancestor_pinning_does_not_require_reading_ancestor_acls(self) -> None:
+    def test_ancestor_pinning_needs_no_attribute_or_acl_rights(self) -> None:
         target = str(self.path)
 
         class MetadataAncestorBoundary(NativeBoundary):
             def CreateFileW(self, path, access, *arguments):
-                if path != target and access & 0x20000:
+                if path != target and access & 0x20080:
                     self.error = 5
                     return storage._INVALID_HANDLE
                 return super().CreateFileW(path, access, *arguments)
@@ -342,6 +342,11 @@ class WindowsNativePolicyTest(unittest.TestCase):
         root = [args for name, args in native.calls
                 if name == "CreateFileW" and args[0] == target]
         self.assertEqual(root[0][1], 0x20080, "root must retain READ_CONTROL")
+        ancestors = [args for name, args in native.calls
+                     if name == "CreateFileW" and args[0] != target]
+        self.assertTrue(ancestors)
+        self.assertTrue(all(args[1] == 0 and args[2] == 3 and args[5] == 0x02200000
+                            for args in ancestors), "ancestor identity pins must retain no-follow and no-share-delete")
 
     def test_handle_failures_preserve_only_the_immediate_numeric_os_diagnostic(self) -> None:
         for failure in ("CreateFileW", "GetFileInformationByHandleEx"):
@@ -355,7 +360,7 @@ class WindowsNativePolicyTest(unittest.TestCase):
             self.assertEqual(getattr(error, "native_stage", None), 15)
             self.assertEqual(getattr(error, "api_code", None),
                              1 if failure == "CreateFileW" else 2)
-            self.assertEqual(getattr(error, "requested_access", None), 0x80)
+            self.assertEqual(getattr(error, "requested_access", None), 0)
             self.assertEqual(getattr(error, "ancestor", None), True)
             self.assertNotIn(str(self.path), str(error))
             self.assertNotIn("1001", str(error))
