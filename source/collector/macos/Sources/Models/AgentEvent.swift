@@ -19,6 +19,14 @@ struct AgentEvent: Decodable {
     let state: String?
     let transport: String?
     let value: Double?
+    let stage: String?
+    let receivedBytes: Int64?
+    let retainedBytes: Int64?
+    let discardedBytes: Int64?
+    let filesReceived: Int64?
+    let bytesPerSecond: Double?
+    let elapsedSeconds: Double?
+    let processedBytes: Int64?
     let contacts: [ContactPreview]?
     let availableCalls: Int?
     let availableMessages: Int?
@@ -35,7 +43,10 @@ struct AgentEvent: Decodable {
     let sessions: [ResiduePreview]?
     let count: Int?
     let code: String?
+    let deviceCode: Int64?
+    let cleanupRequired: Bool?
     let pairCode: String?
     let port: Int?
     let expiresInSeconds: Int?
+    let handoffId: String?
 }

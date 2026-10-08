@@ -4,7 +4,10 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        if let resource = Bundle.main.resourceURL?.appendingPathComponent("AmplifaiPhone.icns"),
+           let icon = NSImage(contentsOf: resource) {
+            NSApp.applicationIconImage = icon
+        }
     }
 }
 

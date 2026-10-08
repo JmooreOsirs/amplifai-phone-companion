@@ -5,6 +5,8 @@ struct ContentView: View {
     @State private var search = ""
     @State private var confirmingCleanup = false
     @State private var confirmingBrowserShare = false
+    @State private var localCollectionChecked = false
+    @State private var confirmingRetainedReviewDiscard = false
 
     private var visibleContacts: [ContactPreview] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -17,6 +19,10 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 24) {
                 header
                 if !model.residues.isEmpty { residueNotice }
+                if !model.helperRunning && (model.phase == .idle || model.phase == .error || model.phase == .completed) {
+                    if model.hasUnsavedReview { retainedReviewRecovery }
+                    else { collectionApprovalPanel }
+                }
                 statusPanel
                 if model.phase == .passwordRequired { passwordPanel }
                 if model.phase == .selecting || model.phase == .reviewing { contactPanel }
@@ -30,6 +36,9 @@ struct ContentView: View {
         }
         .background(Brand.background)
         .foregroundStyle(Brand.body)
+        .background(ActiveCompanionWindow(model: model).frame(width: 0, height: 0))
+        .onChange(of: model.collectionApprovalRunID) { _, _ in localCollectionChecked = false }
+        .onDisappear { model.declineLocalCollection() }
         .confirmationDialog(
             "Remove previous temporary backups created by this app?",
             isPresented: $confirmingCleanup
@@ -41,12 +50,18 @@ struct ContentView: View {
             Text("Only marked, abandoned AMPLIFai sessions are targeted. No other phone or computer backups are touched.")
         }
         .confirmationDialog(
-            "Share selected relationship metadata with the AMPLIFai pilot in this browser?",
+            "Share selected relationship metadata with the account browser?",
             isPresented: $confirmingBrowserShare
         ) {
             Button("Create one-time browser pairing") { model.pairBrowser() }
         } message: {
-            Text("This opens a five-minute, loopback-only handoff for the selected contacts, phone numbers, and matching call/message metadata. No message bodies, backup files, or passwords are handed off. The public browser receiver exists, but phone-to-browser pairing has not been validated yet.")
+            Text("This opens a five-minute local handoff for selected contacts, phone numbers, and matching call/message metadata. No message bodies, backup files, or passwords are handed off. Saving to your account requires separate approval there. This companion keeps the local review until the matching account save is explicitly acknowledged.")
+        }
+        .confirmationDialog("Discard the retained local unsaved review?", isPresented: $confirmingRetainedReviewDiscard) {
+            Button("Discard review and disconnect", role: .destructive) { model.disconnect() }
+            Button("Keep review", role: .cancel) {}
+        } message: {
+            Text("Receiving a browser preview is not a saved account receipt. This discards the companion's in-memory recovery copy; separately saved account data and marked temporary backups are not deleted.")
         }
     }
 
@@ -84,7 +99,7 @@ struct ContentView: View {
             Text("Phone companion")
                 .font(.custom("Arial", size: 28).weight(.bold))
                 .foregroundStyle(Brand.heading)
-            Text("Local iPhone collector candidate")
+            Text("Private iPhone collection on this Mac")
                 .font(.custom("Arial", size: 14))
                 .foregroundStyle(Brand.muted)
         }
@@ -105,37 +120,75 @@ struct ContentView: View {
     }
 
     private var statusPanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(statusTitle)
-                .font(.custom("Arial", size: 21).weight(.bold))
+        CollectionStatusPanel(model: model)
+    }
+
+    private var collectionApprovalPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Before collecting locally")
+                .font(.custom("Arial", size: 18).weight(.bold))
                 .foregroundStyle(Brand.heading)
-            Text(statusDetail)
-                .font(.custom("Arial", size: 15))
-            if model.phase == .transferring {
-                ProgressView(value: model.progress, total: 100) {
-                    Text("Local backup transfer\(model.connectionTransport.isEmpty ? "" : " over \(model.connectionTransport)")")
+                .accessibilityAddTraits(.isHeader)
+            Text("Requirements: an Apple M-series Mac running macOS 14 or later, a data-capable USB cable, an iPhone unlocked for initial connection and Trust, and real free Mac storage for selected databases, parsing copies and a further 2 GiB reserve. Internet is needed later for failure reporting, browser handoff and account save; the USB backup itself runs locally.")
+            Text("This Mac reads available contacts and retained call/message context. After collection, choose the people whose metadata you review. Context includes phone numbers, dates, participants, call duration, and message transport/direction—not message text in the review or browser handoff.")
+            Text("iPhone capture temporarily receives full-backup bytes, including unrelated data and message content. Unselected files are discarded while streaming; selected source databases remain private until parsing finishes. Storage must fit those databases, parsing copies and a further 2 GiB reserve. Cleanup is attempted; an interruption can leave marked temporary phone data that you must inspect here.")
+            Text("Agreeing permits this local collection only. It does not approve Apple's Trust prompt, provide an encrypted-backup password, permit browser sharing, or save anything to an account. Browser transfer has a separate confirmation; each optional source save needs its own approval in your account.")
+            Text("If collection fails, this app automatically sends only a safe diagnostic code to AMPLIFai/PostHog: build, random reference, failure category and stage, elapsed time, byte counts and optional numeric device status. It never sends phone records, names, message content, passwords, backup files, paths or raw errors. Delivery status and a retry appear after a failure; a failed report never blocks a new collection.")
+            Toggle("I agree to this collection and its safe failure diagnostic", isOn: Binding(
+                get: { localCollectionChecked },
+                set: { checked in
+                    localCollectionChecked = checked
+                    if !checked { model.declineLocalCollection() }
                 }
-                .tint(Brand.lime)
-            }
-            if model.phase == .error {
-                Text(model.errorMessage)
-                    .foregroundStyle(.red)
-                    .accessibilityAddTraits(.isStaticText)
-            }
-            HStack(spacing: 12) {
-                if model.phase == .idle || model.phase == .error {
-                    Button("Connect iPhone") { model.connect() }
-                        .buttonStyle(LimeButton())
-                        .disabled(!model.canConnect)
-                } else if model.phase == .connecting || model.phase == .transferring
-                            || model.phase == .passwordRequired || model.phase == .processing {
-                    Button("Cancel collection") { model.disconnect() }
-                        .buttonStyle(SecondaryButton())
-                } else if model.phase == .selecting || model.phase == .reviewing {
-                    Button("Disconnect") { model.disconnect() }
-                        .buttonStyle(SecondaryButton())
+            ))
+            .toggleStyle(.checkbox)
+            .disabled(!model.canPrepareCollection)
+            if model.localCollectionApproval != nil {
+                Text("Approved for the next collection only. Choose Connect iPhone when ready.")
+                    .foregroundStyle(Brand.muted)
+                Button("Back") {
+                    localCollectionChecked = false
+                    model.declineLocalCollection()
+                }
+                .buttonStyle(SecondaryButton())
+                .keyboardShortcut(.cancelAction)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { collectionApprovalActions }
+                    VStack(alignment: .leading, spacing: 12) { collectionApprovalActions }
                 }
             }
+            Text("Disclosure: \(CollectorModel.collectionDisclosureVersion)")
+                .font(.custom("Arial", size: 12))
+                .foregroundStyle(Brand.muted)
+                .textSelection(.enabled)
+        }
+        .font(.custom("Arial", size: 14))
+        .panel()
+    }
+
+    @ViewBuilder private var collectionApprovalActions: some View {
+        Button("Agree to local collection") {
+            model.approveLocalCollection(for: model.collectionApprovalRunID, checked: localCollectionChecked)
+        }
+        .buttonStyle(LimeButton())
+        .disabled(!localCollectionChecked || !model.canPrepareCollection)
+        Button("Decline") {
+            localCollectionChecked = false
+            model.declineLocalCollection()
+        }
+        .buttonStyle(SecondaryButton())
+        .keyboardShortcut(.cancelAction)
+    }
+
+    private var retainedReviewRecovery: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your unsaved local review is retained")
+                .font(.custom("Arial", size: 18).weight(.bold))
+                .foregroundStyle(Brand.heading)
+            Text("A new collection cannot replace this recovery copy. Discard it explicitly before starting again. Temporary-data inspection and removal remain separate.")
+            Button("Review discard options") { confirmingRetainedReviewDiscard = true }
+                .buttonStyle(SecondaryButton())
         }
         .panel()
     }
@@ -145,7 +198,7 @@ struct ContentView: View {
             Text("Existing encrypted-backup password")
                 .font(.custom("Arial", size: 18).weight(.bold))
                 .foregroundStyle(Brand.heading)
-            Text("This is the password already set for this iPhone backup. It is sent only to the local collector process and is not saved.")
+            Text("Use the password already set for this iPhone's encrypted computer backup, not its screen-unlock passcode. Ask its owner if you do not know it. This app never changes or resets encryption; the password stays in the local helper and is not saved.")
             SecureField("Backup password", text: $model.password)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { model.submitPassword() }
@@ -233,10 +286,11 @@ struct ContentView: View {
                 Text("Unavailable backup sources: \(model.missingSources.joined(separator: ", ")). Counts are partial.")
                     .foregroundStyle(Brand.muted)
             }
-            Text("No metadata has been saved or uploaded. Disconnect clears this in-memory review.")
+            Text("A local preview is not an account save. Keep this recovery copy until the browser confirms the matching save. Disconnect or closing after confirmation discards this in-memory review.")
                 .foregroundStyle(Brand.muted)
             Button("Create local browser pairing") { confirmingBrowserShare = true }
                 .buttonStyle(SecondaryButton())
+                .disabled(model.selectionNeedsReview || model.handoffAcknowledged)
             if !model.errorMessage.isEmpty {
                 Text(model.errorMessage).foregroundStyle(.red)
             }
@@ -245,9 +299,11 @@ struct ContentView: View {
                     .font(.custom("Arial", size: 18).weight(.bold))
                     .foregroundStyle(Brand.heading)
                     .textSelection(.enabled)
-                Text("Expires five minutes after creation at 127.0.0.1:\(model.pairPort), only from the exact AMPLIFai pilot origin. Public phone-to-browser pairing has not been validated yet.")
+                Text("Expires five minutes after creation. Only the exact AMPLIFai account origin can receive it. Receiving the preview does not approve a cloud save.")
                     .font(.caption)
                     .foregroundStyle(Brand.muted)
+                Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai-database-engine.vercel.app/phone/account")!)
+                    .buttonStyle(SecondaryButton())
             }
         }
         .panel()
@@ -271,56 +327,22 @@ struct ContentView: View {
     private var platformNote: some View {
         HStack(spacing: 8) {
             Circle().fill(Brand.blue).frame(width: 7, height: 7)
-            Text("Android collection is not available in this Mac candidate. No Android phone action is enabled.")
+            Text("This Mac companion reads iPhone backups. Android uses its separate signed Android app from account setup.")
                 .font(.custom("Arial", size: 13))
                 .foregroundStyle(Brand.muted)
         }
     }
 
     private var privacyNote: some View {
-        Text("Developer-only local candidate · No account, cloud upload, or persistent relationship database · Actual phone and Windows validation pending")
+        Text("Mac companion · Selected relationship context, not message content · Unselected full-backup bytes are streamed and discarded · Private sources and parsing copies need disk space plus a 2 GiB reserve · Physical coverage varies; Windows is unsupported")
             .font(.custom("Arial", size: 12))
             .foregroundStyle(Brand.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var statusTitle: String {
-        switch model.phase {
-        case .idle: "Connect your iPhone"
-        case .connecting: "Waiting for your iPhone"
-        case .transferring: "Collecting locally"
-        case .passwordRequired: "Backup password needed"
-        case .processing: "Reading metadata locally"
-        case .selecting: "Choose the people to review"
-        case .reviewing: "Review is ready"
-        case .cancelling: "Cancelling and cleaning up"
-        case .error: "Collection stopped"
-        }
-    }
-
-    private var statusDetail: String {
-        switch model.phase {
-        case .idle, .error:
-            "For first use, connect one iPhone by USB, unlock it, and approve Apple's Trust prompt if shown. When no cable is present, an existing trusted Wi-Fi pairing may be used. If USB Trust fails, collection stops instead of switching transports."
-        case .connecting:
-            "Looking for one iPhone over USB first, or an existing trusted Wi-Fi pairing when no cable is present. Keep the phone unlocked and approve its Trust prompt if using USB. No phone data is sent to a server."
-        case .transferring:
-            "The phone may transfer more backup data than the helper retains. You can cancel."
-        case .passwordRequired:
-            "The phone's backup is encrypted. Enter its existing backup password to continue."
-        case .processing:
-            "The helper is reading allowlisted metadata and removing its temporary backup."
-        case .selecting:
-            "\(model.contacts.count) contacts available; \(model.availableCalls) calls and \(model.availableMessages) messages in the observed window."
-        case .reviewing:
-            "You can change the selection and review again, or disconnect."
-        case .cancelling:
-            "The helper is stopping. If the process crashes, leftover app-created data will be shown next launch."
-        }
-    }
 }
 
-private struct PanelStyle: ViewModifier {
+struct PanelStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -330,11 +352,11 @@ private struct PanelStyle: ViewModifier {
     }
 }
 
-private extension View {
+extension View {
     func panel() -> some View { modifier(PanelStyle()) }
 }
 
-private struct LimeButton: ButtonStyle {
+struct LimeButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.custom("Arial", size: 14).weight(.bold))
@@ -345,7 +367,7 @@ private struct LimeButton: ButtonStyle {
     }
 }
 
-private struct SecondaryButton: ButtonStyle {
+struct SecondaryButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.custom("Arial", size: 14).weight(.bold))

@@ -2,7 +2,7 @@ AMPLIFai Phone companion
 Copyright (C) 2026 OSIRS LLC
 SPDX-License-Identifier: GPL-3.0-or-later
 
-The project-authored Swift/Python/Java companions and their accompanying build and
+The project-authored Swift/Python companion and its accompanying build and
 packaging scripts are free software: you can redistribute them and/or modify
 them under the terms of the GNU General Public License as published by the
 Free Software Foundation, either version 3 of the License, or (at your option)

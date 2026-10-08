@@ -8,6 +8,12 @@
   <string>ai.satoris.amplifai.phone.candidate</string>
   <key>CFBundleName</key>
   <string>AMPLIFai Phone</string>
+  <key>CFBundleIconFile</key>
+  <string>AmplifaiPhone.icns</string>
+  <key>CFBundleShortVersionString</key>
+  <string>2026.10.08-rc6</string>
+  <key>CFBundleVersion</key>
+  <string>26100806</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>
