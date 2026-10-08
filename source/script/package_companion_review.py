@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Assemble an offline, artifact-bound source review package without modifying an app."""
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ PACKAGE_SCRIPTS = (
     "record_native_sources.py", "inventory_portable_helper.py", "extract_companion_notices.py",
     "render_companion_coverage.py", "scan_companion_bundle.py", "companion_release_preflight.sh",
     "package_companion_review.py", "test_companion_review_package.py",
-    "collect_companion_native_closure.py",
+    "collect_companion_native_closure.py", "verify_frozen_metadata.py",
 )
 
 
@@ -100,6 +99,16 @@ def copy_file(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def native_input_records(manifest: dict) -> list[dict]:
+    """Retain an already-reconciled closure, not just its two interpreter roots."""
+    records = manifest["records"]
+    required = {record["name"] for record in records
+                if record["name"] in {"CPython", "python-build-standalone"}}
+    if required != {"CPython", "python-build-standalone"}:
+        raise ValueError("CPython source and standalone build recipe are required")
+    return records
+
+
 def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output: Path,
              native_closures: tuple[Path, ...] = ()) -> dict:
     if output.exists() or output.is_symlink():
@@ -115,10 +124,7 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         raise ValueError("source manifest does not match the authored dependency lock")
     if locked != {record["name"]: record["version"] for record in inventory["locked_packages"]}:
         raise ValueError("app inventory does not match the authored dependency lock")
-    native_records = [record for record in native["records"]
-                      if record["name"] in {"CPython", "python-build-standalone"}]
-    if len(native_records) != 2:
-        raise ValueError("CPython source and standalone build recipe are required")
+    native_records = native_input_records(native)
     archive_records = [*sources["records"], *native_records]
     archives = evidence / "third_party/source_archives"
     archive_roots = {record["filename"]: archives for record in archive_records}
@@ -213,7 +219,7 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         "blockers": [
             *([] if nested_complete else ["OpenSSL and external Rust sources/notices in cryptography SBOM require reconciliation."]),
             *([] if interpreter_complete else ["CPython static input source closure is missing."]),
-            "Revised candidate has no distribution signing/notarization or owner-operated fresh install/phone proof.",
+            "This source package alone does not establish matching distribution signing/notarization or owner-operated fresh install/phone proof.",
         ],
         "verification_limits": [
             "Native source inputs are checksum-matched to the artifact SBOM/Cargo.lock and interpreter build recipe; native binaries have not been rebuilt from source.",

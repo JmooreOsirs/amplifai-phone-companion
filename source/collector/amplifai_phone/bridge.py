@@ -6,6 +6,7 @@ The owner must first select contacts and explicitly approve a browser handoff.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import re
@@ -14,6 +15,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from uuid import uuid4
 
 from .ios_backup import IPhoneCapture
 from .metadata import interactions_for_contacts, select_people
@@ -43,11 +45,27 @@ def selected_metadata(capture: IPhoneCapture, ids: set[int]) -> bytes:
     interactions = interactions_for_contacts(
         contacts, (capture.calls, capture.messages)
     )
+    included = {
+        "contacts": len(contacts),
+        "calls": sum(item.kind == "call" for item in interactions),
+        "messages": sum(item.kind == "message" for item in interactions),
+    }
+    sources = {
+        "contacts": capture.contacts,
+        "calls": capture.calls,
+        "messages": capture.messages,
+    }
+    if any(source.rows_seen < included[kind] for kind, source in sources.items()):
+        raise BridgeError("Source coverage counts are inconsistent")
     payload = {
         "schema": 1,
         "since": capture.since,
         "collectedAt": capture.collected_at,
         "missingSources": list(capture.missing_sources),
+        "sourceStats": {
+            kind: {"rowsSeen": source.rows_seen, "rowsIncluded": included[kind]}
+            for kind, source in sources.items()
+        },
         "contacts": [
             {"sourceId": item.source_id, "name": item.name, "phones": list(item.phones)}
             for item in contacts
@@ -84,6 +102,10 @@ class BridgeServer:
         now: Any = time.monotonic,
     ):
         self.payload = selected_metadata(capture, ids)
+        self.handoff_id = str(uuid4())
+        self.payload_sha256 = hashlib.sha256(self.payload).hexdigest()
+        self.acknowledged_saved = False
+        self.browser_confirmed_saved = False
         self.origin = origin
         self.now = now
         self.expires_at = now() + PAIR_SECONDS
@@ -126,7 +148,7 @@ class BridgeServer:
 
             def do_OPTIONS(self) -> None:
                 metadata_path = re.fullmatch(r"/v1/metadata(?:\?cursor=(0|[1-9][0-9]{0,3}))?", self.path)
-                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete") and metadata_path is None):
+                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete", "/v1/acknowledge-save", "/v1/confirm-ack-received") and metadata_path is None):
                     self._reply(403)
                     return
                 expected_method = "GET" if metadata_path is not None else "POST"
@@ -153,6 +175,12 @@ class BridgeServer:
                     return
                 if self.path == "/v1/complete":
                     self._complete()
+                    return
+                if self.path == "/v1/acknowledge-save":
+                    self._save_command(confirm_received=False)
+                    return
+                if self.path == "/v1/confirm-ack-received":
+                    self._save_command(confirm_received=True)
                     return
                 if self.path != "/v1/pair":
                     self._reply(403)
@@ -204,6 +232,9 @@ class BridgeServer:
                     body = json.dumps(
                         {
                             "token": bridge.token,
+                            "handoffId": bridge.handoff_id,
+                            "payloadSha256": bridge.payload_sha256,
+                            "confirmReceiptRequired": True,
                             "expiresInSeconds": max(
                                 0, int(bridge.expires_at - bridge.now())
                             ),
@@ -223,7 +254,7 @@ class BridgeServer:
                     self._reply(403)
                     return
                 with bridge.lock:
-                    if bridge.now() >= bridge.expires_at:
+                    if bridge.now() >= bridge.expires_at or bridge.closed:
                         self._reply(410)
                         return
                     if bridge.token is None or not hmac.compare_digest(
@@ -237,6 +268,60 @@ class BridgeServer:
                         return
                     bridge.used = True
                 self._reply(200, b'{"completed":true}')
+
+            def _save_command(self, *, confirm_received: bool) -> None:
+                """The browser confirms its received ACK before the helper may finish."""
+                if self.headers.get("Transfer-Encoding") or self.headers.get_all("Content-Type") != ["application/json"]:
+                    self._reply(415)
+                    return
+                authorizations = self.headers.get_all("Authorization")
+                with bridge.lock:
+                    if bridge.closed or (not bridge.used and bridge.now() >= bridge.expires_at):
+                        self._reply(410)
+                        return
+                    if (authorizations is None or len(authorizations) != 1 or bridge.token is None
+                            or not hmac.compare_digest(authorizations[0].encode("utf-8"), f"Bearer {bridge.token}".encode("ascii"))):
+                        self._reply(403)
+                        return
+                lengths = self.headers.get_all("Content-Length")
+                try:
+                    length = int(lengths[0]) if lengths is not None and len(lengths) == 1 else 0
+                except ValueError:
+                    length = 0
+                if not 0 < length <= MAX_REQUEST_BYTES:
+                    self._reply(413 if length > MAX_REQUEST_BYTES else 400)
+                    return
+                try:
+                    command = json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    self._reply(400)
+                    return
+                decision = "received" if confirm_received else "saved"
+                if (not isinstance(command, dict) or set(command) != {"handoffId", "payloadSha256", decision}
+                        or command.get(decision) is not True
+                        or not isinstance(command.get("handoffId"), str)
+                        or not isinstance(command.get("payloadSha256"), str)):
+                    self._reply(400)
+                    return
+                with bridge.lock:
+                    # The immutable pairing binds this assertion to exactly the reviewed metadata.
+                    if bridge.closed or (not bridge.used and bridge.now() >= bridge.expires_at):
+                        self._reply(410)
+                        return
+                    if not bridge.used or command["handoffId"] != bridge.handoff_id or command["payloadSha256"] != bridge.payload_sha256:
+                        self._reply(409)
+                        return
+                    if confirm_received:
+                        if not bridge.acknowledged_saved:
+                            self._reply(409)
+                            return
+                        # Finish only after the final response has been written; a
+                        # broken connection keeps the exact retryable review open.
+                        self._reply(200, b'{"received":true}')
+                        bridge.browser_confirmed_saved = True
+                        return
+                    bridge.acknowledged_saved = True
+                self._reply(200, b'{"acknowledged":true}')
 
             def do_GET(self) -> None:
                 if not self._authorized_origin():
@@ -285,12 +370,40 @@ class BridgeServer:
         self.httpd = LocalHTTPServer(("127.0.0.1", port), Handler)
         self.port = self.httpd.server_port
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
-        self.timer = threading.Timer(PAIR_SECONDS, self.close)
+        self.timer = threading.Timer(PAIR_SECONDS, self._expire_unclaimed)
         self.timer.daemon = True
 
     def start(self) -> None:
         self.thread.start()
         self.timer.start()
+
+    def handoff_state(self) -> str:
+        with self.lock:
+            if self.browser_confirmed_saved:
+                return "saved"
+            if self.acknowledged_saved:
+                return "saved_pending_browser_receipt"
+            if self.closed or (not self.used and self.now() >= self.expires_at):
+                return "expired"
+            return "received" if self.used else "waiting"
+
+    def _expire_unclaimed(self) -> None:
+        # The code and metadata transfer expire in five minutes. Once transferred,
+        # this process-bound, exact-origin ACK endpoint remains available until
+        # the user finishes, revokes, disconnects, or closes the companion.
+        with self.lifecycle_lock:
+            with self.lock:
+                if self.closed or self.used:
+                    return
+                self.closed = True
+        self.timer.cancel()
+        self._shutdown()
+
+    def _shutdown(self) -> None:
+        if self.thread.is_alive():
+            self.httpd.shutdown()
+            self.thread.join(timeout=2)
+        self.httpd.server_close()
 
     def close(self) -> None:
         with self.lifecycle_lock:
@@ -298,7 +411,4 @@ class BridgeServer:
                 return
             self.closed = True
         self.timer.cancel()
-        if self.thread.is_alive():
-            self.httpd.shutdown()
-            self.thread.join(timeout=2)
-        self.httpd.server_close()
+        self._shutdown()

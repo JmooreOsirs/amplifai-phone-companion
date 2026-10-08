@@ -71,6 +71,11 @@ class BridgeTest(unittest.TestCase):
         self.assertNotIn("ada@example.test", json.dumps(payload))
         self.assertNotIn("Outside Selection", json.dumps(payload))
         self.assertEqual(payload["missingSources"], ["messages"])
+        self.assertEqual(payload["sourceStats"], {
+            "contacts": {"rowsSeen": 2, "rowsIncluded": 1},
+            "calls": {"rowsSeen": 2, "rowsIncluded": 1},
+            "messages": {"rowsSeen": 0, "rowsIncluded": 0},
+        })
 
     def test_exact_origin_host_code_and_one_use_token(self) -> None:
         bridge = BridgeServer(fixture(), {1}, port=0)
