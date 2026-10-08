@@ -1,7 +1,7 @@
 # October 8 rc8 package inputs
 
 The published rc7 is `2026.10.08-rc7`, build `26100807`, and remains the
-rollback download. This source is versioned `2026.10.08-rc8`, build `26100808`;
+rollback download. This source is versioned `2026.10.08-rc9`, build `26100809`;
 it requires a newly signed/notarized app and matching helper. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.

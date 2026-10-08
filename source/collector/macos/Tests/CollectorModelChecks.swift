@@ -253,7 +253,7 @@ struct CollectorModelChecks {
         try require(model.failureContext.contains("1.0 KiB") && model.failureContext.contains("partial"), "Error view must retain last observed transfer and clarify no metadata save")
         try require(!model.failureContext.contains("phone owner"), "No private device reason may be rendered")
         let fields = model.safeSupportCode.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100808", "Support code must declare its bounded schema and exact build")
+        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100809", "Support code must declare its bounded schema and exact build")
         try require(fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil, "A fresh opaque report reference is required before browser pairing")
         try require(fields[3...8].elementsEqual(["backup", "device_backup_failed", "1800", "1024", "0", "205"]), "Pre-pair failure report must preserve safe first code, stage, elapsed, bytes and device status")
         try require(!model.safeSupportCode.contains("phone owner"), "Support code cannot include private phone text")

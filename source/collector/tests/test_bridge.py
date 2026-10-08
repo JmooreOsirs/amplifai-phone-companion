@@ -84,6 +84,47 @@ class BridgeTest(unittest.TestCase):
                 store.close()
                 workspace.__exit__(None, None, None)
 
+    def test_long_contact_name_survives_v2_page_without_manifest_clipping(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-long-name-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            long_name = "Full " + "N" * 320
+            try:
+                store.add("contacts", Contact(1, long_name, ("+15551234567",), ()))
+                capture = IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                        SourceResult(0, store.collection("calls"), 0),
+                                        SourceResult(0, store.collection("messages"), 0),
+                                        "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (), workspace, store)
+                transfer = PagedTransfer(capture, {1}, directory / "transfer.sqlite3")
+                try:
+                    self.assertEqual(transfer.manifest["sampleContactNames"], [])
+                    self.assertEqual(json.loads(transfer.page("contacts", 0)["chunk"])[0]["name"], long_name)
+                finally:
+                    transfer.close()
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
+    def test_contact_name_larger_than_one_page_fails_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-name-limit-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                store.add("contacts", Contact(1, "N" * (128 * 1024), ("+15551234567",), ()))
+                capture = IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                        SourceResult(0, store.collection("calls"), 0),
+                                        SourceResult(0, store.collection("messages"), 0),
+                                        "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (), workspace, store)
+                transfer_path = directory / "transfer.sqlite3"
+                with self.assertRaisesRegex(ValueError, "exceeds one transfer page"):
+                    PagedTransfer(capture, {1}, transfer_path)
+                self.assertFalse(transfer_path.exists())
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
     def test_private_paged_transfer_has_exact_counts_hashes_and_ordered_retries(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-transfer-test-") as temporary:
             workspace = SessionWorkspace(Path(temporary) / "sessions")

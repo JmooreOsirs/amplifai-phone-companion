@@ -277,7 +277,7 @@ def read_contacts(
                     if isinstance(part, str) and part.strip()
                 )
                 if name or phones or emails:
-                    contact = Contact(row["ROWID"], name[:240], tuple(phones), tuple(emails))
+                    contact = Contact(row["ROWID"], name, tuple(phones), tuple(emails))
                     if store is None:
                         contacts.append(contact)
                     else:

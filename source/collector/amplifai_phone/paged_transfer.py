@@ -62,7 +62,9 @@ class PagedTransfer:
             samples: list[str] = []
             def sampled_contacts() -> Iterator[Contact]:
                 for item in contact_rows:
-                    if len(samples) < 3:
+                    # The manifest is a bounded label sample, never the contact record.
+                    # Skip long labels rather than clipping a reviewed person's name.
+                    if len(samples) < 3 and len(item.name) <= 240:
                         samples.append(item.name or "Unnamed contact")
                     yield item
             for category, rows, seen in (

@@ -1,7 +1,7 @@
-# AMPLIFai Phone 2026.10.08-rc8 companion source
+# AMPLIFai Phone 2026.10.08-rc9 companion source
 
-This package is prepared for the matching `2026.10.08-rc8` Mac app, build
-`26100808`; publication and binary checksums are separate release steps. The
+This package is prepared for the matching `2026.10.08-rc9` Mac app, build
+`26100809`; publication and binary checksums are separate release steps. The
 filtered receiver drains unselected full-backup bytes, while every retained
 write and parsing copy checks real Mac storage with a further 2 GiB reserve.
 It distinguishes an early host-space refusal from generic collection failure

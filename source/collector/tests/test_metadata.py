@@ -81,6 +81,23 @@ class MetadataTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_disk_backed_contact_name_is_not_silently_clipped(self) -> None:
+        full_name = "Long " + "N" * 320
+        path = self.make_db("long-contact.db", [
+            "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+        ])
+        with sqlite3.connect(path) as db:
+            db.execute("INSERT INTO ABPerson VALUES (?, NULL)", (full_name,))
+            db.execute("INSERT INTO ABMultiValue VALUES (1, 3, '+15551234567')")
+        store = RecordStore(self.root / "long-contact-sanitized.sqlite3")
+        try:
+            result = read_contacts(path, store=store)
+            self.assertEqual((result.rows_seen, len(result.records)), (1, 1))
+            self.assertEqual(result.records[0].name, full_name)
+        finally:
+            store.close()
+
     def test_disk_backed_interactions_match_only_selected_phones(self) -> None:
         path = self.make_calls("paged-calls.db", [
             (cocoa("2026-09-01T12:00:00+00:00"), 30, f"+1202555010{index}", 1, 1)
