@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from amplifai_phone.bridge import BridgeError, BridgeServer, selected_metadata
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import Contact, Interaction, SourceResult
+from amplifai_phone.paged_transfer import EMPTY_CHAIN, PagedTransfer
+from amplifai_phone.record_store import RecordStore, storage_failure
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 
 def fixture() -> IPhoneCapture:
@@ -52,6 +59,223 @@ def fixture() -> IPhoneCapture:
 
 
 class BridgeTest(unittest.TestCase):
+    def test_sqlite_full_and_io_errors_remain_storage_failures(self) -> None:
+        full = sqlite3.OperationalError("database or disk is full")
+        full.sqlite_errorcode = sqlite3.SQLITE_FULL
+        io_error = sqlite3.OperationalError("disk I/O error")
+        io_error.sqlite_errorcode = sqlite3.SQLITE_IOERR
+        self.assertEqual(storage_failure(full).code, "workspace_low_space")
+        self.assertEqual(storage_failure(io_error).code, "workspace_unavailable")
+        with tempfile.TemporaryDirectory(prefix="amplifai-sqlite-full-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                store.add("contacts", Contact(1, "Synthetic", ("+15551234567",), ()))
+                capture = IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                        SourceResult(0, store.collection("calls"), 0),
+                                        SourceResult(0, store.collection("messages"), 0),
+                                        "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (), workspace, store)
+                with (patch("amplifai_phone.paged_transfer.sqlite3.connect", side_effect=full),
+                      self.assertRaises(WorkspaceError) as raised):
+                    BridgeServer(capture, {1}, port=0)
+                self.assertEqual(raised.exception.code, "workspace_low_space")
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
+    def test_private_paged_transfer_has_exact_counts_hashes_and_ordered_retries(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-transfer-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                store.add("contacts", Contact(1, "Ada Synthetic", ("+15551234567",), ("private@example.test",)))
+                for index in range(250):
+                    store.add("calls", Interaction(index + 1, "call", "call", "2026-09-01T00:00:00Z",
+                                                   "incoming", ("+15551234567",), 30))
+                capture = IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                        SourceResult(260, store.collection("calls"), 10),
+                                        SourceResult(0, store.collection("messages"), 0),
+                                        "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (), workspace, store)
+                with patch("amplifai_phone.bridge.MAX_TRANSFER_BYTES", 8):
+                    bridge = BridgeServer(capture, {1}, port=0)
+                bridge.start()
+                try:
+                    status, _, body = self.request(bridge, "POST", "/v1/pair", {"code": bridge.code})
+                    self.assertEqual(status, 200)
+                    paired = json.loads(body)
+                    self.assertEqual(paired["format"], "paged-records-v2")
+                    manifest = json.loads(paired["manifestJson"])
+                    self.assertEqual(hashlib.sha256(paired["manifestJson"].encode("ascii")).hexdigest(), paired["payloadSha256"])
+                    self.assertEqual(manifest["sources"]["calls"]["rowsIncluded"], 250)
+                    self.assertEqual(manifest["sources"]["calls"]["rowsSeen"], 260)
+                    self.assertNotIn("private@example.test", body.decode())
+                    token = f"Bearer {paired['token']}"
+                    status, _, _ = self.request(bridge, "GET", "/v2/source/calls?cursor=1", authorization=token)
+                    self.assertEqual(status, 409)
+                    status, _, _ = self.request(bridge, "POST", "/v1/complete", authorization=token)
+                    self.assertEqual(status, 409)
+                    for category in ("contacts", "calls"):
+                        chain = EMPTY_CHAIN
+                        cursor = 0
+                        count = 0
+                        while True:
+                            path = f"/v2/source/{category}?cursor={cursor}"
+                            status, _, body = self.request(bridge, "GET", path, authorization=token)
+                            self.assertEqual(status, 200)
+                            page = json.loads(body)
+                            if cursor == 0:
+                                repeat_status, _, repeated = self.request(bridge, "GET", path, authorization=token)
+                                self.assertEqual((repeat_status, repeated), (200, body))
+                            digest = hashlib.sha256(page["chunk"].encode("ascii")).hexdigest()
+                            self.assertEqual(page["pageSha256"], digest)
+                            chain = hashlib.sha256((chain + digest).encode("ascii")).hexdigest()
+                            count += len(json.loads(page["chunk"]))
+                            if page["nextCursor"] is None:
+                                break
+                            cursor = page["nextCursor"]
+                        self.assertEqual(count, manifest["sources"][category]["rowsIncluded"])
+                        self.assertEqual(chain, manifest["sources"][category]["chainSha256"])
+                    status, _, body = self.request(bridge, "POST", "/v1/complete", authorization=token)
+                    self.assertEqual((status, json.loads(body)), (200, {"completed": True,
+                        "sources": {"contacts": "delivered", "calls": "delivered", "messages": "delivered"}}))
+                finally:
+                    bridge.close()
+                self.assertFalse((directory / f"handoff-{bridge.handoff_id}.sqlite3").exists())
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
+    def test_declined_source_is_terminal_and_cannot_be_replayed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-decline-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                store.add("contacts", Contact(1, "Synthetic", ("+15551234567",), ()))
+                store.add("calls", Interaction(1, "call", "call", "2026-09-01T00:00:00Z",
+                                               "incoming", ("+15551234567",), 30))
+                capture = IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                        SourceResult(1, store.collection("calls"), 0),
+                                        SourceResult(0, store.collection("messages"), 0),
+                                        "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (), workspace, store)
+                bridge = BridgeServer(capture, {1}, port=0)
+                bridge.start()
+                try:
+                    status, _, body = self.request(bridge, "POST", "/v1/pair", {"code": bridge.code})
+                    self.assertEqual(status, 200)
+                    paired = json.loads(body)
+                    token = f"Bearer {paired['token']}"
+                    status, _, body = self.request(bridge, "POST", "/v2/decline",
+                        {"handoffId": bridge.handoff_id, "payloadSha256": bridge.payload_sha256,
+                         "category": "calls"}, authorization=token)
+                    self.assertEqual((status, json.loads(body)), (200, {"declined": True}))
+                    retry_status, _, retry_body = self.request(bridge, "POST", "/v2/decline",
+                        {"handoffId": bridge.handoff_id, "payloadSha256": bridge.payload_sha256,
+                         "category": "calls"}, authorization=token)
+                    self.assertEqual((retry_status, retry_body), (status, body))
+                    for _ in range(2):
+                        status, _, _ = self.request(bridge, "GET", "/v2/source/calls?cursor=0", authorization=token)
+                        self.assertEqual(status, 410)
+                    status, _, _ = self.request(bridge, "POST", "/v1/complete", authorization=token)
+                    self.assertEqual(status, 409)
+                    status, _, _ = self.request(bridge, "GET", "/v2/source/contacts?cursor=0", authorization=token)
+                    self.assertEqual(status, 200)
+                    status, _, body = self.request(bridge, "POST", "/v1/complete", authorization=token)
+                    self.assertEqual((status, json.loads(body)), (200, {"completed": True,
+                        "sources": {"contacts": "delivered", "calls": "declined", "messages": "delivered"}}))
+                finally:
+                    bridge.close()
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
+    def test_over_legacy_selection_and_256_part_source_remains_paged(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-volume-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                total = 26_001
+                review_id = "00000000-0000-4000-8000-000000000001"
+                for source_id in range(1, total + 1):
+                    store.add("contacts", Contact(source_id, f"Synthetic {source_id}",
+                                                  (f"+1555{source_id:07d}",), ()))
+                contacts = store.collection("contacts")
+                calls = store.collection("calls")
+                messages = store.collection("messages")
+                snapshot = None
+                for cursor in range(0, total, 1000):
+                    snapshot = store.append_selection(review_id, cursor,
+                        list(range(cursor + 1, min(total, cursor + 1000) + 1)), total)
+                self.assertIsNotNone(snapshot)
+                self.assertEqual(snapshot.count, total)
+                capture = IPhoneCapture(SourceResult(total, contacts, 0), SourceResult(0, calls, 0),
+                                        SourceResult(0, messages, 0), "2026-09-23T00:00:00Z",
+                                        "2026-03-23T00:00:00Z", (), workspace, store)
+                with patch("amplifai_phone.paged_transfer.select_people", side_effect=AssertionError("whole selection")):
+                    transfer = PagedTransfer(capture, snapshot, directory / "volume-handoff.sqlite3")
+                try:
+                    source = transfer.manifest["sources"]["contacts"]
+                    self.assertEqual(source["rowsIncluded"], total)
+                    self.assertGreater(source["pageCount"], 256)
+                    self.assertIsNotNone(transfer.page("contacts", 256))
+                finally:
+                    transfer.close()
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
+    def test_active_v2_transfer_outlives_pair_code_and_has_sliding_inactivity(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-session-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                store.add("contacts", Contact(1, "Synthetic", ("+15551234567",), ()))
+                store.add("calls", Interaction(1, "call", "call", "2026-09-01T00:00:00Z",
+                                               "incoming", ("+15551234567",), 30))
+                capture = IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                        SourceResult(1, store.collection("calls"), 0),
+                                        SourceResult(0, store.collection("messages"), 0),
+                                        "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (), workspace, store)
+                tick = [0.0]
+                bridge = BridgeServer(capture, {1}, port=0, now=lambda: tick[0])
+                bridge.start()
+                try:
+                    status, _, body = self.request(bridge, "POST", "/v1/pair", {"code": bridge.code})
+                    self.assertEqual(status, 200)
+                    token = f"Bearer {json.loads(body)['token']}"
+                    tick[0] = 301.0
+                    status, _, _ = self.request(bridge, "GET", "/v2/source/contacts?cursor=0", authorization=token)
+                    self.assertEqual(status, 200)
+                    tick[0] = 7300.0
+                    status, _, _ = self.request(bridge, "GET", "/v2/source/calls?cursor=0", authorization=token)
+                    self.assertEqual(status, 200)
+                    status, _, _ = self.request(bridge, "POST", "/v1/complete", authorization=token)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(bridge.handoff_state(), "received")
+                    tick[0] = 14_000.0
+                    status, _, _ = self.request(bridge, "POST", "/v2/keepalive")
+                    self.assertEqual(status, 403)
+                    status, _, _ = self.request(bridge, "POST", "/v2/keepalive", authorization=token,
+                                                origin="https://evil.test")
+                    self.assertEqual(status, 403)
+                    status, _, body = self.request(bridge, "POST", "/v2/keepalive", authorization=token)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(body), {"active": True})
+                    tick[0] = 14_501.0
+                    self.assertEqual(bridge.handoff_state(), "received")
+                    tick[0] = 21_201.0
+                    self.assertEqual(self.request(bridge, "POST", "/v2/keepalive", authorization=token)[0], 410)
+                    self.assertEqual(bridge.handoff_state(), "expired")
+                finally:
+                    bridge.close()
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
     def test_empty_selection_and_oversize_payload_fail_before_listen(self) -> None:
         with self.assertRaises(BridgeError):
             BridgeServer(fixture(), set(), port=0)

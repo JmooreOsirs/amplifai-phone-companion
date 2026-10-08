@@ -1,10 +1,14 @@
 import Foundation
 import SwiftUI
 import Darwin
+import CryptoKit
 
 @MainActor
 final class CollectorModel: ObservableObject {
-    private let maxSelectedContacts = 25_000
+    private let contactPageSize = 200
+    private let reviewPageSize = 1000
+    private let maxContactQueryLength = 120
+    private static let maxHelperCommandBytes = 600_000
     static let collectionDisclosureVersion = "native-local-collection-v2"
     private static let localCollectionScopes = ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"]
     struct LocalCollectionApproval: Equatable {
@@ -40,7 +44,13 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var selectionNeedsReview = true
     @Published var password = ""
     @Published var contacts: [ContactPreview] = []
+    @Published private(set) var totalContacts = 0
+    @Published private(set) var currentContactCursor = 0
+    @Published private(set) var nextContactCursor: Int?
+    @Published private(set) var contactQuery = ""
+    @Published private(set) var contactSearchPending = false
     @Published var selectedIDs: Set<Int> = []
+    @Published private(set) var reviewPending = false
     @Published var availableCalls = 0
     @Published var availableMessages = 0
     @Published var matchedCalls = 0
@@ -70,8 +80,18 @@ final class CollectorModel: ObservableObject {
     private var outputEnded = false
     private var exitCode: Int32?
     private var cancellationRequested = false
+    private let commandWriter: ((Data) -> Void)?
     private var cancellationTask: Task<Void, Never>?
     private var handoffPollTask: Task<Void, Never>?
+    private var contactSearchTask: Task<Void, Never>?
+    private var expectedContactCursor = 0
+    private var contactPageStarts: [Int] = []
+    private var pendingReviewID: String?
+    private var pendingReviewIDs: Set<Int>?
+    private var pendingReviewPageIDs: [Int] = []
+    private var pendingReviewNextCursor = 0
+    private var pendingReviewSHA: String?
+    private var reviewedSelectionIDs: Set<Int>?
     private var pairingRequested = false
     private var lastErrorCode: String?
     private var lastErrorStage: String?
@@ -84,6 +104,12 @@ final class CollectorModel: ObservableObject {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return decoder
     }()
+
+    init(commandWriter: ((Data) -> Void)? = nil) {
+        self.commandWriter = commandWriter
+    }
+
+    private var commandReady: Bool { helperRunning || commandWriter != nil }
 
     var canPrepareCollection: Bool {
         !helperRunning && process == nil && !needsStorageReview && residues.isEmpty && !hasUnsavedReview &&
@@ -118,7 +144,9 @@ final class CollectorModel: ObservableObject {
         handoffAcknowledged && phase == .completed && !helperRunning && !needsStorageReview && residues.isEmpty
     }
 
-    var hasUnsavedReview: Bool { !contacts.isEmpty && !handoffAcknowledged }
+    var hasUnsavedReview: Bool { totalContacts > 0 && !handoffAcknowledged }
+    var isSearchingContacts: Bool { contactSearchPending && contacts.isEmpty }
+    var hasPreviousContactPage: Bool { !contactPageStarts.isEmpty }
     var activeFlow: Bool { helperRunning || hasUnsavedReview }
 
     static func byteDescription(_ value: Int64) -> String {
@@ -189,7 +217,7 @@ final class CollectorModel: ObservableObject {
         let stage = lastErrorStage ?? "connecting"
         let code = lastErrorCode.flatMap { SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100807"
+            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26100808"
         return "A1|\(build)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
     }
 
@@ -224,9 +252,20 @@ final class CollectorModel: ObservableObject {
         errorElapsedSeconds = 0
         lastDeviceStatus = nil
         contacts = []
+        totalContacts = 0
+        currentContactCursor = 0
+        nextContactCursor = nil
+        contactQuery = ""
+        contactSearchPending = false
+        contactSearchTask?.cancel()
+        contactSearchTask = nil
+        expectedContactCursor = 0
+        contactPageStarts = []
         lastErrorCode = nil
         lastErrorStage = nil
         selectedIDs = []
+        clearPendingReview()
+        reviewedSelectionIDs = nil
         availableCalls = 0
         availableMessages = 0
         matchedCalls = 0
@@ -268,6 +307,8 @@ final class CollectorModel: ObservableObject {
     }
 
     func toggle(_ id: Int) {
+        guard !reviewPending else { return }
+        reviewedSelectionIDs = nil
         if pairingRequested || !pairCode.isEmpty {
             send(["action": "revoke"])
             pairCode = ""
@@ -277,20 +318,101 @@ final class CollectorModel: ObservableObject {
         phase = .selecting
         if selectedIDs.contains(id) {
             selectedIDs.remove(id)
-        } else if selectedIDs.count < maxSelectedContacts {
+        } else {
             selectedIDs.insert(id)
         }
     }
 
+    func searchContacts(_ query: String) {
+        guard phase == .selecting || phase == .reviewing, commandReady,
+              !reviewPending,
+              query.unicodeScalars.count <= maxContactQueryLength else { return }
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != contactQuery else { return }
+        contactSearchTask?.cancel()
+        contactQuery = trimmed
+        contacts = []
+        currentContactCursor = 0
+        nextContactCursor = nil
+        expectedContactCursor = 0
+        contactPageStarts = []
+        contactSearchPending = true
+        contactSearchTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            self?.send(["action": "contacts", "query": trimmed, "cursor": 0])
+        }
+    }
+
+    func loadMoreContacts() {
+        guard (phase == .selecting || phase == .reviewing), commandReady,
+              !reviewPending, !contactSearchPending,
+              let cursor = nextContactCursor else { return }
+        contactPageStarts.append(currentContactCursor)
+        expectedContactCursor = cursor
+        contactSearchPending = true
+        send(["action": "contacts", "query": contactQuery, "cursor": cursor])
+    }
+
+    func previousContacts() {
+        guard (phase == .selecting || phase == .reviewing), commandReady,
+              !reviewPending, !contactSearchPending,
+              let cursor = contactPageStarts.popLast() else { return }
+        expectedContactCursor = cursor
+        contactSearchPending = true
+        send(["action": "contacts", "query": contactQuery, "cursor": cursor])
+    }
+
     func review() {
         guard phase == .selecting || phase == .reviewing else { return }
-        guard !selectedIDs.isEmpty && selectedIDs.count <= maxSelectedContacts else { return }
+        guard commandReady, !reviewPending, !contactSearchPending,
+              !selectedIDs.isEmpty else { return }
+        let reviewID = UUID().uuidString.lowercased()
+        pendingReviewID = reviewID
+        pendingReviewIDs = selectedIDs
+        pendingReviewPageIDs = selectedIDs.sorted()
+        pendingReviewNextCursor = 0
+        pendingReviewSHA = Self.selectionDigest(pendingReviewPageIDs)
+        reviewedSelectionIDs = nil
+        reviewPending = true
+        selectionNeedsReview = true
+        phase = .selecting
         resetHandoff()
-        send(["action": "review", "ids": selectedIDs.sorted()])
+        sendReviewPage()
+    }
+
+    static func selectionDigest(_ ids: [Int]) -> String {
+        var digest = SHA256()
+        for id in ids {
+            digest.update(data: Data("\(id)\n".utf8))
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func sendReviewPage() {
+        guard let reviewID = pendingReviewID,
+              pendingReviewNextCursor < pendingReviewPageIDs.count else { return }
+        let start = pendingReviewNextCursor
+        let end = min(start + reviewPageSize, pendingReviewPageIDs.count)
+        pendingReviewNextCursor = end
+        send(["action": "review-page", "reviewId": reviewID,
+              "cursor": start, "total": pendingReviewPageIDs.count,
+              "ids": Array(pendingReviewPageIDs[start..<end])])
+    }
+
+    private func clearPendingReview() {
+        reviewPending = false
+        pendingReviewID = nil
+        pendingReviewIDs = nil
+        pendingReviewPageIDs = []
+        pendingReviewNextCursor = 0
+        pendingReviewSHA = nil
     }
 
     func pairBrowser() {
-        guard phase == .reviewing, !selectedIDs.isEmpty, !selectionNeedsReview else { return }
+        guard phase == .reviewing, !selectedIDs.isEmpty,
+              !reviewPending, !selectionNeedsReview,
+              reviewedSelectionIDs == selectedIDs else { return }
         resetHandoff()
         pairingRequested = true
         send(["action": "pair"])
@@ -322,7 +444,18 @@ final class CollectorModel: ObservableObject {
     private func clearPrivateReview() {
         password = ""
         contacts = []
+        totalContacts = 0
+        currentContactCursor = 0
+        nextContactCursor = nil
+        contactQuery = ""
+        contactSearchPending = false
+        contactSearchTask?.cancel()
+        contactSearchTask = nil
+        expectedContactCursor = 0
+        contactPageStarts = []
         selectedIDs = []
+        clearPendingReview()
+        reviewedSelectionIDs = nil
         pairCode = ""
         pairPort = 0
         matchedCalls = 0
@@ -476,15 +609,27 @@ final class CollectorModel: ObservableObject {
         }
     }
 
+    static func encodedHelperCommand(_ command: [String: Any]) -> Data? {
+        guard let data = try? JSONSerialization.data(withJSONObject: command),
+              data.count + 1 <= maxHelperCommandBytes else { return nil }
+        return data + Data([10])
+    }
+
     private func send(_ command: [String: Any]) {
-        guard let inputHandle,
-              let data = try? JSONSerialization.data(withJSONObject: command),
-              data.count <= 4095 else {
+        guard let data = Self.encodedHelperCommand(command) else {
+            fail("The local connection is unavailable.")
+            return
+        }
+        if let commandWriter {
+            commandWriter(data)
+            return
+        }
+        guard let inputHandle else {
             fail("The local connection is unavailable.")
             return
         }
         do {
-            try inputHandle.write(contentsOf: data + Data([10]))
+            try inputHandle.write(contentsOf: data)
         } catch {
             fail("The local connection closed. Connect again.")
         }
@@ -512,6 +657,32 @@ final class CollectorModel: ObservableObject {
             }
             receive(event)
         }
+    }
+
+    private func validContactPage(_ page: [ContactPreview], total: Int, cursor: Int,
+                                  next: Int?, query: String) -> Bool {
+        guard (0...1_000_000).contains(total), (0...total).contains(cursor),
+              page.count <= contactPageSize, query.unicodeScalars.count <= maxContactQueryLength,
+              Set(page.map(\.id)).count == page.count,
+              page.allSatisfy({ contact in
+                  contact.id >= 0 && contact.name.unicodeScalars.count <= 240 &&
+                  (0...20).contains(contact.phoneCount) &&
+                  contact.phoneEnds.count == contact.phoneCount &&
+                  contact.phoneEnds.allSatisfy({ $0.count == 4 && $0.allSatisfy(\.isNumber) })
+              }) else { return false }
+        if let next {
+            guard next >= cursor + page.count, next <= total,
+                  page.count == contactPageSize else { return false }
+            if query.isEmpty && next != cursor + page.count { return false }
+        } else if query.isEmpty && cursor + page.count != total { return false }
+        return true
+    }
+
+    private func rejectContactPage() {
+        process?.terminate()
+        needsStorageReview = true
+        awaitHelperExit()
+        fail("The local helper returned an incomplete contact page. No metadata was saved. Check temporary data before reconnecting.")
     }
 
     func receive(_ event: AgentEvent) {
@@ -571,15 +742,72 @@ final class CollectorModel: ObservableObject {
         case "connection":
             connectionTransport = event.transport == "wifi" ? "Wi-Fi" : "USB"
         case "capture":
+            let firstPage = event.contacts ?? []
+            let total = event.totalContacts ?? firstPage.count
+            guard (event.query ?? "").isEmpty, (event.cursor ?? 0) == 0,
+                  validContactPage(firstPage, total: total, cursor: 0,
+                                   next: event.nextCursor, query: "") else {
+                rejectContactPage()
+                return
+            }
             declineLocalCollection()
-            contacts = event.contacts ?? []
+            contacts = firstPage
+            totalContacts = total
+            currentContactCursor = 0
+            nextContactCursor = event.nextCursor
+            contactQuery = ""
+            contactSearchPending = false
+            expectedContactCursor = event.nextCursor ?? 0
+            contactPageStarts = []
             availableCalls = event.availableCalls ?? 0
             availableMessages = event.availableMessages ?? 0
             since = event.since ?? ""
             missingSources = event.missing ?? []
             selectionNeedsReview = true
             phase = .selecting
+        case "contacts":
+            guard phase == .selecting || phase == .reviewing else { return }
+            guard event.query == contactQuery, event.cursor == expectedContactCursor else { return }
+            guard let page = event.contacts, event.totalContacts == totalContacts,
+                  validContactPage(page, total: totalContacts, cursor: expectedContactCursor,
+                                   next: event.nextCursor, query: contactQuery) else {
+                rejectContactPage()
+                return
+            }
+            contacts = page
+            currentContactCursor = expectedContactCursor
+            nextContactCursor = event.nextCursor
+            contactSearchPending = false
+            expectedContactCursor = event.nextCursor ?? 0
+        case "review-page":
+            guard reviewPending, event.reviewId == pendingReviewID,
+                  event.nextCursor == pendingReviewNextCursor else { return }
+            sendReviewPage()
         case "review":
+            guard let pendingReviewID, let pendingReviewIDs else { return }
+            guard let eventReviewID = event.reviewId else {
+                clearPendingReview()
+                reviewedSelectionIDs = nil
+                selectionNeedsReview = true
+                phase = .selecting
+                errorMessage = "The local helper did not confirm this selection. Reinstall the matching signed companion before retrying review."
+                return
+            }
+            guard eventReviewID == pendingReviewID else { return }
+            let expectedSHA = pendingReviewSHA
+            let expectedCount = pendingReviewPageIDs.count
+            clearPendingReview()
+            guard selectedIDs == pendingReviewIDs,
+                  event.selectedContacts == pendingReviewIDs.count,
+                  event.selectedContacts == expectedCount,
+                  event.selectionSha256 == expectedSHA else {
+                reviewedSelectionIDs = nil
+                selectionNeedsReview = true
+                phase = .selecting
+                errorMessage = "The selected contacts changed during review. Review them again before pairing."
+                return
+            }
+            reviewedSelectionIDs = pendingReviewIDs
             pairCode = ""
             resetHandoff()
             selectionNeedsReview = false
@@ -593,7 +821,8 @@ final class CollectorModel: ObservableObject {
             missingSources = event.missingSources ?? missingSources
             phase = .reviewing
         case "pairing":
-            guard phase == .reviewing, !selectionNeedsReview else { return }
+            guard phase == .reviewing, !reviewPending, !selectionNeedsReview,
+                  reviewedSelectionIDs == selectedIDs else { return }
             pairingRequested = false
             errorMessage = ""
             pairCode = event.pairCode ?? ""
@@ -602,7 +831,8 @@ final class CollectorModel: ObservableObject {
             pollHandoff()
         case "handoff":
             guard !handoffID.isEmpty, event.handoffId?.lowercased() == handoffID,
-                  phase == .reviewing, !selectionNeedsReview else { return }
+                  phase == .reviewing, !reviewPending, !selectionNeedsReview,
+                  reviewedSelectionIDs == selectedIDs else { return }
             if event.state == "received" { browserReceived = true }
             if event.state == "expired" {
                 resetHandoff()
@@ -632,6 +862,10 @@ final class CollectorModel: ObservableObject {
             lastErrorStage = ["connecting", "backup", "processing", "review"].contains(event.stage ?? "") ? event.stage : nil
             lastDeviceStatus = event.code == "device_backup_failed" && event.deviceCode.map({ (-2_147_483_648...4_294_967_295).contains($0) }) == true ? event.deviceCode : nil
             if event.code == "selection" {
+                clearPendingReview()
+                reviewedSelectionIDs = nil
+                selectionNeedsReview = true
+                phase = .selecting
                 errorMessage = "Choose supported contacts from this phone."
             } else if event.code == "bridge_unavailable" {
                 errorMessage = "Local browser pairing could not start. Keep the review here or try again."
@@ -668,6 +902,10 @@ final class CollectorModel: ObservableObject {
         declineLocalCollection()
         cancellationTask?.cancel()
         cancellationTask = nil
+        contactSearchTask?.cancel()
+        contactSearchTask = nil
+        contactSearchPending = false
+        clearPendingReview()
         outputHandle?.readabilityHandler = nil
         try? outputHandle?.close()
         outputHandle = nil
@@ -686,11 +924,16 @@ final class CollectorModel: ObservableObject {
         if mode == "connect" && code != 0 && phase != .error && phase != .idle {
             fail(code == 130 ? "Collection was cancelled." : "Collection stopped. Check the phone and try again.")
         }
+        if mode == "connect" && code == 0 && !handoffAcknowledged && phase != .error && phase != .idle {
+            fail("The local helper stopped before this account save was confirmed. Keep this review and reconnect before trying again.")
+        }
         if mode == "connect" && needsStorageReview { inspectResidue() }
     }
 
     private func fail(_ message: String) {
         declineLocalCollection()
+        clearPendingReview()
+        reviewedSelectionIDs = nil
         if diagnosticReference.isEmpty { diagnosticReference = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)) }
         let wallElapsed = collectionStartedAt.map { Int(max(0, min(172_800, Date().timeIntervalSince($0)))) } ?? 0
         errorElapsedSeconds = max(transferElapsedSeconds, wallElapsed)

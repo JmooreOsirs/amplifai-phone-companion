@@ -28,11 +28,17 @@ struct AgentEvent: Decodable {
     let elapsedSeconds: Double?
     let processedBytes: Int64?
     let contacts: [ContactPreview]?
+    let totalContacts: Int?
+    let query: String?
+    let cursor: Int?
+    let nextCursor: Int?
     let availableCalls: Int?
     let availableMessages: Int?
     let since: String?
     let missing: [String]?
     let selectedContacts: Int?
+    let reviewId: String?
+    let selectionSha256: String?
     let matchedCalls: Int?
     let matchedMessages: Int?
     let observedCallEarliest: String?

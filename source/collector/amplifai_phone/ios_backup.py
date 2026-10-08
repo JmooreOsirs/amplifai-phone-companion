@@ -25,10 +25,10 @@ from .backup_watchdog import (
     run_backup_session,
 )
 from .metadata import (
-    BackupControlMetadataLimit,
-    BackupControlInvalid,
-    ContactsSchemaUnsupported,
     RETAINED_HISTORY_START,
+    BackupControlInvalid,
+    BackupControlMetadataLimit,
+    ContactsSchemaUnsupported,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
     SourceReadCapacityLimit,
@@ -38,7 +38,8 @@ from .metadata import (
     read_contacts,
     read_messages,
 )
-from .workspace import SessionWorkspace
+from .record_store import RecordStore
+from .workspace import SessionWorkspace, WorkspaceError
 
 # Info.plist can grow with the installed-application inventory. It is already a
 # selected, private on-disk control file; parse it from disk under a separate
@@ -60,6 +61,14 @@ class IPhoneCapture:
     collected_at: str
     since: str
     missing_sources: tuple[str, ...]
+    review_workspace: SessionWorkspace | None = None
+    record_store: RecordStore | None = None
+
+    def close(self) -> None:
+        if self.record_store is not None:
+            self.record_store.close()
+        if self.review_workspace is not None:
+            self.review_workspace.__exit__(None, None, None)
 
 
 def _read_plist(path: Path) -> dict:
@@ -159,6 +168,7 @@ def parse_selected_backup(
     *,
     workspace: SessionWorkspace | None = None,
     transfer_callback: Callable[[dict[str, object]], None] | None = None,
+    record_store: RecordStore | None = None,
 ) -> IPhoneCapture:
     """Read only allowlisted metadata fields, then remove decrypted DB copies."""
     from pyiosbackup import Backup
@@ -224,6 +234,7 @@ def parse_selected_backup(
                 bound_callback,
                 workspace,
                 processed_bytes,
+                record_store,
             )
             if transfer_callback is not None:
                 transfer_callback({"stage": "processing", "processedBytes": processed})
@@ -240,6 +251,7 @@ def _parse_entries(
     bound_callback: Callable[[], None] | None = None,
     workspace: SessionWorkspace | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    record_store: RecordStore | None = None,
 ) -> IPhoneCapture:
     missing = []
     available = {}
@@ -259,7 +271,7 @@ def _parse_entries(
             missing.append(key)
     if available["contacts"]:
         try:
-            contacts = read_contacts(extracted / "contacts", bound_callback)
+            contacts = read_contacts(extracted / "contacts", bound_callback, record_store)
         except UnsupportedSchema as error:
             raise ContactsSchemaUnsupported(
                 "Contact database schema is unsupported"
@@ -275,14 +287,16 @@ def _parse_entries(
         try:
             return reader()
         except (UnsupportedSchema, SourceReadCapacityLimit, sqlite3.DatabaseError):
+            if record_store is not None:
+                record_store.discard_category(key)
             missing.append(key)
             return SourceResult(0, (), 0)
 
     calls = optional_source(
-        "calls", lambda: read_calls(extracted / "calls", since, bound_callback)
+        "calls", lambda: read_calls(extracted / "calls", since, bound_callback, record_store)
     )
     messages = optional_source(
-        "messages", lambda: read_messages(extracted / "messages", since, bound_callback)
+        "messages", lambda: read_messages(extracted / "messages", since, bound_callback, record_store)
     )
     return IPhoneCapture(
         contacts, calls, messages, now.isoformat(), since.isoformat(), tuple(missing)
@@ -328,81 +342,113 @@ async def collect_iphone(
 
     device = _connection_plan(await list_devices())
     workspace = SessionWorkspace(sessions_root)
-    with workspace as root:
-        lockdown = await create_using_usbmux(
-            serial=device.serial,
-            connection_type=device.connection_type,
-            label="AMPLIFai Local Collector",
-            autopair=device.is_usb,
-            pair_timeout=120 if device.is_usb else None,
-            pairing_records_cache_folder=root / "pairing",
-        )
-        if device.is_network and not lockdown.paired:
-            await lockdown.close()
-            raise RuntimeError("An existing trusted Wi-Fi pairing is required")
-        transport = "wifi" if device.is_network else "usb"
-        if connection_callback is not None:
-            connection_callback(transport)
-        watchdog = BackupWatchdog()
+    review_capture: IPhoneCapture | None = None
+    try:
+        with workspace as root:
+            lockdown = await create_using_usbmux(
+                serial=device.serial,
+                connection_type=device.connection_type,
+                label="AMPLIFai Local Collector",
+                autopair=device.is_usb,
+                pair_timeout=120 if device.is_usb else None,
+                pairing_records_cache_folder=root / "pairing",
+            )
+            if device.is_network and not lockdown.paired:
+                await lockdown.close()
+                raise RuntimeError("An existing trusted Wi-Fi pairing is required")
+            transport = "wifi" if device.is_network else "usb"
+            if connection_callback is not None:
+                connection_callback(transport)
+            watchdog = BackupWatchdog()
 
-        async def capture_session() -> IPhoneCapture:
-            async with lockdown, Mobilebackup2Service(lockdown) as service:
-                await observe_backup_receives(service, watchdog)
-                bind_streamed_device_link(
-                    service, workspace, watchdog, transfer_callback
-                )
-                rules = (
-                    *service.resolve_backup_selection(
-                        ("contacts", "call_history", "sms")
-                    ),
-                    BackupSelectionRule(HOME_DOMAIN, DATABASES["messages"] + "-wal"),
-                    BackupSelectionRule(HOME_DOMAIN, DATABASES["messages"] + "-shm"),
-                )
-
-                def bounded_progress(value: float) -> None:
-                    watchdog.raise_if_aborted()
-                    workspace.check_bound()
-                    if progress_callback is not None:
-                        progress_callback(value)
-
-                watchdog.start()
-                await service.backup(
-                    full=True,
-                    backup_directory=root,
-                    progress_callback=bounded_progress,
-                    filter_callback=service.selection_filter_callback(rules),
-                    patch_manifest=False,
-                    unback=False,
-                )
-                watchdog.backup_completed()
-                workspace.check_bound()
-                from pyiosbackup.manifest_plist import ManifestPlist
-
-                backup_path = root / lockdown.udid
-                manifest_path_on_disk = _manifest_plist_path(backup_path)
-                _read_plist(manifest_path_on_disk)
-                encrypted = ManifestPlist.from_path(
-                    manifest_path_on_disk
-                ).is_encrypted
-                password = password_provider() if encrypted else ""
-                if encrypted and not password:
-                    raise RuntimeError(
-                        "The existing encrypted-backup password is required"
+            async def capture_session() -> IPhoneCapture:
+                nonlocal review_capture
+                async with lockdown, Mobilebackup2Service(lockdown) as service:
+                    await observe_backup_receives(service, watchdog)
+                    bind_streamed_device_link(
+                        service, workspace, watchdog, transfer_callback
+                    )
+                    rules = (
+                        *service.resolve_backup_selection(
+                            ("contacts", "call_history", "sms")
+                        ),
+                        BackupSelectionRule(HOME_DOMAIN, DATABASES["messages"] + "-wal"),
+                        BackupSelectionRule(HOME_DOMAIN, DATABASES["messages"] + "-shm"),
                     )
 
-                def parsing_bound() -> None:
-                    watchdog.raise_if_aborted()
+                    def bounded_progress(value: float) -> None:
+                        watchdog.raise_if_aborted()
+                        workspace.check_bound()
+                        if progress_callback is not None:
+                            progress_callback(value)
+
+                    watchdog.start()
+                    await service.backup(
+                        full=True,
+                        backup_directory=root,
+                        progress_callback=bounded_progress,
+                        filter_callback=service.selection_filter_callback(rules),
+                        patch_manifest=False,
+                        unback=False,
+                    )
+                    watchdog.backup_completed()
                     workspace.check_bound()
+                    from pyiosbackup.manifest_plist import ManifestPlist
 
-                return parse_selected_backup(
-                    backup_path,
-                    password,
-                    now,
-                    parsing_bound,
-                    workspace=workspace,
-                    transfer_callback=transfer_callback,
-                )
+                    backup_path = root / lockdown.udid
+                    manifest_path_on_disk = _manifest_plist_path(backup_path)
+                    _read_plist(manifest_path_on_disk)
+                    encrypted = ManifestPlist.from_path(
+                        manifest_path_on_disk
+                    ).is_encrypted
+                    password = password_provider() if encrypted else ""
+                    if encrypted and not password:
+                        raise RuntimeError(
+                            "The existing encrypted-backup password is required"
+                        )
 
-        return await run_backup_session(
-            capture_session(), watchdog, workspace.preserve_for_recovery
-        )
+                    def parsing_bound() -> None:
+                        watchdog.raise_if_aborted()
+                        workspace.check_bound()
+
+                    review_workspace = SessionWorkspace(sessions_root)
+                    review_root = review_workspace.__enter__()
+                    record_store: RecordStore | None = None
+                    try:
+                        record_store = RecordStore(review_root / "sanitized.sqlite3", review_workspace)
+                        parsed = parse_selected_backup(
+                            backup_path,
+                            password,
+                            now,
+                            parsing_bound,
+                            workspace=workspace,
+                            transfer_callback=transfer_callback,
+                            record_store=record_store,
+                        )
+                        review_capture = IPhoneCapture(
+                            parsed.contacts, parsed.calls, parsed.messages,
+                            parsed.collected_at, parsed.since, parsed.missing_sources,
+                            review_workspace, record_store,
+                        )
+                        return review_capture
+                    except BaseException:
+                        if record_store is not None:
+                            record_store.close()
+                        review_workspace.__exit__(None, None, None)
+                        raise
+
+            return await run_backup_session(
+                capture_session(), watchdog, workspace.preserve_for_recovery
+            )
+    except BaseException as primary_error:
+        # The raw workspace may fail while leaving its context after a parsed
+        # capture was prepared. That capture has not reached the caller yet.
+        if review_capture is not None:
+            try:
+                review_capture.close()
+            except BaseException as cleanup_error:
+                raise WorkspaceError(
+                    "Unable to remove the prepared private review workspace",
+                    code="workspace_cleanup", primary_error=primary_error,
+                ) from cleanup_error
+        raise

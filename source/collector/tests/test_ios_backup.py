@@ -5,34 +5,40 @@ import plistlib
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from amplifai_phone.__main__ import review_snapshot
 from amplifai_phone.ios_backup import (
     DATABASES,
-    IPhoneCapture,
     MAX_PLIST_BYTES,
+    IPhoneCapture,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
     _extract_database,
-    _parse_entries,
     _manifest_plist_path,
+    _parse_entries,
     _read_plist,
     collect_iphone,
     parse_selected_backup,
 )
 from amplifai_phone.metadata import (
-    BackupControlInvalid,
-    ContactsSchemaUnsupported,
     RETAINED_HISTORY_START,
+    BackupControlInvalid,
     Contact,
+    ContactsSchemaUnsupported,
+    Interaction,
     SourceCapacityLimit,
     SourceReadCapacityLimit,
     SourceResult,
     UnsupportedSchema,
 )
+from amplifai_phone.paged_transfer import PagedTransfer
+from amplifai_phone.record_store import RecordStore
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 
 async def fake_backup_control_files(**kwargs: object) -> None:
@@ -213,6 +219,45 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 )
         self.assertEqual(capture.missing_sources, ("calls",))
         self.assertEqual(capture.contacts, contacts)
+
+    def test_failed_optional_reader_cannot_retain_partial_selected_rows(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-partial-store-") as temporary:
+            root = Path(temporary)
+            workspace = SessionWorkspace(root / "reviews")
+            review_root = workspace.__enter__()
+            store = RecordStore(review_root / "sanitized.sqlite3", workspace)
+            contact = Contact(1, "Ada", ("+15551234567",), ())
+            call = Interaction(7, "call", "phone", "2026-10-07T16:00:00+00:00", "inbound", contact.phones, 15)
+
+            def contacts_reader(*_args: object) -> SourceResult:
+                store.add("contacts", contact)
+                return SourceResult(1, store.collection("contacts"), 0)
+
+            def broken_calls_reader(*_args: object) -> SourceResult:
+                store.add("calls", call)
+                raise sqlite3.DatabaseError("corrupt call database")
+
+            try:
+                with (
+                    patch("amplifai_phone.ios_backup._extract_database", return_value=True),
+                    patch("amplifai_phone.ios_backup.read_contacts", side_effect=contacts_reader),
+                    patch("amplifai_phone.ios_backup.read_calls", side_effect=broken_calls_reader),
+                    patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+                ):
+                    capture = _parse_entries(object(), root, datetime.now(UTC), RETAINED_HISTORY_START,
+                                             record_store=store)
+                capture = replace(capture, record_store=store, review_workspace=workspace)
+                selected = store.append_selection("review", 0, [1], 1)
+                self.assertIsNotNone(selected)
+                self.assertEqual(capture.missing_sources, ("calls",))
+                self.assertEqual(review_snapshot(capture, selected)["matched_calls"], 0)
+                self.assertEqual(store.counts["calls"], 0)
+                self.assertEqual(len(tuple(selected.rows("calls"))), 0)
+                transfer = PagedTransfer(capture, selected, review_root / "paged.sqlite3")
+                self.assertEqual(transfer.manifest["sources"]["calls"]["rowsIncluded"], 0)
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
 
     def test_contact_or_session_safety_failure_still_stops_capture(self) -> None:
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)
@@ -454,7 +499,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 now=datetime(2026, 9, 23, tzinfo=UTC),
                 sessions_root=Path(temporary) / "sessions",
             )
-        self.assertIs(result, expected)
+            self.assertIs(result.contacts, expected.contacts)
+            self.assertIsNotNone(result.record_store)
+            result.close()
         self.assertEqual(asked, [True])
         connect.assert_awaited_once()
         self.assertEqual(connect.await_args.kwargs["connection_type"], "USB")
@@ -469,6 +516,57 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(service.backup.await_args.kwargs["unback"])
         self.assertFalse(service.backup.await_args.kwargs["patch_manifest"])
         self.assertEqual(parse.call_args.args[1], "synthetic-password")
+
+    async def test_raw_workspace_exit_failure_closes_undelivered_review_store(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pyiosbackup.manifest_plist import ManifestPlist
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        lockdown = MagicMock()
+        lockdown.paired = True
+        lockdown.udid = "SYNTHETIC-UDID"
+        lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+        lockdown.__aexit__ = AsyncMock(return_value=False)
+        service = MagicMock()
+        service.__aenter__ = AsyncMock(return_value=service)
+        service.__aexit__ = AsyncMock(return_value=False)
+        service.backup = AsyncMock(side_effect=fake_backup_control_files)
+        service.service._ensure_started = AsyncMock(return_value=(asyncio.StreamReader(), MagicMock()))
+        expected = IPhoneCapture(SourceResult(0, (), 0), SourceResult(0, (), 0),
+                                 SourceResult(0, (), 0), "now", "since", ())
+        original_exit = SessionWorkspace.__exit__
+        original_close = RecordStore.close
+        closed_stores: list[Path] = []
+
+        def failing_raw_exit(workspace: SessionWorkspace, *args: object) -> None:
+            is_raw = workspace.directory is not None and not (workspace.directory / "sanitized.sqlite3").exists()
+            original_exit(workspace, *args)
+            if is_raw:
+                raise WorkspaceError("Simulated raw cleanup failure", code="workspace_cleanup")
+
+        def tracked_close(store: RecordStore) -> None:
+            closed_stores.append(store.path)
+            original_close(store)
+
+        with (
+            tempfile.TemporaryDirectory(prefix="amplifai-raw-exit-test-") as temporary,
+            patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+            patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+            patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service", return_value=service),
+            patch.object(ManifestPlist, "from_path", return_value=SimpleNamespace(is_encrypted=False)),
+            patch("amplifai_phone.ios_backup.parse_selected_backup", return_value=expected),
+            patch.object(SessionWorkspace, "__exit__", new=failing_raw_exit),
+            patch.object(RecordStore, "close", new=tracked_close),
+        ):
+            root = Path(temporary) / "sessions"
+            with self.assertRaises(WorkspaceError) as raised:
+                await collect_iphone(password_provider=lambda: "", sessions_root=root)
+            self.assertEqual(raised.exception.code, "workspace_cleanup")
+            self.assertEqual(len(closed_stores), 1)
+            self.assertFalse(list(root.rglob("sanitized.sqlite3")))
 
     async def test_zero_devices_stops_before_pairing(self) -> None:
         import pymobiledevice3.usbmux
@@ -555,7 +653,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 connection_callback=transports.append,
                 sessions_root=Path(temporary) / "sessions",
             )
-        self.assertIs(result, expected)
+            self.assertIs(result.contacts, expected.contacts)
+            self.assertIsNotNone(result.record_store)
+            result.close()
         self.assertEqual(transports, ["usb"])
         connect.assert_awaited_once()
         self.assertEqual(connect.await_args.kwargs["connection_type"], "USB")
@@ -704,7 +804,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 connection_callback=transports.append,
                 sessions_root=Path(temporary) / "sessions",
             )
-        self.assertIs(result, expected)
+            self.assertIs(result.contacts, expected.contacts)
+            self.assertIsNotNone(result.record_store)
+            result.close()
         self.assertEqual(transports, ["wifi"])
         connect.assert_awaited_once()
         self.assertEqual(connect.await_args.kwargs["connection_type"], "Network")

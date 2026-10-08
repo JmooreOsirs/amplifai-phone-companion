@@ -7,7 +7,8 @@ import getpass
 import sys
 
 from .ios_backup import IPhoneCapture, collect_iphone
-from .metadata import interactions_for_contacts, select_people
+from .metadata import iter_interactions_for_contacts, select_people
+from .record_store import SelectionSnapshot
 
 
 def review_capture(capture: IPhoneCapture, selection: str) -> dict[str, object]:
@@ -19,21 +20,52 @@ def review_capture(capture: IPhoneCapture, selection: str) -> dict[str, object]:
     if not ids:
         raise ValueError("Select at least one contact")
     chosen = select_people(capture.contacts, ids)
-    interactions = interactions_for_contacts(chosen, (capture.calls, capture.messages))
-    call_dates = sorted(
-        item.occurred_at for item in interactions if item.kind == "call"
-    )
-    message_dates = sorted(
-        item.occurred_at for item in interactions if item.kind == "message"
-    )
+    counts = {"call": 0, "message": 0}
+    earliest: dict[str, str | None] = {"call": None, "message": None}
+    latest: dict[str, str | None] = {"call": None, "message": None}
+    for item in iter_interactions_for_contacts(chosen, (capture.calls, capture.messages)):
+        kind = item.kind
+        counts[kind] += 1
+        if earliest[kind] is None or item.occurred_at < earliest[kind]:
+            earliest[kind] = item.occurred_at
+        if latest[kind] is None or item.occurred_at > latest[kind]:
+            latest[kind] = item.occurred_at
     return {
         "selected_contacts": len(chosen),
-        "matched_calls": sum(item.kind == "call" for item in interactions),
-        "matched_messages": sum(item.kind == "message" for item in interactions),
-        "observed_call_earliest": call_dates[0] if call_dates else None,
-        "observed_call_latest": call_dates[-1] if call_dates else None,
-        "observed_message_earliest": message_dates[0] if message_dates else None,
-        "observed_message_latest": message_dates[-1] if message_dates else None,
+        "matched_calls": counts["call"],
+        "matched_messages": counts["message"],
+        "observed_call_earliest": earliest["call"],
+        "observed_call_latest": latest["call"],
+        "observed_message_earliest": earliest["message"],
+        "observed_message_latest": latest["message"],
+        "available_since": capture.since,
+        "missing_sources": capture.missing_sources,
+    }
+
+
+def review_snapshot(capture: IPhoneCapture, selection: SelectionSnapshot) -> dict[str, object]:
+    """Review a complete disk-backed selection without materializing its contacts."""
+    counts = {"call": 0, "message": 0}
+    earliest: dict[str, str | None] = {"call": None, "message": None}
+    latest: dict[str, str | None] = {"call": None, "message": None}
+    for category, kind in (("calls", "call"), ("messages", "message")):
+        if category in capture.missing_sources:
+            continue
+        for item in selection.rows(category):
+            counts[kind] += 1
+            if earliest[kind] is None or item.occurred_at < earliest[kind]:
+                earliest[kind] = item.occurred_at
+            if latest[kind] is None or item.occurred_at > latest[kind]:
+                latest[kind] = item.occurred_at
+    return {
+        "selected_contacts": selection.count,
+        "selection_sha256": selection.sha256,
+        "matched_calls": counts["call"],
+        "matched_messages": counts["message"],
+        "observed_call_earliest": earliest["call"],
+        "observed_call_latest": latest["call"],
+        "observed_message_earliest": earliest["message"],
+        "observed_message_latest": latest["message"],
         "available_since": capture.since,
         "missing_sources": capture.missing_sources,
     }
@@ -48,6 +80,7 @@ def main() -> int:
     )
     input("Press Enter when ready, or Ctrl-C to cancel. ")
     last_progress = -1
+    capture: IPhoneCapture | None = None
 
     def progress(value: float) -> None:
         nonlocal last_progress
@@ -95,6 +128,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    finally:
+        if capture is not None:
+            capture.close()
 
 
 if __name__ == "__main__":

@@ -8,12 +8,6 @@ struct ContentView: View {
     @State private var localCollectionChecked = false
     @State private var confirmingRetainedReviewDiscard = false
 
-    private var visibleContacts: [ContactPreview] {
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return model.contacts }
-        return model.contacts.filter { $0.name.localizedCaseInsensitiveContains(query) }
-    }
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -38,6 +32,7 @@ struct ContentView: View {
         .foregroundStyle(Brand.body)
         .background(ActiveCompanionWindow(model: model).frame(width: 0, height: 0))
         .onChange(of: model.collectionApprovalRunID) { _, _ in localCollectionChecked = false }
+        .onChange(of: model.phase) { _, phase in if phase == .connecting { search = "" } }
         .onDisappear { model.declineLocalCollection() }
         .confirmationDialog(
             "Remove previous temporary backups created by this app?",
@@ -223,9 +218,17 @@ struct ContentView: View {
             TextField("Search contacts", text: $search)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Search contacts")
+                .disabled(model.reviewPending)
+                .onChange(of: search) { _, value in
+                    if value.unicodeScalars.count > 120 { search = String(value.unicodeScalars.prefix(120)) }
+                    else { model.searchContacts(value) }
+                }
+            Text("\(model.contacts.count) shown · \(model.totalContacts) available")
+                .font(.caption)
+                .foregroundStyle(Brand.muted)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(visibleContacts) { contact in
+                    ForEach(model.contacts) { contact in
                         Toggle(isOn: Binding(
                             get: { model.selectedIDs.contains(contact.id) },
                             set: { _ in model.toggle(contact.id) }
@@ -241,16 +244,44 @@ struct ContentView: View {
                             }
                         }
                         .toggleStyle(.checkbox)
+                        .disabled(model.reviewPending)
                         .padding(.vertical, 3)
                     }
                 }
             }
             .frame(maxHeight: 220)
-            if model.contacts.isEmpty {
+            if model.isSearchingContacts {
+                Text("Searching contacts…")
+                    .foregroundStyle(Brand.muted)
+            } else if model.totalContacts == 0 {
                 Text("No usable contacts were present in the selected backup.")
                     .foregroundStyle(Brand.muted)
-            } else if visibleContacts.isEmpty {
+            } else if model.contacts.isEmpty {
                 Text("No contacts match this search.")
+                    .foregroundStyle(Brand.muted)
+            }
+            if model.hasPreviousContactPage || model.nextContactCursor != nil {
+                HStack(spacing: 10) {
+                    if model.hasPreviousContactPage {
+                        Button("Previous contacts") { model.previousContacts() }
+                            .buttonStyle(SecondaryButton())
+                            .disabled(model.contactSearchPending || model.reviewPending)
+                    }
+                    if model.nextContactCursor != nil {
+                        Button("Next contacts") { model.loadMoreContacts() }
+                            .buttonStyle(SecondaryButton())
+                            .disabled(model.contactSearchPending || model.reviewPending)
+                    }
+                }
+            }
+            if model.contactSearchPending && !model.isSearchingContacts {
+                Text("Loading contact page…")
+                    .font(.caption)
+                    .foregroundStyle(Brand.muted)
+            }
+            if model.reviewPending {
+                Text("Reviewing selected metadata…")
+                    .font(.caption)
                     .foregroundStyle(Brand.muted)
             }
             if !model.errorMessage.isEmpty && model.phase == .selecting {
@@ -258,7 +289,7 @@ struct ContentView: View {
             }
             Button("Review selected metadata") { model.review() }
                 .buttonStyle(LimeButton())
-                .disabled(model.selectedIDs.isEmpty)
+                .disabled(model.selectedIDs.isEmpty || model.contactSearchPending || model.reviewPending)
         }
         .panel()
     }
@@ -299,7 +330,7 @@ struct ContentView: View {
                     .font(.custom("Arial", size: 18).weight(.bold))
                     .foregroundStyle(Brand.heading)
                     .textSelection(.enabled)
-                Text("Expires five minutes after creation. Only the exact AMPLIFai account origin can receive it. Receiving the preview does not approve a cloud save.")
+                Text("The pairing code expires after five minutes. An active, authorized transfer stays open while pages are requested and for up to two hours without activity. Only the exact AMPLIFai account origin can request pages; page requests do not prove an account save.")
                     .font(.caption)
                     .foregroundStyle(Brand.muted)
                 Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai-database-engine.vercel.app/phone/account")!)

@@ -1,7 +1,7 @@
-# AMPLIFai Phone 2026.10.08-rc7 companion source
+# AMPLIFai Phone 2026.10.08-rc8 companion source
 
-This package is prepared for the matching `2026.10.08-rc7` Mac app, build
-`26100807`; publication and binary checksums are separate release steps. The
+This package is prepared for the matching `2026.10.08-rc8` Mac app, build
+`26100808`; publication and binary checksums are separate release steps. The
 filtered receiver drains unselected full-backup bytes, while every retained
 write and parsing copy checks real Mac storage with a further 2 GiB reserve.
 It distinguishes an early host-space refusal from generic collection failure
@@ -21,15 +21,18 @@ was available. This revision streams larger DeviceLink control frames to a
 private temporary file, reads larger on-disk control plists without duplicating
 their raw bytes, drains private device error text in bounded chunks, and emits
 distinct safe capacity codes if a guard still stops collection. It does not
-prove the owner's exact failure is fixed. A contact with more than 20 distinct
-phone or email values remains an explicit capacity failure, not a silent slice.
-The collector keeps an actively receiving backup
-alive without a total elapsed-time cutoff. Explicit safety bounds still stop
-unsupported source volumes; this is not unlimited-history proof.
+prove the owner's exact failure is fixed. This revision streams sanitized
+contacts and interactions into a private SQLite review store, pages contact
+selection and browser transfer, and retains all valid contact values and group
+participants that fit an individual bounded page. A failed optional source
+read removes its partial rows before that category is marked unavailable.
+The collector keeps an actively receiving backup alive without a total
+elapsed-time cutoff. Real disk checks and finite page/request bounds remain.
 The current local bridge also reports observed source rows separately from
 selected rows and keeps the Mac review open until the browser confirms receipt
 of its account-save acknowledgment. These safeguards do not prove a real
-device-to-account save; the matching website release must be qualified.
+device-to-account save. Page delivery alone does not mean account persistence;
+the matching website validates page hashes and durable account readback.
 
 The project-authored companion is Copyright (C) 2026 OSIRS LLC and licensed
 under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,

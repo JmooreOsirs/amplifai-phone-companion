@@ -13,7 +13,7 @@ enum SupportDiagnosticReporter {
 
     static func request(for code: String) -> URLRequest? {
         let fields = code.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        guard fields.count == 9, fields[0] == "A1", fields[1] == "26100807",
+        guard fields.count == 9, fields[0] == "A1", fields[1] == "26100808",
               fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil,
               ["connecting", "backup", "processing", "review"].contains(fields[3]),
               reportCodes.contains(fields[4]),

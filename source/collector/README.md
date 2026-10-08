@@ -65,6 +65,9 @@ If USB Trust fails, it stops rather than silently switching to Wi-Fi.
 The app provides local progress/cancel, contact selection, retained-history
 metadata review, disconnect, and explicit inspection/cleanup of app-created
 temporary data remaining after a crash. It does not save or upload the review.
+Post-rc7 source changes page the contact-picker preview and search locally in
+the companion; the published rc7 still uses its original single capture-preview
+event. Source changes need a new matching Mac app/helper package and device test.
 
 For a **local-only arm64 packaging candidate** with an embedded Python runtime
 instead of a runtime `uv` cache dependency:
@@ -153,8 +156,14 @@ Selected input, discarded input, outbound files and parsing copies are streamed
 in 128 KiB chunks. Selected writes reserve their future parsing copy, and every
 write must preserve a further 2 GiB of real free space. There is no fixed 1 GiB
 session or 128 MiB database/manifest limit, nor an unrelated-file-count cap.
-Backup control/plist data retain a 16 MiB memory bound; metadata readers retain
-the explicit 1,000,000-row/source and 25,000-selected-contact safety frontiers.
+Backup control/plist data stream to private temporary storage under separate
+finite parsing bounds; metadata readers retain the explicit 1,000,000-row/source
+and 25,000-selected-contact safety frontiers. Contact-value and message/chat
+join normalization use short-lived private SQLite indexes in the selected
+parsing directory, instead of keeping every joined source row in Python maps.
+Those indexes contain only normalized phone/email metadata and opaque source
+IDs, are checked against the existing workspace bound as they fill, and are
+removed before local review begins. Message bodies are never indexed.
 The 20 distinct phone/email values per contact contract also stops with an
 explicit incomplete-source error instead of silently dropping later values.
 SQLite cursors avoid a second full row list; retained metadata records still

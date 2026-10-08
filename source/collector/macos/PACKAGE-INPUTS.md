@@ -1,6 +1,8 @@
-# October 8 capacity-repair candidate inputs
+# October 8 rc8 package inputs
 
-Local capacity-repair candidate only: `2026.10.08-rc7`, build `26100807`. Existing bundle identifier
+The published rc7 is `2026.10.08-rc7`, build `26100807`, and remains the
+rollback download. This source is versioned `2026.10.08-rc8`, build `26100808`;
+it requires a newly signed/notarized app and matching helper. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
@@ -23,10 +25,19 @@ cannot replace this local collection approval.
 - Keep the existing logo PNG resource for the in-window brand mark.
 - Run `sh collector/macos/Tests/check_flow.sh` and the existing
   `sh scripts/test_macos_recovery.sh` against actual model/protocol source.
+- This source pages the local contact preview in 200-row helper events and
+  loads more/searches on demand. The Swift model validates totals, cursors,
+  duplicate IDs and stale responses while preserving selected IDs. A local
+  review now freezes the selected IDs and requires an exact echoed review ID
+  and selected count before browser pairing can open. Sanitized rows and
+  selected IDs live in a private temporary SQLite review store. The v2 handoff
+  has an immutable manifest and bounded, chained source pages; the matching
+  website must confirm every page and durable account receipts before saved ACK.
+  Do not pair this Swift app with the rc7 Python helper.
 
 ## Earlier backup repair and current processing incident
 
-The public rc6 build (`26100806`) remains the rollback candidate until this
+The public rc7 build (`26100807`) remains the rollback candidate until this
 source is separately packaged and released. Two earlier owner attempts in ACK2 ended
 with the generic `collection_failed` code at the backup stage and zero received
 bytes; this does **not** prove a backup file began transferring. The current helper

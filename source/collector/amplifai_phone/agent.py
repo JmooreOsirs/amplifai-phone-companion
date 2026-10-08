@@ -14,10 +14,14 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TextIO
+from uuid import UUID
 
-from pymobiledevice3.exceptions import ConnectionTerminatedError, NotEnoughDiskSpaceError
+from pymobiledevice3.exceptions import (
+    ConnectionTerminatedError,
+    NotEnoughDiskSpaceError,
+)
 
-from .__main__ import review_capture
+from .__main__ import review_capture, review_snapshot
 from .backup_stream import DeviceBackupRejected
 from .backup_watchdog import (
     BackupCleanupIncomplete,
@@ -31,15 +35,20 @@ from .ios_backup import IPhoneCapture, collect_iphone
 from .metadata import (
     MAX_SELECTED_CONTACTS,
     BackupControlInvalid,
+    Contact,
     ContactsSchemaUnsupported,
+    Interaction,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
     SourceCapacityLimit,
     UnsupportedSchema,
 )
+from .record_store import RecordCollection, SelectionSnapshot
 from .workspace import WorkspaceError, abandoned_sessions, clear_abandoned
 
 MAX_COMMAND_BYTES = 600_000
+CONTACT_PAGE_SIZE = 200
+MAX_CONTACT_QUERY_LENGTH = 120
 MAX_PASSWORD_LENGTH = 512
 
 
@@ -62,6 +71,49 @@ def _command(stream: TextIO) -> dict[str, object]:
     if not isinstance(value, dict):
         raise TypeError("Invalid command")
     return value
+
+
+def _contact_page(
+    contacts: tuple[Contact | Interaction, ...] | RecordCollection, query: object, cursor: object
+) -> dict[str, object]:
+    if (
+        not isinstance(query, str)
+        or not isinstance(cursor, int)
+        or isinstance(cursor, bool)
+    ):
+        raise TypeError("Invalid contact page request")
+    if len(query) > MAX_CONTACT_QUERY_LENGTH or not 0 <= cursor <= len(contacts):
+        raise ValueError("Invalid contact page request")
+    needle = query.strip().casefold()
+    page = []
+    next_cursor = None
+    if isinstance(contacts, RecordCollection):
+        candidates = contacts.page(query, cursor, CONTACT_PAGE_SIZE)
+    else:
+        candidates = ((position, contacts[position]) for position in range(cursor, len(contacts)))
+    for position, item in candidates:
+        if not isinstance(item, Contact):
+            raise TypeError("Invalid contact preview")
+        if needle not in item.name.casefold():
+            continue
+        if len(page) == CONTACT_PAGE_SIZE:
+            next_cursor = position
+            break
+        page.append(
+            {
+                "id": item.source_id,
+                "name": item.name,
+                "phoneCount": len(item.phones),
+                "phoneEnds": [phone[-4:] for phone in item.phones],
+            }
+        )
+    return {
+        "contacts": page,
+        "query": query,
+        "cursor": cursor,
+        "nextCursor": next_cursor,
+        "totalContacts": len(contacts),
+    }
 
 
 def _error_code(exc: BaseException) -> str:
@@ -176,7 +228,8 @@ def run_connect(
         _emit(sink, {"kind": "connection", "transport": transport})
 
     bridge: BridgeServer | None = None
-    selected_ids: set[int] | None = None
+    capture: IPhoneCapture | None = None
+    selected_ids: set[int] | SelectionSnapshot | None = None
     try:
         capture = run_local_capture(
             collector(
@@ -191,15 +244,7 @@ def run_connect(
             sink,
             {
                 "kind": "capture",
-                "contacts": [
-                    {
-                        "id": item.source_id,
-                        "name": item.name,
-                        "phoneCount": len(item.phones),
-                        "phoneEnds": [phone[-4:] for phone in item.phones],
-                    }
-                    for item in capture.contacts.records
-                ],
+                **_contact_page(capture.contacts.records, "", 0),
                 "availableCalls": len(capture.calls.records),
                 "availableMessages": len(capture.messages.records),
                 "since": capture.since,
@@ -217,6 +262,14 @@ def run_connect(
                     bridge.close()
                     bridge = None
                 _emit(sink, {"kind": "state", "state": "pairing_revoked"})
+                continue
+            if action == "contacts":
+                page = _contact_page(
+                    capture.contacts.records,
+                    command.get("query"),
+                    command.get("cursor"),
+                )
+                _emit(sink, {"kind": "contacts", **page})
                 continue
             if action in {"handoff-status", "finish"}:
                 if (
@@ -248,7 +301,7 @@ def run_connect(
                 try:
                     bridge = BridgeServer(capture, selected_ids)
                     bridge.start()
-                except (BridgeError, OSError):
+                except (BridgeError, OSError, ValueError):
                     if bridge is not None:
                         bridge.close()
                         bridge = None
@@ -266,11 +319,42 @@ def run_connect(
                     },
                 )
                 continue
+            if action == "review-page":
+                ids = command.get("ids")
+                review_id = command.get("reviewId")
+                cursor = command.get("cursor")
+                total = command.get("total")
+                try:
+                    if (set(command) != {"action", "ids", "reviewId", "cursor", "total"}
+                            or capture.record_store is None
+                            or not isinstance(ids, list) or not 0 < len(ids) <= 1000
+                            or not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0
+                            or not isinstance(total, int) or isinstance(total, bool) or total < 1
+                            or not isinstance(review_id, str) or str(UUID(review_id)) != review_id):
+                        raise ValueError("Invalid selection page")
+                    if cursor == 0:
+                        if bridge is not None:
+                            bridge.close()
+                            bridge = None
+                        selected_ids = None
+                    snapshot = capture.record_store.append_selection(review_id, cursor, ids, total)
+                except ValueError:
+                    _emit(sink, {"kind": "error", "code": "selection"})
+                    continue
+                _emit(sink, {"kind": "review-page", "reviewId": review_id,
+                             "nextCursor": cursor + len(ids)})
+                if snapshot is not None:
+                    selected_ids = snapshot
+                    _emit(sink, {"kind": "review", "reviewId": review_id,
+                                 **review_snapshot(capture, snapshot)})
+                continue
             if action != "review":
                 raise ValueError("Unexpected action")
             ids = command.get("ids")
+            review_id = command.get("reviewId")
             if (
-                not isinstance(ids, list)
+                not set(command) <= {"action", "ids", "reviewId"}
+                or not isinstance(ids, list)
                 or not 0 < len(ids) <= MAX_SELECTED_CONTACTS
                 or any(
                     not isinstance(item, int) or isinstance(item, bool) for item in ids
@@ -278,16 +362,34 @@ def run_connect(
             ):
                 _emit(sink, {"kind": "error", "code": "selection"})
                 continue
+            if review_id is not None:
+                try:
+                    if (
+                        not isinstance(review_id, str)
+                        or str(UUID(review_id)) != review_id
+                    ):
+                        raise ValueError("Invalid review binding")
+                except ValueError:
+                    _emit(sink, {"kind": "error", "code": "selection"})
+                    continue
+            if bridge is not None:
+                bridge.close()
+                bridge = None
+            selected_ids = None
             try:
                 review = review_capture(capture, ",".join(str(item) for item in ids))
             except ValueError:
                 _emit(sink, {"kind": "error", "code": "selection"})
                 continue
-            if bridge is not None:
-                bridge.close()
-                bridge = None
             selected_ids = set(ids)
-            _emit(sink, {"kind": "review", **review})
+            _emit(
+                sink,
+                {
+                    "kind": "review",
+                    **review,
+                    **({"reviewId": review_id} if review_id else {}),
+                },
+            )
     except CaptureCancelled:
         _emit(sink, {"kind": "state", "state": "cancelled"})
         return 130
@@ -312,8 +414,12 @@ def run_connect(
         _emit(sink, event)
         return 1
     finally:
-        if bridge is not None:
-            bridge.close()
+        try:
+            if bridge is not None:
+                bridge.close()
+        finally:
+            if capture is not None:
+                capture.close()
 
 
 def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
