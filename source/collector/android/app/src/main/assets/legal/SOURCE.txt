@@ -1,4 +1,4 @@
-AMPLIFai Phone Android 2026.10.07-rc3 owner-test candidate
+AMPLIFai Phone Android 2026.10.08-rc4 owner-test candidate
 Copyright (C) 2026 OSIRS LLC
 Project-authored Android companion: GPL-3.0-or-later. No warranty.
 

@@ -2,6 +2,7 @@ package ai.satoris.amplifai.phone;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ComponentName;
@@ -59,6 +60,7 @@ public final class MainActivity extends Activity {
     private TextView supportCodeView;
     private Button copySupportCode;
     private SupportCode supportCode;
+    private String safeSupportCodeWire = "";
     private LinearLayout choices;
     private EditText search;
     private EditText country;
@@ -72,6 +74,11 @@ public final class MainActivity extends Activity {
     private boolean callsAvailable;
     private boolean messagesAvailable;
     private boolean reviewed;
+    private int approvedSource;
+    private int permissionPendingSource;
+    private int activePermissionRequestCode;
+    private int nextPermissionRequestCode = 1000;
+    private AlertDialog collectionDisclosure;
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder service) {
             handoff = (HandoffService.LocalBinder) service;
@@ -145,9 +152,9 @@ public final class MainActivity extends Activity {
         copySupportCode = button("Copy safe support code", body);
         copySupportCode.setEnabled(false);
         copySupportCode.setOnClickListener(view -> {
-            if (!copySupportCode.isEnabled()) return;
+            if (!copySupportCode.isEnabled() || safeSupportCodeWire.isEmpty()) return;
             getSystemService(ClipboardManager.class).setPrimaryClip(
-                    ClipData.newPlainText("AMPLIFai support code", supportCodeView.getText()));
+                    ClipData.newPlainText("AMPLIFai support code", safeSupportCodeWire));
             status.setText("Safe support code copied. Submit it through AMPLIFai contact if you want help; it contains no phone records or account credentials.");
         });
 
@@ -221,6 +228,35 @@ public final class MainActivity extends Activity {
     }
 
     private void readSource(int source) {
+        if (!started || permissionPendingSource != 0 || cancellation != null || collectionDisclosure != null) {
+            status.setText("Finish the current approval or read before starting another source.");
+            return;
+        }
+        CheckBox agreement = new CheckBox(this);
+        agreement.setChecked(false);
+        agreement.setTextColor(TEXT);
+        agreement.setText("I approve this one local " + sourceName(source).toLowerCase(Locale.ROOT) + " metadata read. Saving and browser handoff are separate decisions.");
+        agreement.setPadding(dp(16), dp(8), dp(16), dp(8));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Before reading " + sourceName(source).toLowerCase(Locale.ROOT))
+                .setMessage("This app will query the selected Android source on this phone. It keeps names and numbers for contacts, or counterpart numbers, dates, direction and duration for calls/SMS where available. It does not read message bodies or attachments. Android permission is a separate prompt; declining here does not request it. No source leaves this phone without later review and handoff approval.")
+                .setView(agreement)
+                .setNegativeButton("Not now", (ignored, which) -> {})
+                .setPositiveButton("Approve one read", (ignored, which) -> {
+                    if (agreement.isChecked() && started) startApprovedRead(source);
+                })
+                .create();
+        collectionDisclosure = dialog;
+        dialog.setOnDismissListener(ignored -> { if (collectionDisclosure == dialog) collectionDisclosure = null; });
+        dialog.setOnShowListener(ignored -> {
+            Button approve = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            approve.setEnabled(false);
+            agreement.setOnCheckedChangeListener((button, checked) -> approve.setEnabled(checked));
+        });
+        dialog.show();
+    }
+
+    private void startApprovedRead(int source) {
         if (handoff == null) { failure("handoff", "unavailable", "Wait for the handoff controls to connect before reading a source."); return; }
         String iso = country.getText().toString().trim().toUpperCase(Locale.ROOT);
         if (!iso.matches("[A-Z]{2}")) {
@@ -231,9 +267,13 @@ public final class MainActivity extends Activity {
         clearSupportCode();
         invalidateReview();
         clearSource(source);
+        approvedSource = source;
         if (checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
+            permissionPendingSource = source;
+            activePermissionRequestCode = nextPermissionRequestCode++;
+            if (nextPermissionRequestCode > 65000) nextPermissionRequestCode = 1000;
             status.setText("Requesting " + sourceName(source) + " access from Android…");
-            requestPermissions(new String[]{ permissionFor(source) }, source);
+            requestPermissions(new String[]{ permissionFor(source) }, activePermissionRequestCode);
             return;
         }
         beginRead(source, iso);
@@ -247,14 +287,24 @@ public final class MainActivity extends Activity {
             else failure("notification", "denied", "Handoff needs its visible Cancel notification. No transfer was started.");
             return;
         }
-        if (requestCode != CONTACTS_REQUEST && requestCode != CALLS_REQUEST && requestCode != SMS_REQUEST) return;
+        if (requestCode != activePermissionRequestCode || permissionPendingSource == 0) return;
+        int source = permissionPendingSource;
+        activePermissionRequestCode = 0;
+        if (!started || approvedSource != source) {
+            permissionPendingSource = 0;
+            approvedSource = 0;
+            status.setText("Source approval expired. Return to the app and approve a new local read.");
+            return;
+        }
+        permissionPendingSource = 0;
         if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED ||
-                checkSelfPermission(permissionFor(requestCode)) != PackageManager.PERMISSION_GRANTED) {
-            failure(sourceStage(requestCode), "restricted", sourceName(requestCode) +
+                checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
+            approvedSource = 0;
+            failure(sourceStage(source), "restricted", sourceName(source) +
                     " unavailable: permission denied or installer-restricted. No provider query ran.");
             return;
         }
-        beginRead(requestCode, country.getText().toString().trim().toUpperCase(Locale.ROOT));
+        beginRead(source, country.getText().toString().trim().toUpperCase(Locale.ROOT));
     }
 
     private String sourceName(int source) {
@@ -266,18 +316,24 @@ public final class MainActivity extends Activity {
     }
 
     private void clearSupportCode() {
+        safeSupportCodeWire = "";
         supportCodeView.setText("");
         copySupportCode.setEnabled(false);
     }
 
     private void failure(String stage, String category, String message) {
         status.setText(message);
-        supportCodeView.setText("Safe support code: " + supportCode.format(stage, category,
-                SystemClock.elapsedRealtimeNanos()));
+        safeSupportCodeWire = supportCode.format(stage, category, SystemClock.elapsedRealtimeNanos());
+        supportCodeView.setText("Safe support code: " + safeSupportCodeWire);
         copySupportCode.setEnabled(true);
     }
 
     private void beginRead(int source, String iso) {
+        if (approvedSource != source || permissionPendingSource != 0) {
+            status.setText("Approve this source in the app before reading metadata.");
+            return;
+        }
+        approvedSource = 0;
         if (!started) { status.setText("Return to the app and read the source again when ready."); return; }
         cancellation = new CancellationSignal();
         CancellationSignal taskSignal = cancellation;
@@ -500,6 +556,11 @@ public final class MainActivity extends Activity {
 
     @Override protected void onStop() {
         started = false;
+        if (permissionPendingSource != 0) status.setText("Permission prompt interrupted. Review and approve this source again before reading.");
+        approvedSource = 0;
+        permissionPendingSource = 0;
+        activePermissionRequestCode = 0;
+        if (collectionDisclosure != null) collectionDisclosure.dismiss();
         if (cancellation != null) cancellation.cancel();
         if (handoff != null) {
             if (isFinishing() && handoff.snapshot().active()) handoff.cancel();
