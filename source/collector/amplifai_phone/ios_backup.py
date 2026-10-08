@@ -61,6 +61,22 @@ def _read_plist(path: Path) -> dict:
     return value
 
 
+def _manifest_plist_path(backup_path: Path) -> Path:
+    # The pinned backup service may leave the root placeholder empty while the
+    # device supplies the completed manifest under Snapshot/.
+    root = backup_path / "Manifest.plist"
+    if root.is_symlink():
+        raise UnsupportedSchema("Invalid backup manifest path")
+    if root.is_file() and root.stat().st_size > 0:
+        return root
+    snapshot = backup_path / "Snapshot" / "Manifest.plist"
+    if snapshot.parent.is_symlink() or snapshot.is_symlink():
+        raise UnsupportedSchema("Invalid backup manifest path")
+    if snapshot.is_file() and snapshot.stat().st_size > 0:
+        return snapshot
+    raise UnsupportedSchema("Backup manifest was not received")
+
+
 def _extract_database(
     backup: object,
     relative_path: str,
@@ -146,8 +162,9 @@ def parse_selected_backup(
         prefix="amplifai-db-", dir=backup_path.parent
     ) as extracted_dir:
         extracted = Path(extracted_dir)
-        _read_plist(backup_path / ManifestPlist.NAME)
-        manifest = ManifestPlist.from_path(backup_path / ManifestPlist.NAME)
+        manifest_path_on_disk = _manifest_plist_path(backup_path)
+        _read_plist(manifest_path_on_disk)
+        manifest = ManifestPlist.from_path(manifest_path_on_disk)
         if manifest.is_encrypted and not password:
             raise BackupPasswordIsRequired()
         keybag = (
@@ -319,9 +336,10 @@ async def collect_iphone(
                 from pyiosbackup.manifest_plist import ManifestPlist
 
                 backup_path = root / lockdown.udid
-                _read_plist(backup_path / ManifestPlist.NAME)
+                manifest_path_on_disk = _manifest_plist_path(backup_path)
+                _read_plist(manifest_path_on_disk)
                 encrypted = ManifestPlist.from_path(
-                    backup_path / ManifestPlist.NAME
+                    manifest_path_on_disk
                 ).is_encrypted
                 password = password_provider() if encrypted else ""
                 if encrypted and not password:

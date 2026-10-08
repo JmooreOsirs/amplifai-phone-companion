@@ -12,10 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifai_phone.ios_backup import (
     IPhoneCapture,
+    _manifest_plist_path,
     collect_iphone,
     parse_selected_backup,
 )
-from amplifai_phone.metadata import RETAINED_HISTORY_START, SourceResult
+from amplifai_phone.metadata import RETAINED_HISTORY_START, SourceResult, UnsupportedSchema
 
 
 async def fake_backup_control_files(**kwargs: object) -> None:
@@ -24,7 +25,61 @@ async def fake_backup_control_files(**kwargs: object) -> None:
     (directory / "Manifest.plist").write_bytes(plistlib.dumps({"IsEncrypted": False}))
 
 
+async def fake_snapshot_backup_control_files(**kwargs: object) -> None:
+    directory = Path(kwargs["backup_directory"]) / "SYNTHETIC-UDID"
+    snapshot = directory / "Snapshot"
+    snapshot.mkdir(parents=True)
+    (directory / "Manifest.plist").touch()
+    (snapshot / "Manifest.plist").write_bytes(
+        plistlib.dumps({"IsEncrypted": True})
+    )
+
+
 class ManifestFixtureIsolationTest(unittest.TestCase):
+    def test_snapshot_manifest_fallback_rejects_links_and_missing_content(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-manifest-link-") as temporary:
+            backup_path = Path(temporary) / "synthetic-backup"
+            backup_path.mkdir()
+            external = Path(temporary) / "external.plist"
+            external.write_bytes(plistlib.dumps({"IsEncrypted": False}))
+            (backup_path / "Manifest.plist").symlink_to(external)
+            with self.assertRaises(UnsupportedSchema):
+                _manifest_plist_path(backup_path)
+            (backup_path / "Manifest.plist").unlink()
+            (backup_path / "Manifest.plist").touch()
+            (backup_path / "Snapshot").symlink_to(Path(temporary))
+            with self.assertRaises(UnsupportedSchema):
+                _manifest_plist_path(backup_path)
+            (backup_path / "Snapshot").unlink()
+            with self.assertRaises(UnsupportedSchema):
+                _manifest_plist_path(backup_path)
+
+    def test_completed_backup_accepts_nonempty_snapshot_manifest_when_root_is_empty(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-snapshot-manifest-") as temporary:
+            backup_path = Path(temporary) / "synthetic-backup"
+            snapshot = backup_path / "Snapshot"
+            snapshot.mkdir(parents=True)
+            (backup_path / "Manifest.plist").touch()
+            (snapshot / "Manifest.plist").write_bytes(
+                plistlib.dumps({"IsEncrypted": False})
+            )
+            for name in ("Status.plist", "Info.plist"):
+                (backup_path / name).write_bytes(plistlib.dumps({}))
+            manifest_path = backup_path / "Manifest.db"
+            with sqlite3.connect(manifest_path) as db:
+                db.execute(
+                    "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
+                    "flags INTEGER, file BLOB)"
+                )
+
+            capture = parse_selected_backup(
+                backup_path, "", now=datetime(2026, 10, 8, tzinfo=UTC)
+            )
+            self.assertEqual(capture.missing_sources, ("contacts", "calls", "messages"))
+            self.assertEqual(list(backup_path.parent.glob("amplifai-db-*")), [])
+
     def test_history_fixture_leaves_real_sdk_construction_and_parsing_usable(
         self,
     ) -> None:
@@ -141,7 +196,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         service = MagicMock()
         service.__aenter__ = AsyncMock(return_value=service)
         service.__aexit__ = AsyncMock(return_value=False)
-        service.backup = AsyncMock(side_effect=fake_backup_control_files)
+        service.backup = AsyncMock(side_effect=fake_snapshot_backup_control_files)
         service.service._ensure_started = AsyncMock(
             return_value=(asyncio.StreamReader(), MagicMock())
         )

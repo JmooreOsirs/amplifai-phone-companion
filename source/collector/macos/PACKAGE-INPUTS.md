@@ -1,6 +1,6 @@
 # October 7 local native candidate inputs
 
-Local candidate only: `2026.10.07-rc3`, build `26100703`. Existing bundle identifier
+Local candidate only: `2026.10.08-rc4`, build `26100804`. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This is not a final release candidate. The native unchecked, operation-bound

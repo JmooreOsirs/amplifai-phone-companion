@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import io
 import shutil
 import struct
@@ -55,6 +56,59 @@ class Wire:
 
 
 class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_filtered_file_readback_returns_empty_success_until_removed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-readback-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(file_transfer("phone/discarded", b"private") + prefixed(""))
+                link = StreamedDeviceLink(
+                    wire,
+                    directory,
+                    workspace=workspace,
+                    watchdog=BackupWatchdog(),
+                    preserve_file=lambda *_: False,
+                )
+                await link.upload_files([])
+                await link.download_files(
+                    ["DLMessageDownloadFiles", ["phone/discarded"]]
+                )
+                self.assertEqual((directory / "phone/discarded").read_bytes(), b"")
+                self.assertEqual(wire.send_plist.await_args.args[0][1], 0)
+                self.assertIn(
+                    struct.pack(">IB", 1, 0),
+                    [call.args[0] for call in wire.sendall.await_args_list],
+                )
+                self.assertEqual(link._discarded_files, set())
+                await link.remove_items(
+                    ["DLMessageRemoveItems", ["phone/discarded"]]
+                )
+                await link.download_files(
+                    ["DLMessageDownloadFiles", ["phone/discarded"]]
+                )
+                self.assertNotEqual(wire.send_plist.await_args.args[0][1], 0)
+
+    async def test_filtered_entry_creation_reports_exhausted_disk_or_inodes(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-entry-space-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                link = StreamedDeviceLink(
+                    Wire(file_transfer("phone/discarded", b"private") + prefixed("")),
+                    directory,
+                    workspace=workspace,
+                    watchdog=BackupWatchdog(),
+                    preserve_file=lambda *_: False,
+                )
+                with patch(
+                    "amplifai_phone.workspace.os.open",
+                    side_effect=OSError(errno.ENOSPC, "synthetic private path"),
+                ):
+                    with self.assertRaises(WorkspaceError) as failure:
+                        await link.upload_files([])
+                self.assertEqual(failure.exception.code, "workspace_low_space")
+                self.assertNotIn("private path", str(failure.exception))
+
     async def test_terminal_device_status_is_required_for_success(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-stream-test-") as temporary:
             workspace = SessionWorkspace(Path(temporary) / "sessions")
@@ -118,7 +172,7 @@ class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
                 )
                 await link.upload_files([])
                 self.assertEqual((directory / "phone/selected").read_bytes(), payload)
-                self.assertFalse((directory / "phone/discarded").exists())
+                self.assertEqual((directory / "phone/discarded").stat().st_size, 0)
                 self.assertEqual(link._discarded_files, set())
                 self.assertLessEqual(max(wire.requests), 128 * 1024)
                 self.assertEqual(events[-1]["receivedBytes"], 2 * len(payload))
@@ -133,7 +187,7 @@ class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
                     )
                 )
                 link.cleanup_discarded_files()
-                self.assertFalse((directory / "phone/discarded").exists())
+                self.assertEqual((directory / "phone/discarded").stat().st_size, 0)
             self.assertFalse(directory.exists())
 
     async def test_low_space_is_checked_before_selected_bytes_are_written(self) -> None:
@@ -273,7 +327,28 @@ class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(workspace._pending_copy_bytes, 8)
                     self.assertEqual((directory / "b").read_bytes(), b"12345678")
 
-    async def test_discarded_files_need_no_placeholders_or_accumulating_path_set(
+    async def test_moving_empty_filtered_entry_releases_replaced_copy_budget(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-move-budget-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                link = StreamedDeviceLink(
+                    Wire(b""), directory, workspace=workspace, watchdog=BackupWatchdog()
+                )
+                source = directory / "empty"
+                target = directory / "selected"
+                with workspace.open_private(source):
+                    pass
+                with workspace.open_private(target) as stream:
+                    workspace.write_chunk(stream, b"selected", reserve_copy=True)
+                link._reserved_paths[target] = len(b"selected")
+                await link.move_items(["DLMessageMoveItems", {"empty": "selected"}])
+                self.assertEqual(target.read_bytes(), b"")
+                self.assertEqual(workspace._pending_copy_bytes, 0)
+                self.assertEqual(link._reserved_paths, {})
+
+    async def test_discarded_payloads_keep_empty_entries_without_path_set(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-stream-test-") as temporary:

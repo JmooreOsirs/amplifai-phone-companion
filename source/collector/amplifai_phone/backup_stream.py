@@ -203,9 +203,12 @@ class StreamedDeviceLink(DeviceLink):
                     self._reserved_paths[path] = self._retained - retained_before
                 self._discarded_files.discard(Path(file_name))
             else:
-                # Full filtered backups already tolerate absent sources in the
-                # pinned move/copy operations. Do not create or retain a million
-                # placeholders/path objects for unrelated photos and attachments.
+                # The device may read back a filtered file during finalization.
+                # Preserve the empty protocol entry without retaining its payload
+                # or growing the SDK's discarded-path set.
+                previous = self._reserved_paths.pop(path, 0)
+                with self.workspace.open_private(path):
+                    self.workspace.release_copy_budget(previous)
                 size, code = await self._consume_file_transfer(size, code)
             self._files += 1
             if code == CODE_ERROR_REMOTE:
@@ -288,9 +291,11 @@ class StreamedDeviceLink(DeviceLink):
                 )
             if new.is_dir():
                 new = new / old.name
-            movements.append((old, new))
+            movements.append((old, new, old.is_file()))
         await super().move_items(message)
-        for old, new in movements:
+        for old, new, source_was_file in movements:
+            if source_was_file:
+                self.workspace.release_copy_budget(self._reserved_paths.pop(new, 0))
             moved = {
                 path: size
                 for path, size in self._reserved_paths.items()

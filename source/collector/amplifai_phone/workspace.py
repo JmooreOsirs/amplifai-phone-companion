@@ -367,8 +367,13 @@ class SessionWorkspace:
                     current.mkdir(mode=0o700, exist_ok=True)
             return current
         except OSError as exc:
+            code = (
+                "workspace_low_space"
+                if exc.errno in {errno.ENOSPC, errno.EDQUOT}
+                else "workspace_unavailable"
+            )
             raise WorkspaceError(
-                "Private backup storage is unavailable", code="workspace_unavailable"
+                "Private backup storage is unavailable", code=code
             ) from exc
 
     def open_private(self, path: Path) -> BinaryIO:
@@ -393,8 +398,13 @@ class SessionWorkspace:
             handle = None
             return result
         except OSError as exc:
+            code = (
+                "workspace_low_space"
+                if exc.errno in {errno.ENOSPC, errno.EDQUOT}
+                else "workspace_unavailable"
+            )
             raise WorkspaceError(
-                "Private backup storage is unavailable", code="workspace_unavailable"
+                "Private backup storage is unavailable", code=code
             ) from exc
         finally:
             if handle is not None:

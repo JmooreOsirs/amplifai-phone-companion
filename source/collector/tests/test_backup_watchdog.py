@@ -115,7 +115,11 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(progress, [7.0])
                     self.assertGreater(clock.now, 3600)
                     self.assertLess(clock.now, 4 * 60 * 60)
-                    self.assertEqual({path.name for path in root.iterdir()}, {SESSION_MARKER})
+                    self.assertEqual(
+                        {path.name for path in root.iterdir()},
+                        {SESSION_MARKER, "discarded-file"},
+                    )
+                    self.assertEqual((root / "discarded-file").stat().st_size, 0)
                     self.assertLessEqual(max(reader.requests), RECEIVE_CHUNK_BYTES)
         finally:
             local_socket.close()
