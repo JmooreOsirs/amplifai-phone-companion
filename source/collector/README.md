@@ -1,14 +1,29 @@
-# Local iPhone collector candidate
+# AMPLIFai phone collectors
 
-This is a local macOS companion candidate with an actual `MobileBackup2`
-collection path, **not** a released customer app or a connected public
-pilot. A prior exact binary passed Apple notarization, but the source now
-attempts retained history beyond the old six-month test window and therefore
-requires a new signed/notarized artifact. No version has been run against an
-owner device or on Windows. The public
-`/phone` page shows the direct-phone owner-test journey but stops at a disabled
-download; `/pilot` remains a secondary manual-file importer and does not call
-this code.
+The public `/phone` and `/phone/account` setup links offer the signed Android
+`2026.10.08-rc4` APK and the signed, notarized, stapled Apple Silicon/macOS 14+
+`2026.10.08-rc4-ack2` Mac owner-test release. The Mac distribution label is
+ACK2, but its contained About/build metadata still says rc4/26100804. Both
+public assets remain owner/partner tests, not universal physical-device acceptance. Exact
+public source, notices, checksums and release
+receipts are in `PROJECT_PLAN.md`; Android-specific behavior is in
+[`android/README.md`](android/README.md). `/pilot` is a secondary manual-file
+importer, not the normal direct-phone path. No Windows or Intel Mac release exists.
+
+October 1 Windows software qualification used a standard public-repository
+Windows Server 2025 x64 VM, Python 3.12.10 and the exact hash-pinned Windows
+dependency lock, without cache/artifact storage or paid runners. Run
+`36897819582` on companion-only source `4a9214e` installed those dependencies,
+but Windows private-directory ACL creation was rejected; a cancellation
+fixture then waited indefinitely for startup until the 15-minute job limit.
+This is a failed qualification, not Windows companion/installer readiness.
+Native Windows UI, safe cancellation, installer/signing, Apple USB prerequisites,
+browser transfer and physical-device acceptance remain separate gates.
+
+The long-backup and saved-ACK repairs are present in the public Mac ACK2
+owner-test package. Normal physical install,
+Trust/permissions, history coverage, browser handoff and consented account save
+remain separate operator acceptance gates.
 
 Build the host-specific macOS app without opening or connecting to a phone:
 
@@ -39,12 +54,10 @@ earlier candidates. The default command without `--isolated` still updates
 `dist/AmplifaiPhonePortable.app`; use it only when that local target may be
 replaced. Either mode runs read-only `inspect`
 and `runtime-check` smoke checks from the frozen helper. This build script's
-output is ad-hoc signed and is not a customer download. A separate prior
-Developer ID-signed binary was accepted by Apple and a separate stapled copy
-passed Gatekeeper, but it predates the retained-history source change and
-is also not published. No customer
-installer or Windows build exists. The
-packaging tool and its dependencies are downloaded only at build time.
+output is ad-hoc signed and is not a customer download. The existing published
+Mac release has its own Developer ID, notarization, staple and source/notices
+receipts; none cover new source. Packaging tools and dependencies are downloaded
+only at build time.
 
 The read-only release diagnostic can be run without an Apple login or phone:
 
@@ -101,7 +114,34 @@ read only contact identity fields and call/message metadata. Temporary files
 are deleted on normal completion, error, or interruption handled by Python;
 an unclean process/OS crash can leave temporary material. The app detects
 marked, abandoned sessions and requires an explicit cleanup action before
-another collection. No persistent metadata file or upload is made.
+another collection. The helper itself makes no cloud upload. The browser can
+save selected metadata only after separate per-source account consent.
+
+Capacity-candidate recovery policy: received file or protocol bytes refresh a
+15-minute inactivity watchdog, including discarded payload bytes and live
+finalization responses with a flat percentage. During an active file frame,
+control bytes cannot hide a 15-minute file stall. Between file frames,
+control-only liveness is bounded to one hour since the last file bytes.
+There is no total elapsed-time cutoff for an actively receiving file transfer.
+An owner can cancel a slow transfer; the 15-minute no-byte and one-hour
+control-only guards still stop a genuinely stalled session.
+Selected input, discarded input, outbound files and parsing copies are streamed
+in 128 KiB chunks. Selected writes reserve their future parsing copy, and every
+write must preserve a further 2 GiB of real free space. There is no fixed 1 GiB
+session or 128 MiB database/manifest limit, nor an unrelated-file-count cap.
+Backup control/plist data retain a 16 MiB memory bound; metadata readers retain
+the explicit 1,000,000-row/source and 25,000-selected-contact safety frontiers.
+The 20 distinct phone/email values per contact contract also stops with an
+explicit incomplete-source error instead of silently dropping later values.
+SQLite cursors avoid a second full row list; retained metadata records still
+reside in memory, so this is not an unlimited-history or paged-review claim.
+Low space, metadata/control capacity, unsupported format, unsafe ownership,
+filesystem unavailability, device-response stall and
+incomplete cleanup have distinct safe errors. Cancellation and
+owned-loop shutdown are bounded; incomplete cleanup retains a marked private
+session and blocks another collection until explicit inspection/recovery.
+These policies do not guarantee complete phone history or a five-to-ten-minute
+run. Synthetic socket throughput is not a measured USB or phone speed.
 
 The current terminal review lets an operator choose contacts and reports
 matching retained available calls/messages without an arbitrary six-month cutoff.
@@ -109,8 +149,8 @@ The 50-contact/six-month figures are bounded owner-test targets, not production
 limits. Technical source-row, payload and local-handoff bounds remain and can
 stop a large history explicitly. A 32 MB paged local handoff and separately
 consented 1,000-row cloud parts are implemented in working source, but the
-cloud grouping, recovery/export/delete UX, public browser handoff and real
-device path are not release-verified.
+cloud grouping and recovery/export/delete have synthetic software evidence.
+Normal real-device and same-phone browser acceptance is still pending.
 It excludes non-normalizable numbers, email-only iMessages, and group-chat
 membership it cannot safely establish; counts are partial, not evidence of
 zero interactions. Contacts DB property IDs, schemas, encrypted backups, USB
@@ -118,10 +158,11 @@ pairing, iOS versions, and Windows prerequisites still require physical-device
 validation. No Android direct collection is in this candidate.
 
 `pymobiledevice3`, `pyiosbackup`, and several transitive packages are GPL-family
-dependencies. The local build above is for evaluation on this Mac only. Its
-Swift/Python bundle and complete frozen dependency set need a source, notice,
-and rights review before any distribution; the private web-app boundary is
-not legally established by a separate process alone. PyInstaller's
+dependencies. Published companion-only releases include corresponding source
+and retained notices under the approved GPL-3.0-or-later boundary; the website
+and backend repository remains private. Changed bundles need fresh exact-source,
+notice and package reconciliation before distribution. This is not a general
+legal-clearance claim. PyInstaller's
 [special exception](https://pyinstaller.org/en/stable/license.html) does not
 waive dependency obligations. The ordinary build-script output is ad-hoc signed only,
 and the in-app browser has not proven the public HTTPS-to-loopback handoff;
@@ -143,5 +184,7 @@ parsers and the [iQueryContacts AddressBook query](https://github.com/MetadataFo
 Synthetic verification:
 
 ```sh
-PYTHONPATH=collector uvx --from pymobiledevice3==10.4.0 python -m unittest discover -s collector/tests -v
+PYTHONPATH=collector uvx --from pymobiledevice3==10.4.0 --with pyiosbackup python -m unittest discover -s collector/tests -v
+uvx ruff check collector
+sh scripts/test_macos_recovery.sh
 ```

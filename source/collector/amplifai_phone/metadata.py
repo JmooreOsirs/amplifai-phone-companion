@@ -7,21 +7,33 @@ must remain in a private, short-lived directory.
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 COCOA_EPOCH = 978307200
-RETAINED_HISTORY_START = datetime(2001, 1, 1, tzinfo=timezone.utc)
+RETAINED_HISTORY_START = datetime(2001, 1, 1, tzinfo=UTC)
 MAX_ROWS_PER_SOURCE = 1_000_000
 MAX_SELECTED_CONTACTS = 25_000
+ROW_CHECK_INTERVAL = 1024
 PHONE_CHARS = re.compile(r"[^0-9+]")
 
 
 class UnsupportedSchema(ValueError):
     """A device database shape is not one we can safely interpret."""
+
+
+class SourceCapacityLimit(ValueError):
+    """A bounded metadata/control frontier, not an unsupported phone schema."""
+
+
+class SourceReadCapacityLimit(SourceCapacityLimit):
+    """A per-source reader bound, distinct from backup/session safety bounds."""
 
 
 @dataclass(frozen=True)
@@ -66,13 +78,19 @@ def normalize_phone(raw: object) -> str | None:
     return None
 
 
-def _open_readonly(path: Path) -> sqlite3.Connection:
+@contextmanager
+def _open_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     if not path.is_file():
         raise UnsupportedSchema(f"Missing required database: {path.name}")
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
-    return connection
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA mmap_size=0")
+        connection.execute("PRAGMA cache_size=-2048")
+        yield connection
+    finally:
+        connection.close()
 
 
 def _require_columns(
@@ -91,21 +109,21 @@ def _cocoa_datetime(value: object) -> datetime | None:
         return None
     seconds = value / 1_000_000_000 if value > 1_000_000_000_000_000 else value
     try:
-        return datetime.fromtimestamp(seconds + COCOA_EPOCH, tz=timezone.utc)
+        return datetime.fromtimestamp(seconds + COCOA_EPOCH, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return None
 
 
-def read_contacts(path: Path) -> SourceResult:
+def read_contacts(
+    path: Path, check_callback: Callable[[], None] | None = None
+) -> SourceResult:
     with _open_readonly(path) as db:
         _require_columns(db, "ABPerson", {"ROWID", "First", "Last"})
         _require_columns(db, "ABMultiValue", {"record_id", "property", "value"})
         rows = db.execute(
             "SELECT ROWID, First, Last FROM ABPerson ORDER BY ROWID LIMIT ?",
             (MAX_ROWS_PER_SOURCE + 1,),
-        ).fetchall()
-        if len(rows) > MAX_ROWS_PER_SOURCE:
-            raise UnsupportedSchema("Contact row limit exceeded")
+        )
         values: dict[int, dict[str, set[str]]] = {}
         for index, row in enumerate(
             db.execute(
@@ -113,7 +131,9 @@ def read_contacts(path: Path) -> SourceResult:
             )
         ):
             if index >= MAX_ROWS_PER_SOURCE:
-                raise UnsupportedSchema("Contact value row limit exceeded")
+                raise SourceReadCapacityLimit("Contact value row limit exceeded")
+            if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
+                check_callback()
             owner = values.setdefault(
                 row["record_id"], {"phones": set(), "emails": set()}
             )
@@ -130,8 +150,17 @@ def read_contacts(path: Path) -> SourceResult:
                 ):
                     owner["emails"].add(email)
         contacts = []
-        for row in rows:
+        row_count = 0
+        for row_count, row in enumerate(rows, 1):
+            if row_count > MAX_ROWS_PER_SOURCE:
+                raise SourceReadCapacityLimit("Contact row limit exceeded")
+            if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
+                check_callback()
             fields = values.get(row["ROWID"], {"phones": set(), "emails": set()})
+            if len(fields["phones"]) > 20 or len(fields["emails"]) > 20:
+                raise SourceReadCapacityLimit(
+                    "Contact has more phone or email values than the handoff contract supports"
+                )
             name = " ".join(
                 part.strip()
                 for part in (row["First"], row["Last"])
@@ -142,14 +171,16 @@ def read_contacts(path: Path) -> SourceResult:
                     Contact(
                         row["ROWID"],
                         name[:240],
-                        tuple(sorted(fields["phones"]))[:20],
-                        tuple(sorted(fields["emails"]))[:20],
+                        tuple(sorted(fields["phones"])),
+                        tuple(sorted(fields["emails"])),
                     )
                 )
-        return SourceResult(len(rows), tuple(contacts), len(rows) - len(contacts))
+        return SourceResult(row_count, tuple(contacts), row_count - len(contacts))
 
 
-def read_calls(path: Path, since: datetime) -> SourceResult:
+def read_calls(
+    path: Path, since: datetime, check_callback: Callable[[], None] | None = None
+) -> SourceResult:
     with _open_readonly(path) as db:
         _require_columns(
             db,
@@ -160,11 +191,14 @@ def read_calls(path: Path, since: datetime) -> SourceResult:
             "SELECT ROWID, ZDATE, ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED "
             "FROM ZCALLRECORD ORDER BY ROWID LIMIT ?",
             (MAX_ROWS_PER_SOURCE + 1,),
-        ).fetchall()
-        if len(rows) > MAX_ROWS_PER_SOURCE:
-            raise UnsupportedSchema("Call row limit exceeded")
+        )
         calls = []
-        for row in rows:
+        row_count = 0
+        for row_count, row in enumerate(rows, 1):
+            if row_count > MAX_ROWS_PER_SOURCE:
+                raise SourceReadCapacityLimit("Call row limit exceeded")
+            if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
+                check_callback()
             when = _cocoa_datetime(row["ZDATE"])
             phone = normalize_phone(row["ZADDRESS"])
             if when is None or when < since or phone is None:
@@ -180,7 +214,7 @@ def read_calls(path: Path, since: datetime) -> SourceResult:
             duration = row["ZDURATION"]
             duration_seconds = (
                 max(0, min(86400, int(duration)))
-                if isinstance(duration, (int, float))
+                if isinstance(duration, (int, float)) and math.isfinite(duration)
                 else None
             )
             calls.append(
@@ -194,10 +228,12 @@ def read_calls(path: Path, since: datetime) -> SourceResult:
                     duration_seconds,
                 )
             )
-        return SourceResult(len(rows), tuple(calls), len(rows) - len(calls))
+        return SourceResult(row_count, tuple(calls), row_count - len(calls))
 
 
-def read_messages(path: Path, since: datetime) -> SourceResult:
+def read_messages(
+    path: Path, since: datetime, check_callback: Callable[[], None] | None = None
+) -> SourceResult:
     with _open_readonly(path) as db:
         _require_columns(db, "message", {"date", "service", "is_from_me", "handle_id"})
         _require_columns(db, "handle", {"ROWID", "id"})
@@ -215,31 +251,56 @@ def read_messages(path: Path, since: datetime) -> SourceResult:
             "handle.id AS sender FROM message LEFT JOIN handle ON message.handle_id = handle.ROWID "
             "ORDER BY message.ROWID LIMIT ?",
             (MAX_ROWS_PER_SOURCE + 1,),
-        ).fetchall()
-        if len(rows) > MAX_ROWS_PER_SOURCE:
-            raise UnsupportedSchema("Message row limit exceeded")
+        )
         chat_phones: dict[int, set[str]] = {}
+        message_chats: dict[int, set[int]] = {}
         if has_chat:
             for index, row in enumerate(
                 db.execute(
-                    "SELECT cmj.message_id, handle.id FROM chat_message_join AS cmj "
-                    "JOIN chat_handle_join AS chj ON cmj.chat_id = chj.chat_id "
+                    "SELECT chj.chat_id, handle.id FROM chat_handle_join AS chj "
                     "JOIN handle ON chj.handle_id = handle.ROWID"
                 )
             ):
                 if index >= MAX_ROWS_PER_SOURCE:
-                    raise UnsupportedSchema("Message participant row limit exceeded")
+                    raise SourceReadCapacityLimit("Message participant row limit exceeded")
+                if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
+                    check_callback()
                 phone = normalize_phone(row["id"])
                 if phone:
-                    chat_phones.setdefault(row["message_id"], set()).add(phone)
+                    phones = chat_phones.setdefault(row["chat_id"], set())
+                    if len(phones) <= 50:
+                        phones.add(phone)
+            for index, row in enumerate(
+                db.execute("SELECT message_id, chat_id FROM chat_message_join")
+            ):
+                if index >= MAX_ROWS_PER_SOURCE:
+                    raise SourceReadCapacityLimit("Message chat row limit exceeded")
+                if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
+                    check_callback()
+                if row["chat_id"] in chat_phones:
+                    message_chats.setdefault(row["message_id"], set()).add(row["chat_id"])
         messages = []
-        for row in rows:
+        row_count = 0
+        for row_count, row in enumerate(rows, 1):
+            if row_count > MAX_ROWS_PER_SOURCE:
+                raise SourceReadCapacityLimit("Message row limit exceeded")
+            if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
+                check_callback()
             when = _cocoa_datetime(row["date"])
-            participants = set(chat_phones.get(row["source_id"], ()))
+            participants = {
+                phone
+                for chat_id in message_chats.get(row["source_id"], ())
+                for phone in chat_phones.get(chat_id, ())
+            }
             sender = normalize_phone(row["sender"])
             if sender:
                 participants.add(sender)
-            if when is None or when < since or not participants or len(participants) > 50:
+            if (
+                when is None
+                or when < since
+                or not participants
+                or len(participants) > 50
+            ):
                 continue
             service = str(row["service"] or "").lower()
             transport = (
@@ -269,7 +330,7 @@ def read_messages(path: Path, since: datetime) -> SourceResult:
                     None,
                 )
             )
-        return SourceResult(len(rows), tuple(messages), len(rows) - len(messages))
+        return SourceResult(row_count, tuple(messages), row_count - len(messages))
 
 
 def select_people(contacts: SourceResult, contact_ids: set[int]) -> tuple[Contact, ...]:

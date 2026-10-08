@@ -1,0 +1,19 @@
+{
+  "status": "source-candidate-only",
+  "baseRelease": "af4719d",
+  "windowEntrypoint": "collector/windows/app.py",
+  "pythonModules": ["collector/windows/session.py", "collector/windows/helper_process.py"],
+  "runtime": "Windows CPython with bundled Tcl/Tk; qualify against the engine's selected Python runtime",
+  "newPythonDependencies": [],
+  "existingPackagingPin": "collector/portable-requirements.in: pyinstaller==6.22.3",
+  "wrapperOnedir": "dist/AmplifaiPhone/{AmplifaiPhone.exe,_internal/}; external resources/ staged beside the wrapper executable, not inside wrapper _internal/",
+  "helperOnedir": "dist/AmplifaiPhoneHelper/{AmplifaiPhoneHelper.exe,_internal/}; copy the entire matching tree without flattening into wrapper resources/phone-helper/",
+  "resourceChecks": "frozen-only fixed paths, no symlink/reparse resource entries, readable contained runtime; shape checks do not replace build/hash/signature qualification",
+  "childRuntime": "fixed helper executable with helper-directory cwd, private stdin/stdout, discarded stderr, shell=false, fresh copied env without PYTHONPATH/PYTHONHOME and PYINSTALLER_RESET_ENVIRONMENT=1",
+  "resources": [
+    {"source": "public/brand/amplifai-by-nexus-original.png", "destination": "resources/amplifai-by-nexus-original.png", "transform": "none"},
+    {"sourceOwner": "script/build_windows_candidate.py", "destination": "resources/phone-helper/", "contract": "entire matching frozen AmplifaiPhoneHelper onedir including AmplifaiPhoneHelper.exe and its matching _internal/; not an isolated copied executable or source/PATH fallback"}
+  ],
+  "install": "Per-user non-admin installer and signed distribution remain unqualified; no public download",
+  "releaseGates": ["Windows GUI freeze/build", "Tcl/Tk runtime inclusion", "complete matching helper runtime/dependency hashes and driver qualification", "non-elevated private Windows ACL/PID ownership", "cooperative capture cancellation", "normal per-user installer/SmartScreen path", "signed source/archive hashes", "physical iPhone Trust/password path", "exact-origin authenticated browser receipt/save ACK", "rendered accessibility and DPI qualification"]
+}

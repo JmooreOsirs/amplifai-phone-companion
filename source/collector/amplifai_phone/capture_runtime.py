@@ -6,8 +6,16 @@ import asyncio
 from collections.abc import Awaitable
 from typing import TypeVar
 
+from pymobiledevice3.exceptions import ConnectionTerminatedError
+
 from . import backup_watchdog
-from .backup_watchdog import BackupCleanupIncomplete, BackupStalled, BackupTimeLimit
+from .backup_stream import DeviceBackupRejected
+from .backup_watchdog import (
+    BackupCleanupIncomplete,
+    BackupNoFileProgress,
+    BackupStalled,
+    BackupTimeLimit,
+)
 
 RUNTIME_CLEANUP_SECONDS = 1
 Result = TypeVar("Result")
@@ -79,8 +87,12 @@ def _reason(error: BaseException | None) -> str:
         return error.reason
     if isinstance(error, (asyncio.CancelledError, KeyboardInterrupt)):
         return "cancelled"
-    if isinstance(error, (BackupStalled, BackupTimeLimit)):
+    if isinstance(error, (BackupStalled, BackupTimeLimit, BackupNoFileProgress)):
         return error.code
+    if isinstance(error, DeviceBackupRejected):
+        return "device_backup_failed"
+    if isinstance(error, (ConnectionTerminatedError, ConnectionError)):
+        return "connection_lost"
     if isinstance(error, TimeoutError):
         return "connection_timeout"
     return "cleanup_incomplete"

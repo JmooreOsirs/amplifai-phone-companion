@@ -1,13 +1,13 @@
-# AMPLIFai Phone Android 2026.10.08-rc4 source
+# AMPLIFai Phone Windows x64 source qualification
 
 **Mac and Android owner/partner test builds.** Normal fresh installation,
 owner-operated phone collection and hosted-browser transfer still need
 acceptance. These are not verified customer-ready downloads. Do not bypass
 Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
-companions are not available.
+companions are not available as downloads.
 
 - [Mac Apple Silicon/macOS 14+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc3): separately notarized owner-test companion. The Mac release has its own exact source tag and complete source archive.
-- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.08-rc4): release-signed owner/partner test APK for same-phone browser handoff. This in-place update copies a usable support code and requires a fresh, unchecked approval before reading each phone source. Its exact dotted build distinguishes Android from numeric Mac builds. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review. The account-saving web gate is still closed pending retention and legal qualification.
+- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.08-rc4): release-signed owner/partner test APK for same-phone browser handoff. This in-place update copies a usable support code and requires a fresh, unchecked approval before reading each phone source. Its exact dotted build distinguishes Android from numeric Mac builds. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review. The account-saving web path is published, but a real signed-in Android-to-web saved acknowledgment remains unobserved.
 - Start through your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account), or use the separate [browser-only pilot](https://amplifai-database-engine.vercel.app/phone). The temporary app-generated pairing code is not a phone number or email verification code.
 
 ## Android source and build
@@ -31,6 +31,17 @@ Build with Android SDK 37, JDK 25 and the pinned Gradle wrapper. Developer build
 tools are not required by installer users. Without release signing variables,
 the generated release APK is unsigned and must not be distributed as installable.
 The Android README describes operator-supplied signing and verification.
+
+## Windows x64 qualification source
+
+This candidate branch also projects the current Python collection engine and
+the Windows Tk wrapper under `source/collector/windows/`. The fixed package
+builder at `source/script/build_windows_candidate.py` creates a disposable
+dual-onedir candidate only on Windows x64/CPython 3.12. The branch's bounded
+Windows runner is configured to check private storage, synthetic protocol
+behavior, frozen helper imports/empty residue and GUI startup; it uploads no
+binary. No installer, Windows signature, public download, Apple USB/Trust/backup
+run, physical-device transfer or authenticated saved acknowledgment is implied.
 
 ## Mac source package
 

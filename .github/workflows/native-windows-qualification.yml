@@ -1,23 +1,23 @@
-name: Windows companion software qualification
+name: Windows x64 disposable companion qualification
 
 on:
   push:
-    branches: [codex/oct1-native-qualification]
+    branches: [codex/windows-x64-candidate-oct8]
 
 permissions:
   contents: read
 
 concurrency:
-  group: oct1-windows-qualification
+  group: windows-x64-candidate-oct8
   cancel-in-progress: false
 
 jobs:
   windows:
     # Standard PUBLIC-repository runner minutes are free. No cache/artifact storage.
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
-      PYTHONPATH: source/collector
+      PYTHONPATH: source/collector;source/collector/tests;source/collector/windows;source/script
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -33,12 +33,66 @@ jobs:
           Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
           python --version
           python -c "import platform; print(platform.machine())"
-      - name: Install exact hash-pinned Windows dependencies
-        run: python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
-      - name: Qualify synthetic protocol, private storage and cleanup
-        run: python -m unittest discover -s source/collector/tests -v
-      - name: Verify runtime without connecting to a phone
+      - name: Verify exact fixed inputs and builder contract
+        shell: pwsh
         run: |
-          python -m amplifai_phone.agent runtime-check
-          python -m amplifai_phone.agent inspect
-          python -c "import tkinter as tk; window=tk.Tk(); window.withdraw(); window.update(); window.destroy(); print('Windows native Tk runtime ready')"
+          git rev-parse HEAD
+          python source/script/test_windows_candidate.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install exact hash-pinned Windows dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify integrated wrapper and engine wire
+        shell: pwsh
+        run: |
+          python -m unittest discover -s source/collector/windows/tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify native storage before building
+        shell: pwsh
+        run: |
+          python -m unittest test_windows_storage test_windows_restricted_token_probe -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python source/collector/tests/windows_restricted_token_probe.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify complete current engine without a phone
+        shell: pwsh
+        run: |
+          python -m unittest discover -s source/collector/tests -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Freeze distinct runtimes and inspect exact package
+        shell: pwsh
+        run: |
+          $python = (Get-Command python).Source
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          python source/script/build_windows_candidate.py --source source --python $python --output $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise frozen GUI startup and normal close
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate\wrapper-dist\AmplifaiPhone\AmplifaiPhone.exe'
+          $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+          try {
+            if (-not $process.WaitForInputIdle(30000)) { throw 'Frozen GUI did not become idle' }
+            $process.Refresh()
+            if ($process.MainWindowHandle -eq 0 -or $process.MainWindowTitle -notlike 'AMPLIFai Phone*') {
+              throw 'Frozen GUI window was not observed'
+            }
+            if (-not $process.CloseMainWindow()) { throw 'Frozen GUI close was not accepted' }
+            if (-not $process.WaitForExit(15000)) { throw 'Frozen GUI did not exit after close' }
+            if ($process.ExitCode -ne 0) { throw 'Frozen GUI exited unsuccessfully' }
+            'Frozen GUI window opened and closed; no phone was connected.'
+          } finally {
+            $process.Refresh()
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+      - name: Show bounded freezer diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          foreach ($name in @('helper-freeze.log', 'wrapper-freeze.log')) {
+            $log = Join-Path $output $name
+            if (Test-Path $log) { Get-Content $log -Tail 35 }
+          }

@@ -47,13 +47,19 @@ class SavedAcknowledgementTest(unittest.TestCase):
             for invalid in ({**body, "saved": "true"}, {**body, "extra": True}, {"saved": True}):
                 self.assertEqual(self.request(bridge, "/v1/acknowledge-save", invalid, token)[0], 400)
             self.assertFalse(bridge.acknowledged_saved)
+            confirmation = {"handoffId": pairing["handoffId"], "payloadSha256": pairing["payloadSha256"], "received": True}
+            self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", confirmation, token)[0], 409)
             for _ in range(2):
                 self.assertEqual(self.request(bridge, "/v1/acknowledge-save", body, token), (200, {"acknowledged": True}))
+            self.assertEqual(bridge.handoff_state(), "saved_pending_browser_receipt")
+            self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", confirmation, "wrong")[0], 403)
+            self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", {**confirmation, "received": False}, token)[0], 400)
+            self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", confirmation, token), (200, {"received": True}))
             self.assertEqual(bridge.handoff_state(), "saved")
         finally:
             bridge.close()
 
-    def test_expired_binding_cannot_be_acknowledged(self):
+    def test_completed_transfer_can_be_acknowledged_after_pair_code_expires(self):
         tick = [100.0]
         bridge = BridgeServer(fixture(), {1}, port=0, now=lambda: tick[0])
         bridge.start()
@@ -62,8 +68,44 @@ class SavedAcknowledgementTest(unittest.TestCase):
             self.request(bridge, "/v1/metadata", token=pairing["token"])
             tick[0] += 301
             body = {"handoffId": pairing["handoffId"], "payloadSha256": pairing["payloadSha256"], "saved": True}
-            self.assertEqual(self.request(bridge, "/v1/acknowledge-save", body, pairing["token"])[0], 410)
-            self.assertFalse(bridge.acknowledged_saved)
-            self.assertEqual(bridge.handoff_state(), "expired")
+            self.assertEqual(self.request(bridge, "/v1/acknowledge-save", body, pairing["token"])[0], 200)
+            self.assertTrue(bridge.acknowledged_saved)
+            self.assertEqual(bridge.handoff_state(), "saved_pending_browser_receipt")
+            confirmation = {"handoffId": pairing["handoffId"], "payloadSha256": pairing["payloadSha256"], "received": True}
+            self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", confirmation, pairing["token"])[0], 200)
+            self.assertEqual(bridge.handoff_state(), "saved")
         finally:
             bridge.close()
+
+    def test_expired_untransferred_pair_cannot_be_used_for_saved_ack(self):
+        tick = [100.0]
+        bridge = BridgeServer(fixture(), {1}, port=0, now=lambda: tick[0])
+        bridge.start()
+        try:
+            _, pairing = self.request(bridge, "/v1/pair", {"code": bridge.code})
+            tick[0] += 301
+            body = {"handoffId": pairing["handoffId"], "payloadSha256": pairing["payloadSha256"], "saved": True}
+            self.assertEqual(self.request(bridge, "/v1/acknowledge-save", body, pairing["token"])[0], 410)
+            self.assertFalse(bridge.acknowledged_saved)
+        finally:
+            bridge.close()
+
+    def test_pair_timer_does_not_close_an_already_transferred_review(self):
+        bridge = BridgeServer(fixture(), {1}, port=0)
+        bridge.start()
+        try:
+            _, pairing = self.request(bridge, "/v1/pair", {"code": bridge.code})
+            self.assertEqual(self.request(bridge, "/v1/metadata", token=pairing["token"])[0], 200)
+            bridge._expire_unclaimed()
+            self.assertFalse(bridge.closed)
+            body = {"handoffId": pairing["handoffId"], "payloadSha256": pairing["payloadSha256"], "saved": True}
+            self.assertEqual(self.request(bridge, "/v1/acknowledge-save", body, pairing["token"])[0], 200)
+        finally:
+            bridge.close()
+
+    def test_pair_timer_still_closes_an_untransferred_review(self):
+        bridge = BridgeServer(fixture(), {1}, port=0)
+        bridge.start()
+        bridge._expire_unclaimed()
+        self.assertTrue(bridge.closed)
+        self.assertEqual(bridge.handoff_state(), "expired")

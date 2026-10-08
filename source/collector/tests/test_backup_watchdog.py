@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import struct
 import tempfile
@@ -11,17 +12,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifai_phone.backup_watchdog import (
     BACKUP_IDLE_SECONDS,
-    MAX_BACKUP_ELAPSED_SECONDS,
     RECEIVE_CHUNK_BYTES,
     BackupCleanupIncomplete,
     BackupStalled,
-    BackupTimeLimit,
     BackupWatchdog,
     observe_backup_receives,
     run_backup_session,
 )
 from amplifai_phone.ios_backup import collect_iphone
-from amplifai_phone.workspace import SESSION_MARKER
+from amplifai_phone.windows_storage import private_windows_directory
+from amplifai_phone.workspace import SESSION_MARKER, SessionWorkspace, WorkspaceError
 
 
 async def checkpoint() -> None:
@@ -65,8 +65,8 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
     async def test_discarded_upload_bytes_survive_old_hour_cap_without_new_percent(
         self,
     ) -> None:
+        from amplifai_phone.backup_stream import StreamedDeviceLink
         from pymobiledevice3.service_connection import ServiceConnection, build_plist
-        from pymobiledevice3.services.device_link import DeviceLink
 
         clock = Clock()
         watchdog = BackupWatchdog(clock=clock)
@@ -92,29 +92,35 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
             connection.reader = reader
             connection.writer = MagicMock(drain=AsyncMock())
             await observe_backup_receives(SimpleNamespace(service=connection), watchdog)
-            with tempfile.TemporaryDirectory(
-                prefix="amplifai-receive-test-"
-            ) as temporary:
-                root = Path(temporary)
-                link = DeviceLink(connection, root, preserve_file=lambda *_: False)
-                progress: list[float] = []
+            with tempfile.TemporaryDirectory(prefix="amplifai-receive-test-") as temporary:
+                workspace = SessionWorkspace(Path(temporary) / "sessions")
+                with workspace as root:
+                    link = StreamedDeviceLink(
+                        connection, root, workspace=workspace, watchdog=watchdog,
+                        preserve_file=lambda *_: False,
+                    )
+                    progress: list[float] = []
 
-                async def backup() -> None:
-                    watchdog.start()
-                    try:
-                        await link.dl_loop(progress.append)
-                        watchdog.backup_completed()
-                    finally:
-                        link.cleanup_discarded_files()
+                    async def backup() -> None:
+                        watchdog.start()
+                        try:
+                            await link.dl_loop(progress.append)
+                            watchdog.backup_completed()
+                        finally:
+                            link.cleanup_discarded_files()
 
-                await run_backup_session(
-                    backup(), watchdog, lambda: self.fail("no residue")
-                )
-                self.assertEqual(progress, [7.0])
-                self.assertGreater(clock.now, 3600)
-                self.assertLess(clock.now, MAX_BACKUP_ELAPSED_SECONDS)
-                self.assertEqual(list(root.iterdir()), [])
-                self.assertLessEqual(max(reader.requests), RECEIVE_CHUNK_BYTES)
+                    await run_backup_session(
+                        backup(), watchdog, lambda: self.fail("no residue")
+                    )
+                    self.assertEqual(progress, [7.0])
+                    self.assertGreater(clock.now, 3600)
+                    self.assertLess(clock.now, 4 * 60 * 60)
+                    self.assertEqual(
+                        {path.name for path in root.iterdir()},
+                        {SESSION_MARKER, "discarded-file"},
+                    )
+                    self.assertEqual((root / "discarded-file").stat().st_size, 0)
+                    self.assertLessEqual(max(reader.requests), RECEIVE_CHUNK_BYTES)
         finally:
             local_socket.close()
             peer_socket.close()
@@ -142,7 +148,21 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertTrue(cleanup.is_set())
 
-    async def test_absolute_limit_stops_even_with_continuing_bytes(self) -> None:
+    async def test_live_control_frames_do_not_look_like_a_stalled_finalization(self) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+        watchdog.start()
+        watchdog.file_transfer_started()
+        watchdog.payload_received(1024)
+        watchdog.file_transfer_completed()
+        for minute in range(1, 31):
+            clock.now = minute * 60
+            watchdog.received(1)
+            self.assertIsNone(watchdog._expired())
+        watchdog.backup_completed()
+
+
+    async def test_active_file_bytes_continue_past_old_total_budget(self) -> None:
         clock = Clock()
         watchdog = BackupWatchdog(clock=clock)
         capture: list[bool] = []
@@ -151,18 +171,17 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
         async def backup() -> None:
             watchdog.start()
             try:
-                for _ in range(25):
+                for _ in range(40):
                     clock.now += 600
-                    watchdog.received(1)
+                    watchdog.payload_received(1024 * 1024)
                     await checkpoint()
                 watchdog.backup_completed()
                 capture.append(True)
             finally:
                 cleanup.set()
 
-        with self.assertRaises(BackupTimeLimit):
-            await run_backup_session(backup(), watchdog, lambda: self.fail("cleaned"))
-        self.assertEqual(capture, [])
+        await run_backup_session(backup(), watchdog, lambda: self.fail("cleaned"))
+        self.assertEqual(capture, [True])
         self.assertTrue(cleanup.is_set())
 
     async def test_incomplete_cancellation_flags_residue_and_blocks_late_reads(
@@ -249,6 +268,16 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
+    async def test_startup_storage_failure_is_reported_without_waiting(self) -> None:
+        with (
+            patch(
+                "amplifai_phone.ios_backup.SessionWorkspace.__enter__",
+                side_effect=WorkspaceError("synthetic storage unavailable"),
+            ),
+            self.assertRaisesRegex(WorkspaceError, "synthetic storage unavailable"),
+        ):
+            await asyncio.wait_for(self._cancel_collection(hang_teardown=False), 1)
+
     async def test_collection_cancel_cleans_session_and_never_parses_capture(
         self,
     ) -> None:
@@ -319,7 +348,18 @@ class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
                     sessions_root=root,
                 )
             )
-            await started.wait()
+            startup = asyncio.create_task(started.wait())
+            try:
+                done, _pending = await asyncio.wait(
+                    (task, startup), timeout=20, return_when=asyncio.FIRST_COMPLETED
+                )
+                if task in done:
+                    await task  # Surface early storage/setup failure, not a CI hang.
+                    self.fail("collection returned before the synthetic backup started")
+                self.assertIn(startup, done, "collection startup exceeded 20 seconds")
+            finally:
+                startup.cancel()
+                await asyncio.gather(startup, return_exceptions=True)
             task.cancel()
             with self.assertRaises(
                 BackupCleanupIncomplete if hang_teardown else asyncio.CancelledError
@@ -331,7 +371,10 @@ class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(sessions), int(hang_teardown))
             if hang_teardown:
                 self.assertTrue((sessions[0] / SESSION_MARKER).is_file())
-                self.assertEqual(sessions[0].stat().st_mode & 0o077, 0)
+                if os.name == "nt":
+                    private_windows_directory(root)
+                else:
+                    self.assertEqual(sessions[0].stat().st_mode & 0o077, 0)
                 release.set()
                 await checkpoint()
 
