@@ -128,13 +128,17 @@ def _extract_database(
             or isinstance(entry.size, bool)
             or entry.size < 0
         ):
-            raise SelectedPayloadIntegrityError("Invalid selected payload size")
+            raise SelectedPayloadIntegrityError(
+                "Invalid selected payload size", code="selected_payload_size"
+            )
         if (
             not isinstance(entry.file_id, str)
             or not re.fullmatch(r"[0-9a-f]{40}", entry.file_id)
             or not entry.is_file()
         ):
-            raise SelectedPayloadIntegrityError("Invalid selected payload identity")
+            raise SelectedPayloadIntegrityError(
+                "Invalid selected payload identity", code="selected_payload_identity"
+            )
         source = entry.real_path
         if workspace is not None:
             workspace.checked_path(source)
@@ -154,7 +158,8 @@ def _extract_database(
         )
         if copied != entry.size:
             raise SelectedPayloadIntegrityError(
-                "Selected backup payload length does not match its manifest"
+                "Selected backup payload length does not match its manifest",
+                code="selected_payload_length",
             )
         found_main = found_main or not suffix
     return found_main
@@ -261,7 +266,7 @@ def _parse_entries(
             available[key] = _extract_database(
                 backup, path, destination, bound_callback, workspace, progress_callback
             )
-        except SelectedPayloadMissing:
+        except (SelectedPayloadMissing, SelectedPayloadIntegrityError):
             if key == "contacts":
                 raise
             available[key] = False
@@ -277,7 +282,9 @@ def _parse_entries(
                 "Contact database schema is unsupported"
             ) from error
         except sqlite3.DatabaseError as error:
-            raise SelectedPayloadIntegrityError("Contact database is invalid") from error
+            raise SelectedPayloadIntegrityError(
+                "Contact database is invalid", code="selected_contacts_integrity"
+            ) from error
     else:
         contacts = SourceResult(0, (), 0)
 

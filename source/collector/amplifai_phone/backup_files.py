@@ -70,7 +70,9 @@ def copy_backup_file(
         # the entire app-owned ancestor path before reaching this seam.
         source_handle = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         if not stat.S_ISREG(os.fstat(source_handle).st_mode):
-            raise SelectedPayloadIntegrityError("Selected payload is not a regular file")
+            raise SelectedPayloadIntegrityError(
+                "Selected payload is not a regular file", code="selected_payload_file_type"
+            )
         reader = os.fdopen(source_handle, "rb")
         source_handle = None
         with reader:
@@ -96,7 +98,8 @@ def copy_backup_file(
                             tail = unpadder.update(tail) + unpadder.finalize()
                     except ValueError:
                         raise SelectedPayloadIntegrityError(
-                            "Encrypted selected payload was incomplete or invalid"
+                            "Encrypted selected payload was incomplete or invalid",
+                            code="selected_payload_crypto",
                         ) from None
                     write(writer, tail)
         return count

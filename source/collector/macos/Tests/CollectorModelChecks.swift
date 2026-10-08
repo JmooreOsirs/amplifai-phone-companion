@@ -279,7 +279,7 @@ struct CollectorModelChecks {
         try require(parsed == ["code": code] && code.contains("|backup_host_space|"), "Only the safe support code may leave the app")
         try require(SupportDiagnosticReporter.request(for: code + "|phone owner@example.com") == nil, "Extra private fields must be rejected locally")
         try require(SupportDiagnosticReporter.request(for: code.replacingOccurrences(of: "backup_host_space", with: "owner_private_error")) == nil, "Raw helper reason must never be sent")
-        for category in ["backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "contacts_schema", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit", "contacts_capacity_limit", "source_read_capacity_limit"] {
+        for category in ["backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "selected_payload_size", "selected_payload_identity", "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity", "contacts_schema", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit", "contacts_capacity_limit", "source_read_capacity_limit"] {
             let candidate = code.replacingOccurrences(of: "backup_host_space", with: category)
             try require(SupportDiagnosticReporter.request(for: candidate) != nil, "Specific processing failures must retain their safe diagnostic category")
             let processing = CollectorModel()

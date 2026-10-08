@@ -7,6 +7,8 @@ enum SupportDiagnosticReporter {
         "bridge_unavailable", "collection_failed", "connection_lost", "connection_timeout",
         "device_backup_failed", "phone_connection", "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit", "trust_required",
         "backup_control_invalid", "contacts_schema", "selected_payload_invalid", "selected_payload_missing",
+        "selected_payload_size", "selected_payload_identity", "selected_payload_file_type",
+        "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity",
         "unsupported_schema", "workspace_cleanup", "workspace_low_space", "workspace_size_limit",
         "workspace_unavailable", "workspace_unsafe",
     ]

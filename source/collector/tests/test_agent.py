@@ -102,6 +102,23 @@ class AgentProtocolTest(unittest.TestCase):
                 )
                 self.assertNotIn("/Users/tester", output.getvalue())
 
+    def test_selected_payload_reason_codes_never_emit_private_details(self) -> None:
+        for code in SelectedPayloadIntegrityError.CODES - {"selected_payload_invalid"}:
+            with self.subTest(code=code):
+                async def failed(**kwargs):
+                    kwargs["transfer_callback"]({"stage": "processing", "processedBytes": 0})
+                    raise SelectedPayloadIntegrityError(
+                        "private /Users/tester/phone-backup/sms.db", code=code
+                    )
+
+                output = io.StringIO()
+                self.assertEqual(run_connect(io.StringIO(), output, failed), 1)
+                self.assertEqual(
+                    json.loads(output.getvalue().splitlines()[-1]),
+                    {"kind": "error", "code": code, "stage": "processing"},
+                )
+                self.assertNotIn("/Users/tester", output.getvalue())
+
     def test_device_host_space_refusal_is_specific_and_contains_no_private_detail(self) -> None:
         async def failed_collector(**_kwargs: object) -> IPhoneCapture:
             raise NotEnoughDiskSpaceError("private phone owner detail")

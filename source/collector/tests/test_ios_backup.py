@@ -131,7 +131,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         self.assertEqual(capture.missing_sources, ("messages",))
         read_messages.assert_not_called()
 
-    def test_optional_payload_length_mismatch_still_fails_the_capture(self) -> None:
+    def test_optional_payload_length_mismatch_is_unavailable_without_losing_contacts(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-incomplete-sms-") as temporary:
             directory = Path(temporary)
             source = directory / "selected"
@@ -147,20 +147,84 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 get_entry_by_domain_and_path=lambda *_: entry,
                 is_encrypted=False,
             )
-            with self.assertRaises(SelectedPayloadIntegrityError):
+            with self.assertRaises(SelectedPayloadIntegrityError) as raised:
                 _extract_database(backup, DATABASES["messages"], directory / "messages")
+            self.assertEqual(raised.exception.code, "selected_payload_length")
 
         with tempfile.TemporaryDirectory(prefix="amplifai-invalid-optional-") as temporary:
+            contacts = SourceResult(1, (Contact(1, "Ada", (), ()),), 0)
+            calls = SourceResult(0, (), 0)
+
             def extract(_backup: object, path: str, *_args: object) -> bool:
                 if path == DATABASES["messages"]:
-                    raise SelectedPayloadIntegrityError("synthetic invalid selected payload")
+                    raise SelectedPayloadIntegrityError(
+                        "synthetic invalid selected payload", code="selected_payload_length"
+                    )
+                return True
+
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                patch("amplifai_phone.ios_backup.read_calls", return_value=calls),
+                patch("amplifai_phone.ios_backup.read_messages") as read_messages,
+            ):
+                capture = _parse_entries(
+                    object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START,
+                )
+            self.assertEqual(capture.contacts, contacts)
+            self.assertEqual(capture.messages, SourceResult(0, (), 0))
+            self.assertEqual(capture.missing_sources, ("messages",))
+            read_messages.assert_not_called()
+
+    def test_invalid_required_contacts_payload_keeps_capture_failed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-invalid-contacts-") as temporary:
+            def extract(_backup: object, path: str, *_args: object) -> bool:
+                if path == DATABASES["contacts"]:
+                    raise SelectedPayloadIntegrityError(
+                        "private contacts failure", code="selected_payload_identity"
+                    )
                 return True
 
             with patch("amplifai_phone.ios_backup._extract_database", side_effect=extract):
-                with self.assertRaises(SelectedPayloadIntegrityError):
-                    _parse_entries(
-                        object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START,
-                    )
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+            self.assertEqual(raised.exception.code, "selected_payload_identity")
+
+    def test_invalid_optional_calls_payload_is_unavailable(self) -> None:
+        contacts = SourceResult(1, (Contact(1, "Ada", (), ()),), 0)
+        messages = SourceResult(0, (), 0)
+
+        def extract(_backup: object, path: str, *_args: object) -> bool:
+            if path == DATABASES["calls"]:
+                raise SelectedPayloadIntegrityError(
+                    "private call payload", code="selected_payload_crypto"
+                )
+            return True
+
+        with tempfile.TemporaryDirectory(prefix="amplifai-invalid-calls-") as temporary:
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                patch("amplifai_phone.ios_backup.read_messages", return_value=messages),
+            ):
+                capture = _parse_entries(
+                    object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START
+                )
+        self.assertEqual(capture.contacts, contacts)
+        self.assertEqual(capture.calls, SourceResult(0, (), 0))
+        self.assertEqual(capture.missing_sources, ("calls",))
+        read_calls.assert_not_called()
+
+    def test_invalid_required_contacts_sqlite_has_distinct_safe_reason(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-corrupt-contacts-") as temporary:
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", return_value=True),
+                patch("amplifai_phone.ios_backup.read_contacts", side_effect=sqlite3.DatabaseError("private path")),
+            ):
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+        self.assertEqual(raised.exception.code, "selected_contacts_integrity")
 
     def test_malformed_manifest_entry_types_fail_as_integrity_not_unhandled_exception(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-entry-types-") as temporary:
@@ -178,8 +242,12 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                         get_entry_by_domain_and_path=lambda *_: entry,
                         is_encrypted=False,
                     )
-                    with self.assertRaises(SelectedPayloadIntegrityError):
+                    with self.assertRaises(SelectedPayloadIntegrityError) as raised:
                         _extract_database(backup, DATABASES["messages"], directory / "messages")
+                    self.assertEqual(
+                        raised.exception.code,
+                        "selected_payload_size" if isinstance(size, bool) else "selected_payload_identity",
+                    )
 
     def test_optional_source_parse_failure_preserves_valid_contacts_and_calls(self) -> None:
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)

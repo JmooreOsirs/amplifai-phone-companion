@@ -47,6 +47,22 @@ class SelectedPayloadMissing(UnsupportedSchema):
 class SelectedPayloadIntegrityError(UnsupportedSchema):
     """A retained selected file cannot be trusted for parsing."""
 
+    CODES = frozenset({
+        "selected_payload_invalid",  # Older callers retain their safe fallback.
+        "selected_payload_size",
+        "selected_payload_identity",
+        "selected_payload_file_type",
+        "selected_payload_length",
+        "selected_payload_crypto",
+        "selected_contacts_integrity",
+    })
+
+    def __init__(self, message: str, *, code: str = "selected_payload_invalid") -> None:
+        if code not in self.CODES:
+            raise ValueError("Unknown selected-payload diagnostic code")
+        super().__init__(message)
+        self.code = code
+
 
 class SourceCapacityLimit(ValueError):
     """A bounded metadata/control frontier, not an unsupported phone schema."""

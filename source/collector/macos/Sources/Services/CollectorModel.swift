@@ -1001,7 +1001,7 @@ final class CollectorModel: ObservableObject {
         case "workspace_size_limit": return ["This helper reported an older backup-size limit. Update the signed companion before retrying."]
         case "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit":
             return ["A bounded control or source-reading safety limit was reached, not the former backup-size ceiling.", "Share the safe support code before another long run; do not reset phone encryption or remove other backups."]
-        case "backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "contacts_schema", "unsupported_schema":
+        case "backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "selected_payload_size", "selected_payload_identity", "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity", "contacts_schema", "unsupported_schema":
             return ["Share the safe support code and companion build with support before repeating a long collection.", "Do not reset backup encryption, remove other backups or treat the partial transfer as saved data."]
         case "workspace_unsafe": return ["Stop and contact support. Do not change permissions or delete an unverified folder."]
         case "workspace_unavailable", "workspace": return ["Reopen the signed companion and choose Check temporary data.", "If access still fails, reinstall the signed companion or contact support."]
@@ -1023,6 +1023,12 @@ final class CollectorModel: ObservableObject {
         case "backup_control_invalid": return "Required iPhone backup control metadata was missing or invalid. No metadata was saved."
         case "selected_payload_missing": return "A required selected source listed in the iPhone backup was unavailable. No metadata was saved."
         case "selected_payload_invalid": return "A selected iPhone source failed a size, type or decryption-integrity check. No metadata was saved."
+        case "selected_payload_size": return "A required iPhone source had an invalid size in the backup manifest. No metadata was saved."
+        case "selected_payload_identity": return "A required iPhone source had an invalid identity in the backup manifest. No metadata was saved."
+        case "selected_payload_file_type": return "A required iPhone source was not a regular file. No metadata was saved."
+        case "selected_payload_length": return "A required iPhone source did not match its manifest length. No metadata was saved."
+        case "selected_payload_crypto": return "A required encrypted iPhone source failed its decryption-integrity check. No metadata was saved."
+        case "selected_contacts_integrity": return "The required iPhone contact database was invalid. No metadata was saved."
         case "contacts_schema": return "This iPhone's contact database could not be interpreted safely. No metadata was saved."
         case "workspace_low_space": return "There is not enough free space for the next write, local parsing copies and the 2 GiB reserve. Free space on the temporary-storage volume, then retry."
         case "backup_host_space": return "The iPhone refused the backup receiver's space preflight. No metadata was saved. Check available Mac space and share the safe reference if it repeats."

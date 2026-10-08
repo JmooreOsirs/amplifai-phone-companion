@@ -351,7 +351,7 @@ class StreamedFileTest(unittest.TestCase):
             self.assertFalse(any(event["kind"] == "capture" for event in events))
             self.assertEqual(
                 events[-1],
-                {"kind": "error", "code": "selected_payload_invalid", "stage": "connecting"},
+                {"kind": "error", "code": "selected_payload_crypto", "stage": "connecting"},
             )
             self.assertFalse(session[0].exists())
             self.assertNotIn(str(root), output.getvalue())

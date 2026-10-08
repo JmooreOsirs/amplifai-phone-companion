@@ -154,7 +154,7 @@ def _error_code(exc: BaseException) -> str:
     if isinstance(exc, SelectedPayloadMissing):
         return "selected_payload_missing"
     if isinstance(exc, SelectedPayloadIntegrityError):
-        return "selected_payload_invalid"
+        return exc.code
     if isinstance(exc, ContactsSchemaUnsupported):
         return "contacts_schema"
     if isinstance(exc, UnsupportedSchema):
@@ -399,6 +399,8 @@ def run_connect(
             "connection_lost", "device_backup_failed", "backup_host_space",
             "collection_failed", "backup_control_invalid", "selected_payload_missing",
             "selected_payload_invalid", "contacts_schema", "unsupported_schema",
+            "selected_payload_size", "selected_payload_identity", "selected_payload_file_type",
+            "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity",
             "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit",
             "backup_control_frame_limit", "backup_control_metadata_limit",
             "backup_control_path_limit",
