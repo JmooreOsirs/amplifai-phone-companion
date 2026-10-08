@@ -288,7 +288,7 @@ public final class MainActivity extends Activity {
         if (cancellation != null || preparingTransfer || store == null) { status.setText("Cancel or finish the current operation first."); return; }
         clearSupportCode();
         invalidateReview();
-        clearSource(source);
+        if (!clearSource(source)) return;
         approvedSource = source;
         if (checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
             permissionPendingSource = source;
@@ -385,13 +385,14 @@ public final class MainActivity extends Activity {
         if (!started) { status.setText("Return to the app and read the source again when ready."); return; }
         cancellation = new CancellationSignal();
         CancellationSignal taskSignal = cancellation;
+        SanitizedStore activeStore = store;
         cancel.setEnabled(true);
         status.setText("Reading " + sourceName(source) + " metadata locally…");
         executor.execute(() -> {
             try {
                 PhoneMetadataReader next = new PhoneMetadataReader(this);
                 String category = categoryFor(source);
-                SanitizedStore.Coverage result = next.readToStore(category, iso, taskSignal, store,
+                SanitizedStore.Coverage result = next.readToStore(category, iso, taskSignal, activeStore,
                         seen -> runOnUiThread(() -> {
                             if (cancellation == taskSignal && started)
                                 status.setText("Reading " + sourceName(source) + ": " + seen + " provider rows inspected locally…");
@@ -443,7 +444,8 @@ public final class MainActivity extends Activity {
         cancel.setEnabled(false);
         if (source != 0 && store != null) {
             try { store.abort(categoryFor(source)); }
-            catch (SQLiteException failedCleanup) {
+            catch (RuntimeException failedCleanup) {
+                disableBrokenStore();
                 failure("storage", "storage_io", "Private source cleanup failed. Close the app before trying another read.");
                 return;
             }
@@ -555,8 +557,13 @@ public final class MainActivity extends Activity {
         if (handoff != null && handoff.snapshot().active()) handoff.cancel();
     }
 
-    private void clearSource(int source) {
-        if (store != null) store.abort(categoryFor(source));
+    private boolean clearSource(int source) {
+        if (store != null) try { store.abort(categoryFor(source)); }
+        catch (RuntimeException failedCleanup) {
+            disableBrokenStore();
+            failure("storage", "storage_io", "Private source cleanup failed. Close the app before trying another read.");
+            return false;
+        }
         if (source == CONTACTS_REQUEST) {
             contactsAvailable = false;
             selectedIds.clear();
@@ -569,6 +576,26 @@ public final class MainActivity extends Activity {
         }
         showCoverage();
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
+        return true;
+    }
+
+    private void disableBrokenStore() {
+        SanitizedStore broken = store;
+        store = null;
+        if (cancellation != null) cancellation.cancel();
+        cancellation = null;
+        cancel.setEnabled(false);
+        contactsAvailable = false;
+        callsAvailable = false;
+        messagesAvailable = false;
+        selectedIds.clear();
+        reviewed = false;
+        handoffButton.setEnabled(false);
+        renderChoices();
+        showCoverage();
+        if (broken != null) executor.execute(() -> {
+            try { broken.close(); } catch (RuntimeException ignored) { /* Restart cleanup remains required. */ }
+        });
     }
 
     private void startHandoff() {
@@ -680,7 +707,7 @@ public final class MainActivity extends Activity {
                     : source == CALLS_REQUEST ? callsAvailable : messagesAvailable;
             if (available && checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
                 invalidateReview();
-                clearSource(source);
+                if (!clearSource(source)) return;
                 revoked = true;
             }
         }
