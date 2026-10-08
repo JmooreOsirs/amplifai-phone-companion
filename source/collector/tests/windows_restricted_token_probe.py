@@ -282,6 +282,8 @@ def directory_diagnostic(error: storage._DirectoryHandleError) -> dict[str, obje
         "win32_code": error.win32_code,
         "requested_access": error.requested_access,
         "api_code": error.api_code,
+        **({"ancestor_index": error.ancestor_index}
+           if error.ancestor_index is not None else {}),
     }
 
 

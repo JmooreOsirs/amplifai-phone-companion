@@ -47,6 +47,7 @@ class _DirectoryHandleError(PermissionError):
         self.win32_code = win32_code
         self.requested_access = requested_access
         self.ancestor = ancestor
+        self.ancestor_index: int | None = None
         self.api_code = api_code  # 1: CreateFileW; 2: attribute readback.
         super().__init__(
             "Windows private storage owner or ACL is unsafe (native policy stage 15)"
@@ -269,8 +270,12 @@ class _NativeSecurity:
     def pin_parents(self, path: Path, lifetime: ExitStack) -> None:
         # A final-component no-follow flag alone still traverses ancestor
         # junctions. Inspect and pin the whole chain before a root is admitted.
-        for ancestor in reversed(path.parents):
-            self.open_directory(ancestor, lifetime, ancestor=True)
+        for index, ancestor in enumerate(reversed(path.parents)):
+            try:
+                self.open_directory(ancestor, lifetime, ancestor=True)
+            except _DirectoryHandleError as failure:
+                failure.ancestor_index = index
+                raise
 
     def verify(self, handle: object, principals: tuple[object, ...]) -> None:
         owner, dacl, descriptor = _PTR(), _PTR(), _PTR()

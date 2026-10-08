@@ -362,6 +362,7 @@ class WindowsNativePolicyTest(unittest.TestCase):
                              1 if failure == "CreateFileW" else 2)
             self.assertEqual(getattr(error, "requested_access", None), 0)
             self.assertEqual(getattr(error, "ancestor", None), True)
+            self.assertEqual(getattr(error, "ancestor_index", None), 0)
             self.assertNotIn(str(self.path), str(error))
             self.assertNotIn("1001", str(error))
             self.assertIsNone(error.__cause__)
