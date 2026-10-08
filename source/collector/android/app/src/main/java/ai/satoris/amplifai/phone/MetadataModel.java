@@ -3,6 +3,7 @@ package ai.satoris.amplifai.phone;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -54,6 +55,13 @@ public final class MetadataModel {
 
     public static final class SourceLimitExceededException extends IllegalStateException {
         SourceLimitExceededException() { super("Provider scan limit reached before the source was fully read."); }
+    }
+
+    static void addContactPhone(LinkedHashSet<String> phones, String value) {
+        if (!phones.contains(value) && phones.size() >= 20) {
+            throw new SourceLimitExceededException();
+        }
+        phones.add(value);
     }
 
     public static final class Review {

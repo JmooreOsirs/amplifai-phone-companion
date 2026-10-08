@@ -1,4 +1,15 @@
-# AMPLIFai Phone 2026.10.08-rc9 companion source
+# AMPLIFai Phone companion source — Mac rc9 and Android rc6
+
+The Android source under `source/collector/android` corresponds to the signed
+`2026.10.08-rc6` website APK. It streams available contacts, calls and SMS
+metadata into a private no-backup review store, prepares immutable selected
+pages, and serves them to the same-phone browser after explicit approval.
+Available source and selected record counts, page hashes, one-use pairing,
+source decline, and the matching saved/readback receipt are versioned in the
+v2 protocol. Full names and phone values are preserved when an individual
+record fits its bounded page. Physical installer permissions, same-phone
+browser handoff and authenticated account save remain unverified on an owner
+device. Published Android rc5 remains the rollback.
 
 This package is prepared for the matching `2026.10.08-rc9` Mac app, build
 `26100809`; publication and binary checksums are separate release steps. The
@@ -46,9 +57,9 @@ byte-for-byte reproducible binary build or verified operation on an owner phone.
 
 ## Contents
 
-- `source/`: project-authored Swift/Python companion, tests, exact dependency
-  lock, logo and build/packaging scripts. No Android app or private account/web
-  implementation is included.
+- `source/`: project-authored Swift/Python Mac companion and Java Android app,
+  tests, exact Mac dependency lock, logo and build/packaging scripts. The
+  private account website/backend implementation is separate and not included.
 - `third_party/source_archives/`: checksum-verified exact Python, native and
   Rust source archives. The complete candidate contains 158 archives. All 102
   pinned Python build inputs remain available; the package matrix marks which

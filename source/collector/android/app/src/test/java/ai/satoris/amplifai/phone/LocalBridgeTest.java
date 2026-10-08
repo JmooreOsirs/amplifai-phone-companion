@@ -2,6 +2,7 @@ package ai.satoris.amplifai.phone;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
 
@@ -12,11 +13,13 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.net.ConnectException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.HexFormat;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -55,6 +58,81 @@ public final class LocalBridgeTest {
         }
     }
 
+    private static String savedAcknowledgment(String pairing) {
+        Matcher handoff = Pattern.compile("\\\"handoffId\\\":\\\"([0-9a-f-]{36})\\\"").matcher(pairing);
+        Matcher digest = Pattern.compile("\\\"payloadSha256\\\":\\\"([0-9a-f]{64})\\\"").matcher(pairing);
+        assertTrue(handoff.find());
+        assertTrue(digest.find());
+        return "{\"handoffId\":\"" + handoff.group(1) + "\",\"payloadSha256\":\"" + digest.group(1) + "\",\"saved\":true}";
+    }
+
+    private static final class SyntheticPages implements LocalBridge.PagedSource {
+        boolean closed;
+        private final String manifest = "{\"schema\":2,\"platform\":\"android\",\"since\":\"1970-01-01T00:00:00Z\",\"collectedAt\":\"2026-10-08T00:00:00Z\",\"missingSources\":[\"messages\"],\"sampleContactNames\":[],\"sources\":{\"contacts\":{\"rowsSeen\":257,\"rowsIncluded\":257,\"pageCount\":257,\"chainSha256\":\"" + "a".repeat(64) + "\"},\"calls\":{\"rowsSeen\":1,\"rowsIncluded\":1,\"pageCount\":1,\"chainSha256\":\"" + "b".repeat(64) + "\"},\"messages\":{\"rowsSeen\":0,\"rowsIncluded\":0,\"pageCount\":0,\"chainSha256\":\"" + "0".repeat(64) + "\"}}}";
+        @Override public String manifestJson() { return manifest; }
+        @Override public String manifestSha256() {
+            try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(manifest.getBytes(StandardCharsets.US_ASCII))); }
+            catch (Exception impossible) { throw new AssertionError(impossible); }
+        }
+        @Override public int pageCount(String category) { return category.equals("contacts") ? 257 : category.equals("calls") ? 1 : 0; }
+        @Override public String pageJson(String category, int cursor) {
+            if (cursor < 0 || cursor >= pageCount(category)) return null;
+            String chunk = "[{\"sourceId\":" + (cursor + 1) + ",\"name\":\"Synthetic\",\"phones\":[\"+15551234567\"]}]";
+            String digest;
+            try { digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(chunk.getBytes(StandardCharsets.US_ASCII))); }
+            catch (Exception impossible) { throw new AssertionError(impossible); }
+            return "{\"format\":\"paged-records-v2\",\"category\":\"" + category + "\",\"cursor\":" + cursor +
+                    ",\"chunk\":\"" + chunk.replace("\"", "\\\"") + "\",\"pageSha256\":\"" + digest +
+                    "\",\"nextCursor\":" + (cursor + 1 < pageCount(category) ? cursor + 1 : "null") + "}";
+        }
+        @Override public void close() { closed = true; }
+    }
+
+    @Test public void androidPagedTransferExceedsLegacyCountAndSurvivesSlowReceiveSaveAndLostAcks() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        AtomicInteger received = new AtomicInteger();
+        AtomicReference<long[]> pageProgress = new AtomicReference<>();
+        SyntheticPages pages = new SyntheticPages();
+        try (LocalBridge bridge = new LocalBridge(pages, ORIGIN, 0, clock::get, reason -> {},
+                received::incrementAndGet, pageProgress::set)) {
+            bridge.start();
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v1/pair", "Content-Type: application/json\r\n", "{\"code\":\"" + bridge.code() + "\"}");
+            assertTrue(paired.startsWith("HTTP/1.1 200"));
+            assertTrue(paired.contains("paged-records-v2"));
+            Matcher token = Pattern.compile("\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"").matcher(paired);
+            Matcher handoff = Pattern.compile("\\\"handoffId\\\":\\\"([0-9a-f-]{36})\\\"").matcher(paired);
+            Matcher digest = Pattern.compile("\\\"payloadSha256\\\":\\\"([0-9a-f]{64})\\\"").matcher(paired);
+            assertTrue(token.find()); assertTrue(handoff.find()); assertTrue(digest.find());
+            assertEquals(pages.manifestSha256(), digest.group(1));
+            String auth = "Authorization: Bearer " + token.group(1) + "\r\n";
+            String binding = "{\"handoffId\":\"" + handoff.group(1) + "\",\"payloadSha256\":\"" + digest.group(1) + "\"";
+            clock.set(TimeUnit.MINUTES.toNanos(6));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v2/keepalive", auth, "").contains("\"active\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v2/source/contacts?cursor=1", auth, "").startsWith("HTTP/1.1 409"));
+            for (int cursor = 0; cursor < 257; cursor++) {
+                String response = send(bridge.port(), ORIGIN, "GET", "/v2/source/contacts?cursor=" + cursor, auth, "");
+                assertTrue("page " + cursor, response.startsWith("HTTP/1.1 200"));
+            }
+            assertEquals(257, pageProgress.get()[0]);
+            assertEquals(258, pageProgress.get()[1]);
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v2/source/contacts?cursor=256", auth, "").startsWith("HTTP/1.1 200"));
+            String decline = binding + ",\"category\":\"calls\"}";
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v2/decline", auth + "Content-Type: application/json\r\n", decline).contains("\"declined\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v2/decline", auth + "Content-Type: application/json\r\n", decline).contains("\"declined\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v2/source/calls?cursor=0", auth, "").startsWith("HTTP/1.1 410"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "").contains("\"calls\":\"declined\""));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "").contains("\"completed\":true"));
+            assertEquals(1, received.get());
+            String saved = binding + ",\"saved\":true}";
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n", saved).contains("\"acknowledged\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n", saved).contains("\"acknowledged\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/confirm-ack-received", auth + "Content-Type: application/json\r\n",
+                    binding + ",\"received\":true}").contains("\"received\":true"));
+            assertClosed(bridge.port());
+        }
+        assertTrue(pages.closed);
+    }
+
     @Test public void exactOriginCodeAndOneUseTokenGateSelectedMetadata() throws Exception {
         try (LocalBridge bridge = new LocalBridge("{\"schema\":1}".getBytes(StandardCharsets.US_ASCII), ORIGIN, 0)) {
             bridge.start();
@@ -85,6 +163,115 @@ public final class LocalBridgeTest {
                     "Authorization: Bearer " + token + "\r\n", "");
             assertTrue(response.startsWith("HTTP/1.1 200"));
             assertTrue(response.endsWith("{\"schema\":1}"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save",
+                    "Authorization: Bearer " + token + "\r\nContent-Type: application/json\r\n", savedAcknowledgment(paired))
+                    .contains("\"acknowledged\":true"));
+            assertClosed(bridge.port());
+        }
+    }
+
+    @Test public void browserSaveAcknowledgmentRequiresDeliveredMatchingHandoff() throws Exception {
+        byte[] payload = "{\"schema\":1}".getBytes(StandardCharsets.US_ASCII);
+        AtomicInteger received = new AtomicInteger();
+        try (LocalBridge bridge = new LocalBridge(payload, ORIGIN, 0, System::nanoTime,
+                reason -> {}, received::incrementAndGet)) {
+            bridge.start();
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v1/pair",
+                    "Content-Type: application/json\r\n", "{\"code\":\"" + bridge.code() + "\"}");
+            assertTrue(paired.startsWith("HTTP/1.1 200"));
+            Matcher token = Pattern.compile("\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"").matcher(paired);
+            Matcher handoff = Pattern.compile("\\\"handoffId\\\":\\\"([0-9a-f-]{36})\\\"").matcher(paired);
+            Matcher digest = Pattern.compile("\\\"payloadSha256\\\":\\\"([0-9a-f]{64})\\\"").matcher(paired);
+            assertTrue(token.find());
+            assertTrue(handoff.find());
+            assertTrue(digest.find());
+            assertEquals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload)), digest.group(1));
+            String auth = "Authorization: Bearer " + token.group(1) + "\r\n";
+            String correct = "{\"handoffId\":\"" + handoff.group(1) + "\",\"payloadSha256\":\"" + digest.group(1) + "\",\"saved\":true}";
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n", correct).startsWith("HTTP/1.1 409"));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata", auth, "").startsWith("HTTP/1.1 200"));
+            assertEquals(1, received.get());
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata", auth, "").startsWith("HTTP/1.1 410"));
+            String preflight = send(bridge.port(), ORIGIN, "OPTIONS", "/v1/acknowledge-save",
+                    "Access-Control-Request-Method: POST\r\nAccess-Control-Request-Private-Network: true\r\n", "");
+            assertTrue(preflight.startsWith("HTTP/1.1 204"));
+            assertTrue(preflight.contains("Access-Control-Allow-Private-Network: true"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save",
+                    "Authorization: Bearer wrong\r\nContent-Type: application/json\r\n", correct).startsWith("HTTP/1.1 403"));
+            assertTrue(send(bridge.port(), "https://other.example", "POST", "/v1/acknowledge-save",
+                    auth + "Content-Type: application/json\r\n", correct).startsWith("HTTP/1.1 403"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n",
+                    correct.replace(digest.group(1), "0".repeat(64))).startsWith("HTTP/1.1 409"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n",
+                    correct.replace("true", "false")).startsWith("HTTP/1.1 400"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n", correct)
+                    .contains("\"acknowledged\":true"));
+            assertEquals(1, received.get());
+            assertClosed(bridge.port());
+        }
+    }
+
+    @Test public void browserOnlyDeliveryCanBeCancelledWithoutClaimingAccountSave() throws Exception {
+        AtomicInteger received = new AtomicInteger();
+        AtomicReference<LocalBridge.EndReason> end = new AtomicReference<>();
+        try (LocalBridge bridge = new LocalBridge("{\"schema\":1}".getBytes(StandardCharsets.US_ASCII), ORIGIN, 0,
+                System::nanoTime, end::set, received::incrementAndGet)) {
+            bridge.start();
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v1/pair",
+                    "Content-Type: application/json\r\n", "{\"code\":\"" + bridge.code() + "\"}");
+            Matcher token = Pattern.compile("\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"").matcher(paired);
+            assertTrue(token.find());
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata",
+                    "Authorization: Bearer " + token.group(1) + "\r\n", "").startsWith("HTTP/1.1 200"));
+            assertEquals(1, received.get());
+            assertNull(end.get());
+            bridge.close(LocalBridge.EndReason.CANCELLED);
+            assertEquals(LocalBridge.EndReason.CANCELLED, end.get());
+            assertClosed(bridge.port());
+        }
+    }
+
+    @Test public void deliveredPreviewKeepsTheSaveAcknowledgmentOpenPastThePairingCodeLifetime() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        AtomicReference<LocalBridge.EndReason> reason = new AtomicReference<>();
+        try (LocalBridge bridge = new LocalBridge("{\"schema\":1}".getBytes(StandardCharsets.US_ASCII), ORIGIN, 0,
+                clock::get, reason::set)) {
+            bridge.start();
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v1/pair",
+                    "Content-Type: application/json\r\n", "{\"code\":\"" + bridge.code() + "\"}");
+            Matcher token = Pattern.compile("\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"").matcher(paired);
+            assertTrue(token.find());
+            String auth = "Authorization: Bearer " + token.group(1) + "\r\n";
+            clock.set(TimeUnit.MILLISECONDS.toNanos(LocalBridge.LIFETIME_MILLIS - 1_000));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata", auth, "").startsWith("HTTP/1.1 200"));
+            assertEquals(LocalBridge.REVIEW_LIFETIME_MILLIS, bridge.remainingMillis());
+            clock.set(TimeUnit.MILLISECONDS.toNanos(LocalBridge.LIFETIME_MILLIS + 1_000));
+            assertTrue("A confirmed account save must still be acknowledgeable after the pairing code expires",
+                    send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save",
+                            auth + "Content-Type: application/json\r\n", savedAcknowledgment(paired))
+                            .contains("\"acknowledged\":true"));
+            assertEquals(LocalBridge.EndReason.COMPLETED, reason.get());
+        }
+    }
+
+    @Test public void deliveredPreviewExpiresWithoutAConfirmedAccountAcknowledgment() throws Exception {
+        AtomicLong clock = new AtomicLong();
+        AtomicReference<LocalBridge.EndReason> reason = new AtomicReference<>();
+        CountDownLatch ended = new CountDownLatch(1);
+        try (LocalBridge bridge = new LocalBridge("{\"schema\":1}".getBytes(StandardCharsets.US_ASCII), ORIGIN, 0,
+                clock::get, result -> { reason.set(result); ended.countDown(); })) {
+            bridge.start();
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v1/pair",
+                    "Content-Type: application/json\r\n", "{\"code\":\"" + bridge.code() + "\"}");
+            Matcher token = Pattern.compile("\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"").matcher(paired);
+            assertTrue(token.find());
+            long deliveredAt = TimeUnit.MILLISECONDS.toNanos(LocalBridge.LIFETIME_MILLIS - 1_000);
+            clock.set(deliveredAt);
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata",
+                    "Authorization: Bearer " + token.group(1) + "\r\n", "").startsWith("HTTP/1.1 200"));
+            clock.set(deliveredAt + TimeUnit.MILLISECONDS.toNanos(LocalBridge.REVIEW_LIFETIME_MILLIS));
+            assertTrue("A received preview must not leave a listener open indefinitely", ended.await(3, TimeUnit.SECONDS));
+            assertEquals(LocalBridge.EndReason.EXPIRED, reason.get());
             assertClosed(bridge.port());
         }
     }
@@ -104,6 +291,9 @@ public final class LocalBridgeTest {
             assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "").startsWith("HTTP/1.1 409"));
             assertTrue(send(bridge.port(), ORIGIN, "GET", "/v1/metadata?cursor=1", auth, "").contains("\"nextCursor\":null"));
             assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "").contains("\"completed\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save",
+                    auth + "Content-Type: application/json\r\n", savedAcknowledgment(paired))
+                    .contains("\"acknowledged\":true"));
             assertClosed(bridge.port());
         }
     }
@@ -138,6 +328,9 @@ public final class LocalBridgeTest {
             }
             assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/complete", auth, "")
                     .contains("\"completed\":true"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/acknowledge-save",
+                    auth + "Content-Type: application/json\r\n", savedAcknowledgment(paired))
+                    .contains("\"acknowledged\":true"));
             assertClosed(bridge.port());
         }
     }

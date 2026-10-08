@@ -1,6 +1,7 @@
 package ai.satoris.amplifai.phone;
 
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -9,16 +10,28 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** One-use browser handoff bound to this phone's loopback interface only. */
 public final class LocalBridge implements AutoCloseable {
+    interface PagedSource extends AutoCloseable {
+        String manifestJson();
+        String manifestSha256();
+        int pageCount(String category);
+        String pageJson(String category, int cursor);
+        @Override void close();
+    }
     public static final int PORT = 48751;
     public static final String ACCOUNT_ORIGIN = "https://amplifai-database-engine.vercel.app";
     private static final int MAX_HEADER_BYTES = 8192;
@@ -26,25 +39,40 @@ public final class LocalBridge implements AutoCloseable {
     private static final int PAGE_BYTES = 128 * 1024;
     private static final int PAIR_SECONDS = 5 * 60;
     public static final long LIFETIME_MILLIS = TimeUnit.SECONDS.toMillis(PAIR_SECONDS);
+    public static final long REVIEW_LIFETIME_MILLIS = TimeUnit.HOURS.toMillis(2);
     public enum EndReason { COMPLETED, CANCELLED, EXPIRED, ATTEMPTS_EXHAUSTED, FAILED }
     private static final int MAX_ATTEMPTS = 5;
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final Pattern SAVED_ACKNOWLEDGMENT = Pattern.compile(
+            "\\s*\\{\\s*\"handoffId\"\\s*:\\s*\"([0-9a-f-]{36})\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*,\\s*\"saved\"\\s*:\\s*true\\s*\\}\\s*");
+    private static final Pattern RECEIVED_ACKNOWLEDGMENT = Pattern.compile(
+            "\\s*\\{\\s*\"handoffId\"\\s*:\\s*\"([0-9a-f-]{36})\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*,\\s*\"received\"\\s*:\\s*true\\s*\\}\\s*");
+    private static final Pattern DECLINE = Pattern.compile(
+            "\\s*\\{\\s*\"handoffId\"\\s*:\\s*\"([0-9a-f-]{36})\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*,\\s*\"category\"\\s*:\\s*\"(contacts|calls|messages)\"\\s*\\}\\s*");
 
     private final ServerSocket listener;
     private final byte[] payload;
+    private final PagedSource transfer;
     private final String origin;
     private final String code;
-    private final long expiresAt;
+    private volatile long expiresAt;
     private final Thread thread;
     private final int port;
     private final LongSupplier clock;
     private final Consumer<EndReason> onClosed;
+    private final Runnable onReceived;
+    private final Consumer<long[]> onPageProgress;
+    private final String handoffId;
+    private final String payloadSha256;
     private volatile boolean closed;
     private Socket activeSocket;
     private String token;
     private int attempts;
     private int nextCursor;
     private boolean used;
+    private boolean savedAcknowledged;
+    private final int[] sourceCursors = new int[3];
+    private final String[] sourceDispositions = new String[]{"unresolved", "unresolved", "unresolved"};
 
     LocalBridge(byte[] selectedPayload, String allowedOrigin, int port) throws IOException {
         this(selectedPayload, allowedOrigin, port, System::nanoTime, reason -> {});
@@ -52,13 +80,23 @@ public final class LocalBridge implements AutoCloseable {
 
     LocalBridge(byte[] selectedPayload, String allowedOrigin, int port,
                 LongSupplier clock, Consumer<EndReason> onClosed) throws IOException {
+        this(selectedPayload, allowedOrigin, port, clock, onClosed, () -> {});
+    }
+
+    LocalBridge(byte[] selectedPayload, String allowedOrigin, int port,
+                LongSupplier clock, Consumer<EndReason> onClosed, Runnable onReceived) throws IOException {
         if (selectedPayload.length == 0 || selectedPayload.length > 32 * 1024 * 1024) {
             throw new IllegalArgumentException("Local handoff size is invalid.");
         }
         payload = Arrays.copyOf(selectedPayload, selectedPayload.length);
+        transfer = null;
         origin = allowedOrigin;
         this.clock = clock;
         this.onClosed = onClosed;
+        this.onReceived = onReceived;
+        this.onPageProgress = ignored -> {};
+        handoffId = UUID.randomUUID().toString();
+        payloadSha256 = sha256Hex(payload);
         listener = new ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"));
         this.port = listener.getLocalPort();
         listener.setSoTimeout(1000);
@@ -68,8 +106,37 @@ public final class LocalBridge implements AutoCloseable {
         thread.setDaemon(true);
     }
 
+    LocalBridge(PagedSource reviewed, String allowedOrigin, int port, LongSupplier clock,
+                Consumer<EndReason> onClosed, Runnable onReceived) throws IOException {
+        this(reviewed, allowedOrigin, port, clock, onClosed, onReceived, ignored -> {});
+    }
+
+    LocalBridge(PagedSource reviewed, String allowedOrigin, int port, LongSupplier clock,
+                Consumer<EndReason> onClosed, Runnable onReceived, Consumer<long[]> onPageProgress) throws IOException {
+        transfer = reviewed;
+        payload = new byte[0];
+        origin = allowedOrigin;
+        this.clock = clock;
+        this.onClosed = onClosed;
+        this.onReceived = onReceived;
+        this.onPageProgress = onPageProgress;
+        handoffId = UUID.randomUUID().toString();
+        payloadSha256 = reviewed.manifestSha256();
+        listener = new ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"));
+        this.port = listener.getLocalPort();
+        listener.setSoTimeout(1000);
+        code = String.format(java.util.Locale.ROOT, "%010d", Math.floorMod(RANDOM.nextLong(), 10_000_000_000L));
+        expiresAt = clock.getAsLong() + TimeUnit.SECONDS.toNanos(PAIR_SECONDS);
+        for (int index = 0; index < 3; index++) {
+            if (reviewed.pageCount(sourceCategory(index)) == 0) sourceDispositions[index] = "delivered";
+        }
+        thread = new Thread(this::serve, "amplifai-paged-bridge");
+        thread.setDaemon(true);
+    }
+
     public String code() { return code; }
     public int port() { return port; }
+    long remainingMillis() { return Math.max(0L, TimeUnit.NANOSECONDS.toMillis(expiresAt - clock.getAsLong())); }
     public void start() { thread.start(); }
 
     private void serve() {
@@ -84,7 +151,7 @@ public final class LocalBridge implements AutoCloseable {
                     if (!socket.getInetAddress().isLoopbackAddress()) continue;
                     handle(socket);
                 } catch (SocketTimeoutException ignored) {
-                    // Recheck the five-minute expiry while idle.
+                    // Recheck the active pairing or post-delivery expiry while idle.
                 } catch (IOException ignored) {
                     if (closed) break;
                 } finally {
@@ -108,7 +175,13 @@ public final class LocalBridge implements AutoCloseable {
         boolean allowed = ("127.0.0.1:" + port()).equals(request.headers.get("host")) &&
                 origin.equals(request.headers.get("origin"));
         if (!allowed) { reply(output, 403, false, empty()); return; }
-        if (closed || clock.getAsLong() >= expiresAt || used) { reply(output, 410, true, empty()); return; }
+        boolean savedAcknowledgment = (request.path.equals("/v1/acknowledge-save") ||
+                request.path.equals("/v1/confirm-ack-received") || (transfer != null && request.path.equals("/v1/complete"))) &&
+                (request.method.equals("POST") || request.method.equals("OPTIONS"));
+        if (closed || clock.getAsLong() >= expiresAt || (used && !savedAcknowledgment &&
+                !(transfer != null && request.path.equals("/v2/keepalive")))) {
+            reply(output, 410, true, empty()); return;
+        }
         if (request.method.equals("OPTIONS")) { preflight(output, request); return; }
         if (request.method.equals("POST") && request.path.equals("/v1/pair")) {
             pair(output, request, socket.getInputStream());
@@ -116,14 +189,27 @@ public final class LocalBridge implements AutoCloseable {
             metadata(output, request);
         } else if (request.method.equals("POST") && request.path.equals("/v1/complete")) {
             complete(output, request);
+        } else if (request.method.equals("POST") && request.path.equals("/v1/acknowledge-save")) {
+            acknowledgeSave(output, request, socket.getInputStream());
+        } else if (transfer != null && request.method.equals("POST") && request.path.equals("/v1/confirm-ack-received")) {
+            confirmAckReceived(output, request, socket.getInputStream());
+        } else if (transfer != null && request.method.equals("POST") && request.path.equals("/v2/keepalive")) {
+            keepalive(output, request);
+        } else if (transfer != null && request.method.equals("POST") && request.path.equals("/v2/decline")) {
+            decline(output, request, socket.getInputStream());
+        } else if (transfer != null && request.method.equals("GET") && request.path.matches("/v2/source/(contacts|calls|messages)\\?cursor=(0|[1-9][0-9]{0,9})")) {
+            sourcePage(output, request);
         } else {
             reply(output, 403, true, empty());
         }
     }
 
     private void preflight(OutputStream output, Request request) throws IOException {
-        String expected = request.path.matches("/v1/metadata(?:\\?cursor=(0|[1-9][0-9]{0,2}))?") ? "GET" : "POST";
-        if ((!request.path.equals("/v1/pair") && !request.path.equals("/v1/complete") && !expected.equals("GET")) ||
+        String expected = request.path.matches("/v1/metadata(?:\\?cursor=(0|[1-9][0-9]{0,2}))?|/v2/source/(contacts|calls|messages)\\?cursor=(0|[1-9][0-9]{0,9})") ? "GET" : "POST";
+        if ((!request.path.equals("/v1/pair") && !request.path.equals("/v1/complete") &&
+                !request.path.equals("/v1/acknowledge-save") &&
+                !(transfer != null && (request.path.equals("/v1/confirm-ack-received") ||
+                        request.path.equals("/v2/keepalive") || request.path.equals("/v2/decline"))) && !expected.equals("GET")) ||
                 !expected.equals(request.headers.get("access-control-request-method"))) {
             reply(output, 403, true, empty());
             return;
@@ -145,13 +231,9 @@ public final class LocalBridge implements AutoCloseable {
         if (length < 1 || length > MAX_REQUEST_BYTES) {
             reply(output, length > MAX_REQUEST_BYTES ? 413 : 400, true, empty()); return;
         }
-        byte[] body = new byte[length];
-        int offset = 0;
-        while (offset < length) {
-            int count = input.read(body, offset, length - offset);
-            if (count < 0) { reply(output, 400, true, empty()); return; }
-            offset += count;
-        }
+        byte[] body;
+        try { body = readExactBody(input, length); }
+        catch (EOFException incomplete) { reply(output, 400, true, empty()); return; }
         String command = new String(body, StandardCharsets.US_ASCII);
         if (closed || clock.getAsLong() >= expiresAt) {
             reply(output, 410, true, empty());
@@ -174,11 +256,20 @@ public final class LocalBridge implements AutoCloseable {
         byte[] random = new byte[32];
         RANDOM.nextBytes(random);
         token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random);
-        String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + PAIR_SECONDS + "}";
+        long remaining = Math.max(1L, TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong()));
+        String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + remaining +
+                ",\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + payloadSha256 + "\"";
+        if (transfer != null) {
+            StringBuilder paged = new StringBuilder(result).append(",\"confirmReceiptRequired\":true,\"format\":\"paged-records-v2\",\"manifestJson\":");
+            NativePayload.quote(paged, transfer.manifestJson());
+            result = paged.append('}').toString();
+            renew();
+        } else result += "}";
         reply(output, 200, true, result.getBytes(StandardCharsets.US_ASCII));
     }
 
     private void metadata(OutputStream output, Request request) throws IOException {
+        if (transfer != null) { reply(output, 403, true, empty()); return; }
         if (!authorized(request)) { reply(output, 403, true, empty()); return; }
         int cursor = 0;
         int query = request.path.indexOf("?cursor=");
@@ -189,7 +280,7 @@ public final class LocalBridge implements AutoCloseable {
         }
         if (pageCount == 1) {
             used = true;
-            finishReply(output, payload);
+            deliveredReply(output, payload);
             return;
         }
         int start = cursor * PAGE_BYTES;
@@ -209,11 +300,170 @@ public final class LocalBridge implements AutoCloseable {
         if (request.headers.containsKey("transfer-encoding") || contentLength(request) != 0) {
             reply(output, 400, true, empty()); return;
         }
+        if (transfer != null) {
+            for (String disposition : sourceDispositions) {
+                if (disposition.equals("unresolved")) { reply(output, 409, true, empty()); return; }
+            }
+            boolean first = !used;
+            String response = "{\"completed\":true,\"sources\":{\"contacts\":\"" + sourceDispositions[0] +
+                    "\",\"calls\":\"" + sourceDispositions[1] + "\",\"messages\":\"" + sourceDispositions[2] + "\"}}";
+            reply(output, 200, true, response.getBytes(StandardCharsets.US_ASCII));
+            used = true;
+            renew();
+            if (first) onReceived.run();
+            return;
+        }
         if (nextCursor < (payload.length + PAGE_BYTES - 1) / PAGE_BYTES) {
             reply(output, 409, true, empty()); return;
         }
         used = true;
-        finishReply(output, "{\"completed\":true}".getBytes(StandardCharsets.US_ASCII));
+        deliveredReply(output, "{\"completed\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void acknowledgeSave(OutputStream output, Request request, InputStream input) throws IOException {
+        if (!authorized(request)) { reply(output, 403, true, empty()); return; }
+        if (!"application/json".equals(request.headers.get("content-type")) ||
+                request.headers.containsKey("transfer-encoding")) {
+            reply(output, 415, true, empty()); return;
+        }
+        int length = contentLength(request);
+        if (length < 1 || length > MAX_REQUEST_BYTES) {
+            reply(output, length > MAX_REQUEST_BYTES ? 413 : 400, true, empty()); return;
+        }
+        byte[] body;
+        try { body = readExactBody(input, length); }
+        catch (EOFException incomplete) { reply(output, 400, true, empty()); return; }
+        String command = new String(body, StandardCharsets.US_ASCII);
+        Matcher saved = SAVED_ACKNOWLEDGMENT.matcher(command);
+        if (!saved.matches()) {
+            reply(output, 400, true, empty()); return;
+        }
+        if (!used || !constantTimeEquals(handoffId, saved.group(1)) ||
+                !constantTimeEquals(payloadSha256, saved.group(2))) {
+            reply(output, 409, true, empty()); return;
+        }
+        if (transfer != null) {
+            savedAcknowledged = true;
+            reply(output, 200, true, "{\"acknowledged\":true}".getBytes(StandardCharsets.US_ASCII));
+            renew();
+        } else finishReply(output, "{\"acknowledged\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void confirmAckReceived(OutputStream output, Request request, InputStream input) throws IOException {
+        if (!authorized(request)) { reply(output, 403, true, empty()); return; }
+        String command = command(request, input);
+        if (command == null) { reply(output, 400, true, empty()); return; }
+        Matcher received = RECEIVED_ACKNOWLEDGMENT.matcher(command);
+        if (!received.matches()) { reply(output, 400, true, empty()); return; }
+        if (!used || !savedAcknowledged || !constantTimeEquals(handoffId, received.group(1)) ||
+                !constantTimeEquals(payloadSha256, received.group(2))) {
+            reply(output, 409, true, empty()); return;
+        }
+        // A lost response leaves this exact saved assertion retryable until expiry.
+        reply(output, 200, true, "{\"received\":true}".getBytes(StandardCharsets.US_ASCII));
+        close(EndReason.COMPLETED);
+    }
+
+    private void keepalive(OutputStream output, Request request) throws IOException {
+        if (!authorized(request)) { reply(output, 403, true, empty()); return; }
+        if (savedAcknowledged || request.headers.containsKey("transfer-encoding") || contentLength(request) != 0) {
+            reply(output, 409, true, empty()); return;
+        }
+        renew();
+        reply(output, 200, true, "{\"active\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void decline(OutputStream output, Request request, InputStream input) throws IOException {
+        if (!authorized(request)) { reply(output, 403, true, empty()); return; }
+        String command = command(request, input);
+        if (command == null) { reply(output, 400, true, empty()); return; }
+        Matcher declined = DECLINE.matcher(command);
+        if (!declined.matches()) { reply(output, 400, true, empty()); return; }
+        if (!constantTimeEquals(handoffId, declined.group(1)) ||
+                !constantTimeEquals(payloadSha256, declined.group(2))) { reply(output, 409, true, empty()); return; }
+        int index = sourceIndex(declined.group(3));
+        if (sourceDispositions[index].equals("declined")) {
+            renew(); reply(output, 200, true, "{\"declined\":true}".getBytes(StandardCharsets.US_ASCII)); return;
+        }
+        if (used || sourceCursors[index] != 0) { reply(output, 409, true, empty()); return; }
+        sourceDispositions[index] = "declined";
+        renew();
+        reply(output, 200, true, "{\"declined\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void sourcePage(OutputStream output, Request request) throws IOException {
+        if (!authorized(request)) { reply(output, 403, true, empty()); return; }
+        Matcher path = Pattern.compile("/v2/source/(contacts|calls|messages)\\?cursor=(0|[1-9][0-9]{0,9})").matcher(request.path);
+        if (!path.matches()) { reply(output, 400, true, empty()); return; }
+        String category = path.group(1);
+        int cursor;
+        try { cursor = Integer.parseInt(path.group(2)); }
+        catch (NumberFormatException invalid) { reply(output, 409, true, empty()); return; }
+        int index = sourceIndex(category);
+        if (used || sourceDispositions[index].equals("declined")) { reply(output, 410, true, empty()); return; }
+        if (cursor > sourceCursors[index]) { reply(output, 409, true, empty()); return; }
+        String page = transfer.pageJson(category, cursor);
+        if (page == null) { reply(output, 409, true, empty()); return; }
+        reply(output, 200, true, page.getBytes(StandardCharsets.US_ASCII));
+        sourceCursors[index] = Math.max(sourceCursors[index], cursor + 1);
+        if (sourceCursors[index] == transfer.pageCount(category)) sourceDispositions[index] = "delivered";
+        long delivered = (long) sourceCursors[0] + sourceCursors[1] + sourceCursors[2];
+        if (delivered % 25 == 0 || sourceCursors[index] == transfer.pageCount(category)) {
+            long total = (long) transfer.pageCount("contacts") + transfer.pageCount("calls") + transfer.pageCount("messages");
+            onPageProgress.accept(new long[]{delivered, total});
+        }
+        renew();
+    }
+
+    private String command(Request request, InputStream input) throws IOException {
+        if (!"application/json".equals(request.headers.get("content-type")) || request.headers.containsKey("transfer-encoding")) return null;
+        int length = contentLength(request);
+        if (length < 1 || length > MAX_REQUEST_BYTES) return null;
+        try { return new String(readExactBody(input, length), StandardCharsets.US_ASCII); }
+        catch (EOFException incomplete) { return null; }
+    }
+
+    private void renew() { expiresAt = clock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(REVIEW_LIFETIME_MILLIS); }
+    private static int sourceIndex(String category) {
+        return switch (category) { case "contacts" -> 0; case "calls" -> 1; case "messages" -> 2;
+            default -> throw new IllegalArgumentException("invalid_category"); };
+    }
+    private static String sourceCategory(int index) { return new String[]{"contacts", "calls", "messages"}[index]; }
+
+    private void deliveredReply(OutputStream output, byte[] response) throws IOException {
+        try {
+            reply(output, 200, true, response);
+            Arrays.fill(payload, (byte) 0);
+            expiresAt = clock.getAsLong() + TimeUnit.MILLISECONDS.toNanos(REVIEW_LIFETIME_MILLIS);
+            onReceived.run();
+        } catch (IOException interruptedTransfer) {
+            close(EndReason.FAILED);
+            throw interruptedTransfer;
+        }
+    }
+
+    private static String sha256Hex(byte[] bytes) {
+        byte[] digest;
+        try { digest = MessageDigest.getInstance("SHA-256").digest(bytes); }
+        catch (NoSuchAlgorithmException missingPlatformPrimitive) { throw new IllegalStateException("SHA-256 is unavailable", missingPlatformPrimitive); }
+        char[] hex = new char[digest.length * 2];
+        char[] digits = "0123456789abcdef".toCharArray();
+        for (int index = 0; index < digest.length; index++) {
+            hex[index * 2] = digits[(digest[index] & 0xff) >>> 4];
+            hex[index * 2 + 1] = digits[digest[index] & 0x0f];
+        }
+        return new String(hex);
+    }
+
+    private static byte[] readExactBody(InputStream input, int length) throws IOException {
+        byte[] body = new byte[length];
+        int offset = 0;
+        while (offset < length) {
+            int count = input.read(body, offset, length - offset);
+            if (count < 0) throw new EOFException("Incomplete request body.");
+            offset += count;
+        }
+        return body;
     }
 
     private void finishReply(OutputStream output, byte[] response) throws IOException {
@@ -298,6 +548,8 @@ public final class LocalBridge implements AutoCloseable {
             }
             token = null;
             Arrays.fill(payload, (byte) 0);
+            try { if (transfer != null) transfer.close(); }
+            catch (RuntimeException ignored) { /* Release the listener and report closure even if scratch cleanup fails. */ }
         }
         onClosed.accept(reason);
     }

@@ -1,8 +1,12 @@
 <resources>
     <string name="app_name">AMPLIFai Phone</string>
     <string name="handoff_channel">Phone handoff</string>
-    <string name="handoff_channel_description">Visible status and cancellation for an approved five-minute browser transfer.</string>
+    <string name="handoff_channel_description">Visible status and cancellation for an approved same-phone browser transfer.</string>
     <string name="handoff_notification_title">Phone handoff is active</string>
-    <string name="handoff_notification_text">Same-phone browser only. Stops within five minutes.</string>
+    <string name="handoff_notification_text">Same-phone browser only. The one-use code expires after five minutes.</string>
+    <string name="handoff_notification_received_text">Preview received. Review and save in your account, or cancel here.</string>
     <string name="handoff_cancel">Cancel handoff</string>
+    <string name="handoff_received_status">Reviewed metadata reached the browser. Account-save acknowledgment remains available for up to two hours; save or decline each source there, or cancel if you are using browser-only review.</string>
+    <string name="handoff_received_review">The one-use pairing code has been consumed. Nothing is saved to an account by delivery alone. Confirm each browser source save before ending this handoff.</string>
+    <string name="handoff_saved_status">The browser acknowledged confirmed account saves. The local handoff is closed.</string>
 </resources>

@@ -21,7 +21,7 @@ import java.util.Arrays;
 import java.util.UUID;
 import java.util.function.Consumer;
 
-/** Holds an explicitly reviewed in-memory export while the owner uses the same-phone browser. */
+/** Holds a reviewed transfer while the owner uses the same-phone browser. */
 public final class HandoffService extends Service {
     private static final String CHANNEL = "phone-handoff";
     private static final String START = "ai.satoris.amplifai.phone.START_HANDOFF";
@@ -32,13 +32,17 @@ public final class HandoffService extends Service {
     private final LocalBinder binder = new LocalBinder();
     private LocalBridge bridge;
     private byte[] pendingPayload;
+    private PagedTransfer pendingTransfer;
+    private long pagesProvided;
+    private long pagesTotal;
     private String sessionId;
     private long deadline;
     private Consumer<Snapshot> observer;
-    private Snapshot snapshot = new Snapshot("idle", null);
+    private Snapshot snapshot = new Snapshot("idle", null, 0, 0);
 
-    public record Snapshot(String state, String code) {
-        public boolean active() { return state.equals("starting") || state.equals("ready"); }
+    public record Snapshot(String state, String code, long pagesProvided, long pagesTotal) {
+        public boolean active() { return state.equals("starting") || state.equals("ready") ||
+                state.equals("transferring") || state.equals("received"); }
     }
 
     public final class LocalBinder extends Binder {
@@ -49,6 +53,7 @@ public final class HandoffService extends Service {
         public Snapshot snapshot() { return snapshot; }
         public boolean notificationsAvailable() { return HandoffService.this.notificationsAvailable(); }
         public void approve(byte[] payload) { prepare(payload); }
+        public void approve(PagedTransfer transfer) { prepare(transfer); }
         public void cancel() { finish(LocalBridge.EndReason.CANCELLED); }
     }
 
@@ -78,8 +83,27 @@ public final class HandoffService extends Service {
         }
         finish(LocalBridge.EndReason.CANCELLED);
         sessionId = UUID.randomUUID().toString();
+        pagesProvided = 0;
+        pagesTotal = 0;
         // No payload goes into an Intent, saved instance state, a file, or a restart request.
         pendingPayload = Arrays.copyOf(payload, payload.length);
+        deadline = SystemClock.elapsedRealtime() + LocalBridge.LIFETIME_MILLIS;
+        publish("starting", null);
+        try {
+            startForegroundService(new Intent(this, HandoffService.class).setAction(START).putExtra(SESSION, sessionId));
+        } catch (RuntimeException unavailable) {
+            finish(LocalBridge.EndReason.FAILED);
+            throw new IllegalStateException("handoff_start_unavailable");
+        }
+    }
+
+    private void prepare(PagedTransfer transfer) {
+        if (!notificationsAvailable()) throw new IllegalStateException("handoff_notification_unavailable");
+        finish(LocalBridge.EndReason.CANCELLED);
+        sessionId = UUID.randomUUID().toString();
+        pagesProvided = 0;
+        pagesTotal = (long) transfer.pageCount("contacts") + transfer.pageCount("calls") + transfer.pageCount("messages");
+        pendingTransfer = transfer;
         deadline = SystemClock.elapsedRealtime() + LocalBridge.LIFETIME_MILLIS;
         publish("starting", null);
         try {
@@ -98,7 +122,7 @@ public final class HandoffService extends Service {
         if (!sessionId.equals(intent.getStringExtra(SESSION))) return START_NOT_STICKY;
         if (CANCEL.equals(intent.getAction())) {
             finish(LocalBridge.EndReason.CANCELLED);
-        } else if (START.equals(intent.getAction()) && pendingPayload != null) {
+        } else if (START.equals(intent.getAction()) && (pendingPayload != null || pendingTransfer != null)) {
             startReviewedTransfer();
         }
         return START_NOT_STICKY;
@@ -117,10 +141,34 @@ public final class HandoffService extends Service {
             } else {
                 startForeground(NOTIFICATION_ID, notification);
             }
-            bridge = new LocalBridge(pendingPayload, LocalBridge.ACCOUNT_ORIGIN, LocalBridge.PORT,
+            Consumer<LocalBridge.EndReason> closed = reason -> handler.post(() -> {
+                if (activeSession.equals(sessionId)) finish(reason);
+            });
+            Runnable received = () -> handler.post(() -> {
+                if (activeSession.equals(sessionId)) {
+                    publish("received", null);
+                    getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
+                }
+            });
+            bridge = pendingTransfer != null
+                    ? new LocalBridge(pendingTransfer, LocalBridge.ACCOUNT_ORIGIN, LocalBridge.PORT,
+                    SystemClock::elapsedRealtimeNanos, closed, received, pageProgress -> handler.post(() -> {
+                        if (!activeSession.equals(sessionId) || !snapshot.active()) return;
+                        pagesProvided = Math.max(pagesProvided, pageProgress[0]);
+                        pagesTotal = pageProgress[1];
+                        publish("transferring", null);
+                        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
+                    }))
+                    : new LocalBridge(pendingPayload, LocalBridge.ACCOUNT_ORIGIN, LocalBridge.PORT,
                     SystemClock::elapsedRealtimeNanos, reason -> handler.post(() -> {
                         if (activeSession.equals(sessionId)) finish(reason);
+                    }), () -> handler.post(() -> {
+                        if (activeSession.equals(sessionId)) {
+                            publish("received", null);
+                            getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
+                        }
                     }));
+            pendingTransfer = null;
             clearPendingPayload();
             bridge.start();
             publish("ready", bridge.code());
@@ -140,7 +188,10 @@ public final class HandoffService extends Service {
         Notification.Builder builder = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .setContentTitle(getString(R.string.handoff_notification_title))
-                .setContentText(getString(R.string.handoff_notification_text))
+                .setContentText(snapshot.state().equals("transferring")
+                        ? "Pages offered to browser: " + snapshot.pagesProvided() + " / " + snapshot.pagesTotal()
+                        : getString(snapshot.state().equals("received")
+                        ? R.string.handoff_notification_received_text : R.string.handoff_notification_text))
                 .setContentIntent(open)
                 .setDeleteIntent(cancelAction)
                 .setOngoing(true)
@@ -154,7 +205,7 @@ public final class HandoffService extends Service {
     private final Runnable checkLifetime = new Runnable() {
         @Override public void run() {
             if (!snapshot.active()) return;
-            long remaining = deadline - SystemClock.elapsedRealtime();
+            long remaining = bridge == null ? deadline - SystemClock.elapsedRealtime() : bridge.remainingMillis();
             if (remaining <= 0) finish(LocalBridge.EndReason.EXPIRED);
             else if (!notificationsAvailable()) finish(LocalBridge.EndReason.FAILED);
             else handler.postDelayed(this, Math.min(remaining, 1000L));
@@ -164,10 +215,11 @@ public final class HandoffService extends Service {
     private void clearPendingPayload() {
         if (pendingPayload != null) Arrays.fill(pendingPayload, (byte) 0);
         pendingPayload = null;
+        if (pendingTransfer != null) { pendingTransfer.close(); pendingTransfer = null; }
     }
 
     private void publish(String state, String code) {
-        snapshot = new Snapshot(state, code);
+        snapshot = new Snapshot(state, code, pagesProvided, pagesTotal);
         if (observer != null) observer.accept(snapshot);
     }
 
