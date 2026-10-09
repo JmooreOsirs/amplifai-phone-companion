@@ -2,6 +2,11 @@ package ai.satoris.amplifai.phone;
 
 import android.app.Instrumentation;
 import android.os.Bundle;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
 import java.net.InetAddress;
@@ -16,31 +21,123 @@ import java.util.Set;
 import java.util.HashSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 
 /** Runs the changed loopback protocol on Android's actual regex and socket runtime. */
 public final class LocalBridgeInstrumentedTest extends Instrumentation {
     private static final String ORIGIN = LocalBridge.ACCOUNT_ORIGIN;
+    private Bundle testArguments = Bundle.EMPTY;
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        if (arguments != null) testArguments = arguments;
         start();
     }
 
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
+            verifyProgressPanel();
+            if ("progress_ui".equals(testArguments.getString("scenario"))) {
+                result.putString("result", "measured Android progress, unavailable versus zero, local review, and saved-only results passed");
+                result.putString("fontScale", Float.toString(getTargetContext().getResources().getConfiguration().fontScale));
+                result.putString("largeCountLayout", "320dp: exact 2,147,483,647 in two lines with no ellipsis");
+                finish(0, result);
+                return;
+            }
             verifyHandoff();
             verifyPagedHandoff();
             verifyOptionalRollback();
             verifyLargeStore();
             verifyFullHistoryStore();
-            result.putString("result", "v1 pair/ACK; v2 private store/pages/decline/long transfer/retryable ACK; 25,700 selected contacts/257 pages; 100,001 contacts and 256,001 matching calls passed");
+            result.putString("result", "measured native progress and saved-only results; v1 pair/ACK; v2 private store/pages/decline/long transfer/retryable ACK; 25,700 selected contacts/257 pages; 100,001 contacts and 256,001 matching calls passed");
             finish(0, result);
         } catch (Exception | AssertionError failure) {
             result.putString("error", failure.getClass().getSimpleName() + ": " + failure.getMessage());
             finish(-1, result);
         }
+    }
+
+    private void verifyProgressPanel() {
+        AtomicBoolean accountOpened = new AtomicBoolean();
+        runOnMainSync(() -> {
+            LinearLayout root = new LinearLayout(getTargetContext());
+            root.setOrientation(LinearLayout.VERTICAL);
+            CollectionProgressPanel panel = new CollectionProgressPanel(getTargetContext(), root,
+                    () -> accountOpened.set(true));
+            try {
+                panel.sources(new long[]{0, 123_456, -1}, new String[]{"Available", "Available", "Unavailable"});
+                require(hasDescription(root, "Contacts: 0 metadata records kept on this phone"),
+                        "readable empty contacts looked unavailable");
+                require(hasDescription(root, "Calls: 123,456 metadata records kept on this phone"),
+                        "large retained call count was not displayed");
+                require(hasDescription(root, "SMS: unavailable"), "unavailable SMS looked like zero");
+                panel.sources(new long[]{2_147_483_647L, 123_456, -1},
+                        new String[]{"Available", "Available", "Unavailable"});
+                int narrowWidth = Math.round(320 * getTargetContext().getResources().getDisplayMetrics().density);
+                root.measure(View.MeasureSpec.makeMeasureSpec(narrowWidth, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+                root.layout(0, 0, narrowWidth, root.getMeasuredHeight());
+                TextView maximum = findTextView(root, "2,147\n483,647");
+                require(maximum != null && maximum.getWidth() > 0 && maximum.getLayout() != null &&
+                                maximum.getLayout().getLineCount() == 2 &&
+                                maximum.getPaint().measureText("483,647") <= maximum.getWidth() &&
+                                maximum.getLayout().getEllipsisCount(0) == 0 &&
+                                maximum.getLayout().getEllipsisCount(1) == 0,
+                        "maximum source count clips at a 320dp layout");
+                require(hasDescription(root, "Contacts: 2,147,483,647 metadata records kept on this phone"),
+                        "maximum count was shortened in accessibility text");
+                panel.beginRead("Calls");
+                panel.inspected(1_000);
+                require(hasText(root, "1,000") && hasText(root, "Phone entries checked"),
+                        "measured provider rows were not distinct from retained source counts");
+                panel.reviewed(12, 34, 0, true, false);
+                require(hasText(root, "12") && hasText(root, "Selected contacts"),
+                        "local selected review was not shown");
+                panel.handoff("received", 4, 4);
+                Button report = findButton(root, "Open saved account and report");
+                require(report != null && report.getVisibility() == View.GONE,
+                        "browser delivery exposed account-saved report control");
+                panel.handoff("completed", 4, 4);
+                require(report.getVisibility() == View.VISIBLE && hasText(root, "Verified saved receipt"),
+                        "matching saved receipt did not expose results control");
+                report.performClick();
+                require(accountOpened.get(), "saved result did not open the existing account destination");
+            } finally { panel.close(); }
+        });
+    }
+
+    private static boolean hasDescription(View root, String description) {
+        if (description.equals(root.getContentDescription())) return true;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++)
+            if (hasDescription(group.getChildAt(index), description)) return true;
+        return false;
+    }
+
+    private static boolean hasText(View root, String value) {
+        if (root instanceof TextView text && value.contentEquals(text.getText())) return true;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++)
+            if (hasText(group.getChildAt(index), value)) return true;
+        return false;
+    }
+
+    private static TextView findTextView(View root, String value) {
+        if (root instanceof TextView text && value.contentEquals(text.getText())) return text;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++) {
+            TextView found = findTextView(group.getChildAt(index), value);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static Button findButton(View root, String label) {
+        if (root instanceof Button button && label.contentEquals(button.getText())) return button;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++) {
+            Button found = findButton(group.getChildAt(index), label);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private static void verifyHandoff() throws Exception {

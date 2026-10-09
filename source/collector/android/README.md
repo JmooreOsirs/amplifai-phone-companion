@@ -1,20 +1,28 @@
 # AMPLIFai Phone — Android
 
-`2026.10.08-rc6` (`26100806`) streams each permission-gated source into a
+`2026.10.08-rc7` (`26100807`) streams each permission-gated source into a
 short-lived, app-private SQLite review store, then prepares immutable selected
 pages for the same-phone browser. The browser validates page hashes, source
 counts and the manifest before a separately approved, per-account save. The
 companion reports pages offered and waits for a matching saved/readback receipt.
-Published rc5 remains the in-place-update rollback. Physical-device permission,
+The app now shows measured provider-row progress, retained counts for each
+available source, local selection results and a distinct saved-account receipt.
+The three source cards distinguish a readable zero from not read or unavailable.
+Elapsed time and last measured movement appear while an operation is active;
+an exact count is displayed immediately, with modest optional motion rather
+than interpolated records or a fabricated time-remaining estimate. A report
+button appears only after the bound saved/readback acknowledgment and opens
+the existing signed-in account page. Published rc6 remains the in-place-update
+rollback. Physical-device permission,
 browser and authenticated account-save acceptance are still unverified.
 
 Support-code wire format is `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
 For this Android release, `build` is the exact dotted version name
-`2026.10.08-rc6`, bytes are `0|0` before pairing, and status is `-`. The
+`2026.10.08-rc7`, bytes are `0|0` before pairing, and status is `-`. The
 numeric Mac build values remain distinct and backward-compatible; the website
 derives platform only from an explicit allowlist of exact build values.
 
-Install rc6 as an in-place update, without uninstalling or clearing app data.
+Install rc7 as an in-place update, without uninstalling or clearing app data.
 Updates retain the application
 ID and signing certificate with a higher version code. After updating, open the
 app, review the selected sources and approve a fresh one-use browser handoff.

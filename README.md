@@ -1,15 +1,19 @@
-# AMPLIFai Phone companion source — Mac rc9 and Android rc6
+# AMPLIFai Phone companion source — Mac rc9 and Android rc7
 
 The Android source under `source/collector/android` corresponds to the signed
-`2026.10.08-rc6` website APK. It streams available contacts, calls and SMS
+`2026.10.08-rc7` website APK. It streams available contacts, calls and SMS
 metadata into a private no-backup review store, prepares immutable selected
 pages, and serves them to the same-phone browser after explicit approval.
 Available source and selected record counts, page hashes, one-use pairing,
 source decline, and the matching saved/readback receipt are versioned in the
 v2 protocol. Full names and phone values are preserved when an individual
-record fits its bounded page. Physical installer permissions, same-phone
+record fits its bounded page. The Android app now shows measured phone-entry
+progress, separate retained counts for each source, local selection results,
+and a saved-account state only after the bound saved/readback acknowledgment.
+Its one-read controls are visible above the account and privacy links.
+Physical installer permissions, same-phone
 browser handoff and authenticated account save remain unverified on an owner
-device. Published Android rc5 remains the rollback.
+device. Published Android rc6 remains the rollback.
 
 This package is prepared for the matching `2026.10.08-rc9` Mac app, build
 `26100809`; publication and binary checksums are separate release steps. The

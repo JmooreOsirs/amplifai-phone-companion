@@ -62,6 +62,8 @@ public final class MainActivity extends Activity {
     private volatile int choicesGeneration;
     private TextView status;
     private TextView coverage;
+    private CollectionProgressPanel progressPanel;
+    private final String[] sourceDispositions = {"Not read", "Not read", "Not read"};
     private TextView review;
     private TextView supportCodeView;
     private Button copySupportCode;
@@ -101,6 +103,7 @@ public final class MainActivity extends Activity {
             handoff = null;
             reviewed = false;
             handoffButton.setEnabled(false);
+            progressPanel.handoff("failed", 0, 0);
             review.setText("Browser handoff stopped. Review your selected metadata before approving a new transfer.");
         }
     };
@@ -128,14 +131,10 @@ public final class MainActivity extends Activity {
         brand.setTypeface(null, Typeface.BOLD);
         body.addView(brand);
         body.addView(text("Phone metadata review", 21, ACCENT));
-        body.addView(text("Choose each source separately. Android asks for contacts, call-log and SMS access independently. This app reads only names/phone numbers, counterpart numbers, dates, direction and call duration. It never reads message bodies or attachments. A bounded failure code may be sent automatically; source records leave this phone only after you approve a local browser handoff. Account saves require separate consent.", 14, MUTED));
-        body.addView(text("READ_CALL_LOG and READ_SMS can remain unavailable even after installation. If a source is denied or installer-restricted, this app reports it as unavailable; do not change device security settings.", 13, MUTED));
-        Button privacyNotice = button("Read AMPLIFai privacy notice", body);
-        privacyNotice.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW,
-                Uri.parse(LocalBridge.ACCOUNT_ORIGIN + "/experience/account-privacy"))));
-        Button accountData = button("Review, export or delete saved account sources", body);
-        accountData.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW,
+        progressPanel = new CollectionProgressPanel(this, body, () -> startActivity(new Intent(Intent.ACTION_VIEW,
                 Uri.parse(LocalBridge.ACCOUNT_ORIGIN + "/phone/account"))));
+        body.addView(text("Choose contacts, call history, or SMS history. Each source asks for your approval and Android permission. Message text and attachments are never read. Only reviewed metadata is shared with your browser; saving to your account requires separate approval. Sanitized error reports may be sent automatically.", 14, MUTED));
+        body.addView(text("Call or SMS history may be unavailable if Android or the installer restricts access. Unavailable sources are shown clearly.", 13, MUTED));
 
         country = new EditText(this);
         country.setSingleLine(true);
@@ -144,18 +143,24 @@ public final class MainActivity extends Activity {
         country.setTextColor(TEXT);
         country.setHintTextColor(MUTED);
         country.setBackgroundTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        body.addView(text("Country for phone-number normalization (two-letter ISO code)", 13, MUTED));
+        body.addView(text("Country code (2 letters, for example US)", 13, MUTED));
         body.addView(country);
 
         Button readContacts = button("Read contacts", body);
         readContacts.setOnClickListener(view -> readSource(CONTACTS_REQUEST));
         Button readCalls = button("Read call history", body);
         readCalls.setOnClickListener(view -> readSource(CALLS_REQUEST));
-        Button readMessages = button("Read SMS metadata", body);
+        Button readMessages = button("Read SMS history", body);
         readMessages.setOnClickListener(view -> readSource(SMS_REQUEST));
         cancel = button("Cancel current read", body);
         cancel.setEnabled(false);
         cancel.setOnClickListener(view -> { if (cancellation != null) cancellation.cancel(); });
+        Button privacyNotice = button("Read AMPLIFai privacy notice", body);
+        privacyNotice.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW,
+                Uri.parse(LocalBridge.ACCOUNT_ORIGIN + "/experience/account-privacy"))));
+        Button accountData = button("Review, export or delete saved account sources", body);
+        accountData.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW,
+                Uri.parse(LocalBridge.ACCOUNT_ORIGIN + "/phone/account"))));
 
         status = text("No source read yet.", 14, MUTED);
         status.setPadding(0, dp(12), 0, dp(6));
@@ -218,7 +223,11 @@ public final class MainActivity extends Activity {
                 Uri.parse(LocalBridge.ACCOUNT_ORIGIN + "/phone/account"))));
         body.addView(text("Pair only from the browser on this Android phone. A visible notification keeps Cancel available while you use the browser. The code is one-use and expires after five minutes; account uploads still require separate source approval.", 13, MUTED));
         try { store = new SanitizedStore(this); }
-        catch (SQLiteException unavailable) { failure("storage", "unavailable", "Private phone storage is unavailable. Free local space and reopen the app before reading sources."); }
+        catch (SQLiteException unavailable) {
+            for (int index = 0; index < sourceDispositions.length; index++) sourceDispositions[index] = "Unavailable";
+            failure("storage", "unavailable", "Private phone storage is unavailable. Free local space and reopen the app before reading sources.");
+            showCoverage();
+        }
         renderChoices();
     }
 
@@ -257,12 +266,12 @@ public final class MainActivity extends Activity {
         }
         CheckBox agreement = new CheckBox(this);
         agreement.setChecked(false);
-        agreement.setTextColor(TEXT);
+        agreement.setTextColor(BG);
         agreement.setText("I approve this one local " + sourceName(source).toLowerCase(Locale.ROOT) + " metadata read. Saving and browser handoff are separate decisions.");
         agreement.setPadding(dp(16), dp(8), dp(16), dp(8));
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Before reading " + sourceName(source).toLowerCase(Locale.ROOT))
-                .setMessage("This app will query the selected Android source on this phone. It keeps names and numbers for contacts, or counterpart numbers, dates, direction and duration for calls/SMS where available. It does not read message bodies or attachments. Android permission is a separate prompt; declining here does not request it. A bounded failure code can be sent automatically. No source records leave this phone without later review and handoff approval.")
+                .setMessage("This app reads the chosen source on this phone only after you approve. It keeps names and phone numbers for contacts; for calls and SMS, it keeps the other party's number, date, direction and call duration where available. It never reads message text or attachments. Android may ask for permission separately; declining here does not request it. A sanitized error report may be sent automatically. Phone records stay here until you review and approve a browser handoff. Saving to your account requires another approval.")
                 .setView(agreement)
                 .setNegativeButton("Not now", (ignored, which) -> {})
                 .setPositiveButton("Approve one read", (ignored, which) -> {
@@ -292,6 +301,7 @@ public final class MainActivity extends Activity {
         if (!clearSource(source)) return;
         approvedSource = source;
         if (checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
+            progressPanel.awaitingPermission(sourceName(source));
             permissionPendingSource = source;
             activePermissionRequestCode = nextPermissionRequestCode++;
             if (nextPermissionRequestCode > 65000) nextPermissionRequestCode = 1000;
@@ -323,8 +333,11 @@ public final class MainActivity extends Activity {
         if (grantResults.length == 0 || grantResults[0] != PackageManager.PERMISSION_GRANTED ||
                 checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
             approvedSource = 0;
+            sourceDispositions[sourceIndex(source)] = "Unavailable";
+            showCoverage();
+            progressPanel.failedRead(sourceName(source), "Android or its installer did not grant this source. Other available sources can continue.");
             failure(sourceStage(source), "restricted", sourceName(source) +
-                    " unavailable: permission denied or installer-restricted. No provider query ran.");
+                    " unavailable: permission denied or installer-restricted. No source read ran.");
             return;
         }
         beginRead(source, country.getText().toString().trim().toUpperCase(Locale.ROOT));
@@ -340,6 +353,10 @@ public final class MainActivity extends Activity {
 
     private String categoryFor(int source) {
         return source == CONTACTS_REQUEST ? "contacts" : source == CALLS_REQUEST ? "calls" : "messages";
+    }
+
+    private int sourceIndex(int source) {
+        return source == CONTACTS_REQUEST ? 0 : source == CALLS_REQUEST ? 1 : 2;
     }
 
     private void clearSupportCode() {
@@ -388,6 +405,9 @@ public final class MainActivity extends Activity {
         CancellationSignal taskSignal = cancellation;
         SanitizedStore activeStore = store;
         cancel.setEnabled(true);
+        sourceDispositions[sourceIndex(source)] = "Reading";
+        showCoverage();
+        progressPanel.beginRead(sourceName(source));
         status.setText("Reading " + sourceName(source) + " metadata locally…");
         executor.execute(() -> {
             try {
@@ -395,8 +415,11 @@ public final class MainActivity extends Activity {
                 String category = categoryFor(source);
                 SanitizedStore.Coverage result = next.readToStore(category, iso, taskSignal, activeStore,
                         seen -> runOnUiThread(() -> {
-                            if (cancellation == taskSignal && started)
-                                status.setText("Reading " + sourceName(source) + ": " + seen + " provider rows inspected locally…");
+                            if (cancellation == taskSignal && started) {
+                                progressPanel.inspected(seen);
+                                status.setText("Reading " + sourceName(source) + ": " +
+                                        CollectionProgressPanel.counted(seen, "phone entry", "phone entries") + " checked locally…");
+                            }
                         }));
                 publishRead(source, taskSignal, () -> {
                     if (source == CONTACTS_REQUEST) { contactsAvailable = true; selectedIds.clear(); pageOffset = 0; renderChoices(); }
@@ -417,7 +440,9 @@ public final class MainActivity extends Activity {
                 publishRead(source, taskSignal, () -> finishFailure(source, code, "This source has a record or count outside the transfer contract. No partial source is available."));
             } catch (RuntimeException providerFailure) {
                 String code = "source_provider_unavailable".equals(providerFailure.getMessage()) ? "provider_null" : "provider_read";
-                publishRead(source, taskSignal, () -> finishFailure(source, code, sourceName(source) + " provider unavailable or unsupported. No new source was stored."));
+                publishRead(source, taskSignal, () -> finishFailure(source, code,
+                        "Android could not read " + sourceName(source).toLowerCase(Locale.ROOT) +
+                                " on this phone. No new source was kept."));
             }
         });
     }
@@ -434,8 +459,13 @@ public final class MainActivity extends Activity {
         noteReviewDataChanged();
         cancellation = null;
         cancel.setEnabled(false);
-        status.setText(sourceName(source) + ": " + result.seen + " provider rows inspected; " +
-                store.count(categoryFor(source)) + " metadata records retained locally; " + result.rejected + " rows excluded.");
+        sourceDispositions[sourceIndex(source)] = "Available";
+        long retained = store.count(categoryFor(source));
+        status.setText(sourceName(source) + ": " +
+                CollectionProgressPanel.counted(result.seen, "phone entry", "phone entries") + " checked; " +
+                CollectionProgressPanel.counted(retained, "metadata record", "metadata records") + " kept on this phone; " +
+                CollectionProgressPanel.counted(result.rejected, "entry", "entries") + " excluded.");
+        progressPanel.finishedRead(sourceName(source), retained, result.seen, result.rejected);
         showCoverage();
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
     }
@@ -451,16 +481,24 @@ public final class MainActivity extends Activity {
                 return;
             }
         }
+        if (source != 0) {
+            sourceDispositions[sourceIndex(source)] = "cancelled".equals(category) ? "Not read" : "Unavailable";
+            progressPanel.failedRead(sourceName(source), message);
+        }
         failure(source == 0 ? "permission" : sourceStage(source), category, message);
         showCoverage();
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
     }
 
     private void showCoverage() {
-        coverage.setText("Available locally: contacts " + (contactsAvailable && store != null ? store.count("contacts") : "unavailable/not read") +
-                "; calls " + (callsAvailable && store != null ? store.count("calls") : "unavailable/not read") +
-                "; SMS " + (messagesAvailable && store != null ? store.count("messages") : "unavailable/not read") +
-                ". Zero means a readable source with no records observed. RCS/MMS and unavailable history are not claimed.");
+        long contactsCount = contactsAvailable && store != null ? store.count("contacts") : -1;
+        long callsCount = callsAvailable && store != null ? store.count("calls") : -1;
+        long messagesCount = messagesAvailable && store != null ? store.count("messages") : -1;
+        coverage.setText("Available locally: contacts " + (contactsCount < 0 ? "unavailable/not read" : contactsCount) +
+                "; calls " + (callsCount < 0 ? "unavailable/not read" : callsCount) +
+                "; SMS " + (messagesCount < 0 ? "unavailable/not read" : messagesCount) +
+                ". Zero means a readable source with no records observed. Other messaging formats and unavailable history are not claimed.");
+        progressPanel.sources(new long[]{contactsCount, callsCount, messagesCount}, sourceDispositions);
     }
 
     private void renderChoices() {
@@ -540,6 +578,8 @@ public final class MainActivity extends Activity {
                             (callsAvailable ? value.matchedCalls + " matching calls" : "call history unavailable/not read") + "; " +
                             (messagesAvailable ? value.matchedMessages + " matching SMS records" : "SMS unavailable/not read") + ". " + range +
                             ". This is available observed history, not proof of completeness. No data was sent or saved to an account. Confirm this selection before starting browser handoff.");
+                    progressPanel.reviewed(value.selectedContacts, value.matchedCalls, value.matchedMessages,
+                            callsAvailable, messagesAvailable);
                     reviewed = true;
                     handoffButton.setEnabled(handoff != null && !handoff.snapshot().active());
                 });
@@ -561,6 +601,7 @@ public final class MainActivity extends Activity {
     private void noteReviewDataChanged() {
         snapshotCollectedAt = Instant.now();
         invalidateReview();
+        progressPanel.selectionChanged();
     }
 
     private boolean clearSource(int source) {
@@ -580,6 +621,7 @@ public final class MainActivity extends Activity {
         } else {
             messagesAvailable = false;
         }
+        sourceDispositions[sourceIndex(source)] = "Not read";
         showCoverage();
         review.setText("Source data changed. Review your selected contacts and matching history again before browser handoff.");
         return true;
@@ -594,6 +636,7 @@ public final class MainActivity extends Activity {
         contactsAvailable = false;
         callsAvailable = false;
         messagesAvailable = false;
+        for (int index = 0; index < sourceDispositions.length; index++) sourceDispositions[index] = "Unavailable";
         selectedIds.clear();
         reviewed = false;
         handoffButton.setEnabled(false);
@@ -630,14 +673,17 @@ public final class MainActivity extends Activity {
         Set<Long> ids = new HashSet<>(selectedIds);
         Instant frozenCollectedAt = snapshotCollectedAt;
         int generation = reviewGeneration;
-        status.setText("Preparing immutable selected-source pages locally…");
+        progressPanel.preparing("selected metadata", 0);
+        status.setText("Preparing selected metadata locally…");
         executor.execute(() -> {
             PagedTransfer transfer = null;
             try {
                 transfer = new PagedTransfer(this, store, ids, frozenCollectedAt, progress -> runOnUiThread(() -> {
-                    if (!isDestroyed() && preparingTransfer && generation == reviewGeneration)
-                        status.setText("Preparing " + progress.category() + " locally: " +
-                                progress.rows() + " selected records in " + progress.pages() + " pages…");
+                    if (!isDestroyed() && preparingTransfer && generation == reviewGeneration) {
+                        String label = "messages".equals(progress.category()) ? "SMS" : progress.category();
+                        progressPanel.preparing(label, progress.rows());
+                        status.setText("Preparing " + label + " locally: " + progress.rows() + " selected records…");
+                    }
                 }));
                 PagedTransfer ready = transfer;
                 runOnUiThread(() -> {
@@ -648,26 +694,28 @@ public final class MainActivity extends Activity {
                     try { handoff.approve(ready); }
                     catch (RuntimeException unavailable) {
                         ready.close();
+                        progressPanel.handoff("failed", 0, 0);
                         failure("handoff", "unavailable", "Local handoff could not start. Review and retry; no account save was made.");
                     }
                 });
             } catch (SQLiteException disk) {
                 if (transfer != null) transfer.close();
-                runOnUiThread(() -> { preparingTransfer = false; failure("storage", "storage_io", "Private transfer storage failed. Free local space and review again."); });
+                runOnUiThread(() -> { preparingTransfer = false; progressPanel.handoff("failed", 0, 0); failure("storage", "storage_io", "Private transfer storage failed. Free local space and review again."); });
             } catch (IllegalArgumentException invalidRecord) {
                 if (transfer != null) transfer.close();
                 String code = "record_outside_protocol".equals(invalidRecord.getMessage()) ? "record_size" :
                         "source_count_outside_protocol".equals(invalidRecord.getMessage()) ? "source_count" : "invalid";
-                runOnUiThread(() -> { preparingTransfer = false; failure("handoff", code, "A selected record or source count exceeds one bounded transfer page. Select another contact or inspect the source; no partial transfer started."); });
+                runOnUiThread(() -> { preparingTransfer = false; progressPanel.handoff("failed", 0, 0); failure("handoff", code, "A selected record is too large for one transfer batch, or the source count exceeds the supported range. Review the source; no partial transfer started."); });
             } catch (RuntimeException unavailable) {
                 if (transfer != null) transfer.close();
-                runOnUiThread(() -> { preparingTransfer = false; failure("handoff", "unavailable", "Selected pages could not be prepared. No account save was made."); });
+                runOnUiThread(() -> { preparingTransfer = false; progressPanel.handoff("failed", 0, 0); failure("handoff", "unavailable", "Selected metadata could not be prepared. No account save was made."); });
             }
         });
     }
 
     private void showHandoff(HandoffService.Snapshot value) {
         if (value.state().equals("idle")) return;
+        progressPanel.handoff(value.state(), value.pagesProvided(), value.pagesTotal());
         handoffButton.setEnabled(false);
         if (value.state().equals("ready")) {
             clearSupportCode();
@@ -675,8 +723,8 @@ public final class MainActivity extends Activity {
                     ". Expires within 5 minutes of approval. Open AMPLIFai on this same Android phone, enter the code, review each source and separately approve each save. Cancel is available in the notification.");
             status.setText("Local handoff ready on this phone only. No cloud save has occurred.");
         } else if (value.state().equals("transferring")) {
-            status.setText("Pages offered to this phone's browser: " + value.pagesProvided() + " / " +
-                    value.pagesTotal() + ". Browser validation and account save are separate steps.");
+            status.setText("Browser requested " + value.pagesProvided() + " / " +
+                    value.pagesTotal() + " local batches. Validation and account save are separate steps.");
             review.setText("Keep the companion open while the browser validates each selected source. Saved account sources require separate approval and readback. Cancel remains in the notification.");
         } else if (value.state().equals("starting")) {
             status.setText("Starting the visible handoff notification…");
@@ -715,10 +763,13 @@ public final class MainActivity extends Activity {
             if (available && checkSelfPermission(permissionFor(source)) != PackageManager.PERMISSION_GRANTED) {
                 noteReviewDataChanged();
                 if (!clearSource(source)) return;
+                sourceDispositions[sourceIndex(source)] = "Unavailable";
+                progressPanel.failedRead(sourceName(source), "Android access was revoked. Reread and review permitted sources before pairing.");
                 revoked = true;
             }
         }
         if (revoked) {
+            showCoverage();
             // Binding completes asynchronously; revoke its handoff before showing any earlier code.
             if (handoff == null) cancelHandoffOnConnect = true;
             failure("permission", "revoked", "A source permission changed. That source is unavailable; reread and review permitted sources before pairing.");
@@ -727,6 +778,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onStop() {
         started = false;
+        progressPanel.pause();
         if (permissionPendingSource != 0) status.setText("Permission prompt interrupted. Review and approve this source again before reading.");
         approvedSource = 0;
         permissionPendingSource = 0;
@@ -744,6 +796,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         if (cancellation != null) cancellation.cancel();
+        progressPanel.close();
         SanitizedStore closing = store;
         executor.execute(() -> { if (closing != null) closing.close(); });
         executor.shutdown();
