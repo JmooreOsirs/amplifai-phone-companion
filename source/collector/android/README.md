@@ -1,6 +1,6 @@
 # AMPLIFai Phone — Android
 
-`2026.10.08-rc7` (`26100807`) streams each permission-gated source into a
+`2026.10.08-rc8` (`26100808`) streams each permission-gated source into a
 short-lived, app-private SQLite review store, then prepares immutable selected
 pages for the same-phone browser. The browser validates page hashes, source
 counts and the manifest before a separately approved, per-account save. The
@@ -12,20 +12,60 @@ Elapsed time and last measured movement appear while an operation is active;
 an exact count is displayed immediately, with modest optional motion rather
 than interpolated records or a fabricated time-remaining estimate. A report
 button appears only after the bound saved/readback acknowledgment and opens
-the existing signed-in account page. Published rc6 remains the in-place-update
-rollback. Physical-device permission,
+the existing signed-in account page. Published rc7 remains the previous
+distribution. Physical-device permission,
 browser and authenticated account-save acceptance are still unverified.
 
 Support-code wire format is `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
 For this Android release, `build` is the exact dotted version name
-`2026.10.08-rc7`, bytes are `0|0` before pairing, and status is `-`. The
+`2026.10.08-rc8`, bytes are `0|0` before pairing, and status is `-`. The
 numeric Mac build values remain distinct and backward-compatible; the website
 derives platform only from an explicit allowlist of exact build values.
 
-Install rc7 as an in-place update, without uninstalling or clearing app data.
+Install rc8 as an in-place update, without uninstalling or clearing app data.
+rc7 and earlier cannot check for updates themselves, so this replacement is a
+one-time normal Android installation. The rc7 release remains an immutable
+rollback artifact; Android does not install an older version over a newer one
+without a separate deliberate reinstall path.
 Updates retain the application
 ID and signing certificate with a higher version code. After updating, open the
 app, review the selected sources and approve a fresh one-use browser handoff.
+
+## Website app updates
+
+At launch, the website-distributed app performs one bounded anonymous HTTPS
+request for `/phone/android-update-v1.txt`. The exact-order feed is signed by
+the existing RSA-3072 Android release identity whose public certificate is
+pinned in the app. It names a single newer package version, exact signed APK
+URL, byte length, SHA-256 and signer. The app downloads only that allowlisted
+APK into private no-backup storage, rejects unexpected redirects, partial or
+altered bytes, wrong package/version/SDK and wrong signing certificate, then
+lets Android verify and apply the same-signer update through PackageInstaller.
+The request includes no account token, phone record, backup, or pairing code.
+Offline or invalid feeds leave collection usable and show a failed check.
+
+Automatic installation is **off until the owner checks its separate box**.
+Android must also authorize this app as an install source. When both are true,
+the app may ask Android 12+ to update without a new prompt only if Android's
+documented self-update conditions hold; it always handles an Android approval
+prompt when one is required. Android 8–11 and other ineligible devices require
+the ordinary OS approval. If Android needs approval while the app is in the
+background, reopen the companion and tap **Continue Android approval** to see
+the OS prompt; the private install session remains guarded until Android
+reports a terminal outcome or the installed version is observed. Unknown-apps
+Settings is presented as an owner
+choice, never changed by the app. An update waits during source disclosure or
+permission prompts, reading, selection/review, transfer preparation, active
+pairing/browser delivery, and an account save awaiting the matching readback
+acknowledgment. Pending installation blocks new local work. Cancelling an
+install prompt or verification leaves phone review available.
+
+This self-updater is for the **website APK only**. Google's Play policy does
+not permit `REQUEST_INSTALL_PACKAGES` for this kind of self-update; any future
+Play-distributed variant must remove that permission and use Google's own
+update mechanism. A Google Play listing draft is not an approved Play release.
+See [official PackageInstaller user-action rules](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setRequireUserAction(int))
+and [Google Play install-permission policy](https://support.google.com/googleplay/android-developer/answer/12085295).
 
 ## Owner flow
 
@@ -58,7 +98,7 @@ An unexported, owner-started `dataSync` foreground service serves immutable revi
 
 The bridge binds only `127.0.0.1:48751`, checks the exact Host and `https://amplifai-database-engine.vercel.app` Origin, limits pairing attempts, and requires the one-use bearer token and ordered pages. Pairing binds an immutable handoff ID and SHA-256 manifest. The code expires after five minutes without pairing. An authorized v2 session has a two-hour sliding inactivity window while the browser fetches, reviews, saves and verifies pages. A requested page is not proof the browser validated it; native `/v1/complete` records source delivery or explicit decline, and the separate bound saved/readback handshake confirms account persistence. Cancellation, five bad codes, saved confirmation, expiry or I/O failure closes the listener and clears the grant. OS termination can shorten the window; it never asserts a save from page delivery alone.
 
-The notification contains no contacts or pairing code; it may show the count of pages offered. Disabling notifications, removing the app's task, or service timeout stops the transfer. Activity recreation does not own or close an active bridge. `START_NOT_STICKY`, no boot receiver, no persisted code/token and orphan scratch cleanup mean process loss cannot silently restart collection or transfer. The service requests only foreground-service/data-sync and notification permissions in addition to contacts/call/SMS/Internet permissions. [Foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
+The notification contains no contacts or pairing code; it may show the count of pages offered. Disabling notifications, removing the app's task, or service timeout stops the transfer. Activity recreation does not own or close an active bridge. `START_NOT_STICKY`, no boot receiver, no persisted code/token and orphan scratch cleanup mean process loss cannot silently restart collection or transfer. The handoff service requests only foreground-service/data-sync and notification permissions in addition to contacts/call/SMS/Internet permissions. The separate website updater declares Android's package-install permissions, but performs no package operation until its safety gate and owner/OS approval conditions are met. [Foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
 
 ## Local build and controlled signing
 
@@ -90,6 +130,21 @@ The authorized release operator supplies all four environment variables privatel
 - `AMPLIFAI_ANDROID_KEY_PASSWORD`
 
 Partial configuration is rejected. This Android project disables the configuration cache and rejects an explicit `--configuration-cache` before reading any signing values: even failed configuration can otherwise be cached. Use `--no-daemon --no-configuration-cache`; never echo credentials, include passwords in command arguments, or use a build scan. With no variables the release remains **unsigned** for local validation; never publish `app-release-unsigned.apk` as an installable download. With the complete approved configuration, verify `app/build/outputs/apk/release/app-release.apk` using the installed `apksigner`, confirm version/application ID/non-debuggable manifest and signer fingerprint, then record its SHA-256 and exact published URL in the canonical release ledger. Signing/publication are operator-owned, not implied by this README.
+
+After verifying the exact APK, the existing Keychain-held release identity can
+sign the update feed without a password in shell arguments:
+
+```sh
+swift script/android_release_signing.swift sign-feed \
+  /absolute/path/to/verified.apk \
+  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.08-rc8/AMPLIFai-Phone-Android-2026.10.08-rc8.apk \
+  /absolute/path/to/android-update-v1.txt
+```
+
+Run that command from the repository root. Publish the exact signed feed at
+`/phone/android-update-v1.txt` only after the immutable APK/source/checksum
+release exists and its anonymous download hash matches. Never reuse a release
+tag for different bytes.
 
 ## Remaining physical acceptance
 

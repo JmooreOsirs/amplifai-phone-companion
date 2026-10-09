@@ -1,6 +1,10 @@
 package ai.satoris.amplifai.phone;
 
 import android.app.Instrumentation;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageInstaller;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -9,6 +13,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -38,6 +48,25 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
+            if ("updater_install_auto".equals(testArguments.getString("scenario"))) {
+                initiateUpdaterInstall(true);
+                result.putString("result", "same-signed disposable higher-version archive committed with conditional no-user-action request; inspect OS callback and installed version separately");
+                finish(0, result);
+                return;
+            }
+            if ("updater_install_manual".equals(testArguments.getString("scenario"))) {
+                initiateUpdaterInstall(false);
+                result.putString("result", "same-signed disposable higher-version archive committed with required user action; inspect OS prompt and installed version separately");
+                finish(0, result);
+                return;
+            }
+            if ("updater".equals(testArguments.getString("scenario"))) {
+                verifyUpdaterArchive();
+                verifyUpdateCallbackState();
+                result.putString("result", "pinned feed/archive identity negatives and installer callback replay, cancel, failure and actual-version reconciliation passed");
+                finish(0, result);
+                return;
+            }
             verifyProgressPanel();
             if ("progress_ui".equals(testArguments.getString("scenario"))) {
                 result.putString("result", "measured Android progress, unavailable versus zero, local review, and saved-only results passed");
@@ -57,6 +86,140 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
             result.putString("error", failure.getClass().getSimpleName() + ": " + failure.getMessage());
             finish(-1, result);
         }
+    }
+
+    private void verifyUpdaterArchive() throws Exception {
+        Context target = getTargetContext();
+        byte[] feed;
+        byte[] certificate;
+        try (InputStream input = getContext().getAssets().open("rc7-signed-feed.txt")) {
+            feed = input.readAllBytes();
+        }
+        try (InputStream input = target.getAssets().open("android_update_publisher.der")) {
+            certificate = input.readAllBytes();
+        }
+        AndroidUpdateFeed.Release rc7 = AndroidUpdateFeed.parse(feed, certificate);
+        File copy = new File(target.getNoBackupFilesDir(), "updater-rc7-fixture.apk");
+        try {
+            try (InputStream input = getContext().getAssets().open("rc7-signed.apk");
+                 FileOutputStream output = new FileOutputStream(copy)) {
+                input.transferTo(output);
+            }
+            UpdateInstaller.verifyArchive(target, rc7, copy, 26100806);
+            expectUpdateRejection(target, new AndroidUpdateFeed.Release(26100808, rc7.versionName(),
+                    rc7.minSdk(), rc7.bytes(), rc7.sha256(), rc7.url()), copy, "wrong version");
+            try (RandomAccessFile change = new RandomAccessFile(copy, "rw")) {
+                change.seek(copy.length() - 1);
+                int last = change.read();
+                change.seek(copy.length() - 1);
+                change.write(last ^ 1);
+            }
+            expectUpdateRejection(target, rc7, copy, "corrupt APK");
+            try (RandomAccessFile change = new RandomAccessFile(copy, "rw")) {
+                change.setLength(rc7.bytes() - 1);
+            }
+            expectUpdateRejection(target, rc7, copy, "truncated APK");
+            File debug = new File(target.getNoBackupFilesDir(), "updater-wrong-signer-fixture.apk");
+            try (InputStream input = getContext().getAssets().open("rc8-debug.apk");
+                 FileOutputStream output = new FileOutputStream(debug)) {
+                input.transferTo(output);
+            }
+            byte[] digest;
+            try {
+                try (FileInputStream input = new FileInputStream(debug)) {
+                    digest = MessageDigest.getInstance("SHA-256").digest(input.readAllBytes());
+                }
+                AndroidUpdateFeed.Release wrongSigner = new AndroidUpdateFeed.Release(26100808, "2026.10.08-rc8",
+                        26, debug.length(), AndroidUpdateFeed.hex(digest), rc7.url());
+                expectUpdateRejection(target, wrongSigner, debug, "wrong signer");
+            } finally {
+                if (!debug.delete()) debug.deleteOnExit();
+            }
+        } finally { if (!copy.delete()) copy.deleteOnExit(); }
+    }
+
+    private static void expectUpdateRejection(Context context, AndroidUpdateFeed.Release release,
+                                              File file, String label) throws Exception {
+        try {
+            UpdateInstaller.verifyArchive(context, release, file, 26100806);
+            throw new AssertionError(label + " was accepted");
+        } catch (IOException expected) { /* A bad archive must fail before an OS session is created. */ }
+    }
+
+    private void verifyUpdateCallbackState() {
+        Context target = getTargetContext();
+        SharedPreferences state = target.getSharedPreferences("android-update-status", Context.MODE_PRIVATE);
+        state.edit().clear().commit();
+        try {
+            UpdateInstallReceiver.pendingIntent(target, 987654, 26100809);
+            require(UpdateInstallReceiver.pending(target), "pending installer guard missing");
+            String nonce = state.getString("nonce", "");
+            Intent callback = new Intent(target, UpdateInstallReceiver.class)
+                    .setAction("ai.satoris.amplifai.phone.UPDATE_INSTALL_RESULT")
+                    .putExtra("session", 987654).putExtra("nonce", nonce);
+            UpdateInstallReceiver receiver = new UpdateInstallReceiver();
+            receiver.onReceive(target, new Intent(callback).putExtra("nonce", "wrong")
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE));
+            require(UpdateInstallReceiver.pending(target), "wrong-nonce callback revoked live guard");
+            receiver.onReceive(target, new Intent(callback)
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_SUCCESS));
+            require(UpdateInstallReceiver.pending(target), "success callback cleared guard before installed version");
+            UpdateInstallReceiver.reconcile(target, 26100808);
+            require(UpdateInstallReceiver.pending(target), "old installed version cleared guard");
+            UpdateInstallReceiver.reconcile(target, 26100809);
+            require(!UpdateInstallReceiver.pending(target) &&
+                    UpdateInstallReceiver.confirmedTarget(target) == 26100809,
+                    "installed target did not reconcile exactly");
+
+            UpdateInstallReceiver.pendingIntent(target, 987655, 26100810);
+            String nextNonce = state.getString("nonce", "");
+            Intent approval = new Intent(callback).putExtra("session", 987655)
+                    .putExtra("nonce", nextNonce)
+                    .putExtra(Intent.EXTRA_INTENT, new Intent(target, MainActivity.class))
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_USER_ACTION);
+            receiver.onReceive(target, approval);
+            require(UpdateInstallReceiver.pendingApproval(target) != null &&
+                    "awaiting_android_approval".equals(UpdateInstallReceiver.status(target)),
+                    "OS approval was not recoverable without background launch");
+            Intent cancelled = new Intent(callback).putExtra("session", 987655)
+                    .putExtra("nonce", nextNonce)
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE_ABORTED);
+            receiver.onReceive(target, cancelled);
+            require(!UpdateInstallReceiver.pending(target) && "cancelled".equals(UpdateInstallReceiver.status(target)),
+                    "OS cancellation did not release guard");
+            require(UpdateInstallReceiver.pendingApproval(target) == null,
+                    "cancelled OS approval remained active");
+            UpdateInstallReceiver.pendingIntent(target, 987656, 26100810);
+            receiver.onReceive(target, new Intent(callback).putExtra("session", 987656)
+                    .putExtra("nonce", state.getString("nonce", ""))
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE));
+            require(!UpdateInstallReceiver.pending(target) && "failed".equals(UpdateInstallReceiver.status(target)),
+                    "OS failure did not release guard");
+        } finally { state.edit().clear().commit(); }
+    }
+
+    private void initiateUpdaterInstall(boolean automatic) throws Exception {
+        Context target = getTargetContext();
+        require(UpdateInstaller.archiveVersionCode(target.getPackageManager().getPackageInfo(
+                target.getPackageName(), 0)) == 26100808, "isolated base must be signed rc8");
+        require(!UpdateInstallReceiver.pending(target), "another Android update remains pending");
+        File copy = new File(target.getNoBackupFilesDir(), "synthetic-higher-version.apk");
+        try {
+            try (InputStream input = getContext().getAssets().open("synthetic-rc9-signed.apk");
+                 FileOutputStream output = new FileOutputStream(copy)) {
+                input.transferTo(output);
+            }
+            byte[] digest;
+            try (FileInputStream input = new FileInputStream(copy)) {
+                digest = MessageDigest.getInstance("SHA-256").digest(input.readAllBytes());
+            }
+            AndroidUpdateFeed.Release fixture = new AndroidUpdateFeed.Release(26100809, "2026.10.08-rc9",
+                    26, copy.length(), AndroidUpdateFeed.hex(digest),
+                    "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.08-rc9/AMPLIFai-Phone-Android-2026.10.08-rc9.apk");
+            UpdateInstaller.Staged staged = UpdateInstaller.stage(target, fixture, copy, 26100808, automatic);
+            UpdateInstaller.commit(target, staged, fixture.versionCode());
+            require(UpdateInstallReceiver.pending(target), "OS installation session was not durably guarded");
+        } finally { if (!copy.delete()) copy.deleteOnExit(); }
     }
 
     private void verifyProgressPanel() {

@@ -63,6 +63,7 @@ public final class MainActivity extends Activity {
     private TextView status;
     private TextView coverage;
     private CollectionProgressPanel progressPanel;
+    private AndroidUpdater updater;
     private final String[] sourceDispositions = {"Not read", "Not read", "Not read"};
     private TextView review;
     private TextView supportCodeView;
@@ -84,6 +85,8 @@ public final class MainActivity extends Activity {
     private boolean callsAvailable;
     private boolean messagesAvailable;
     private boolean reviewed;
+    private int handoffReviewGeneration = -1;
+    private boolean savedAckForCurrentReview;
     private int approvedSource;
     private int permissionPendingSource;
     private int activePermissionRequestCode;
@@ -98,6 +101,7 @@ public final class MainActivity extends Activity {
             }
             handoff.observe(MainActivity.this::showHandoff);
             handoffButton.setEnabled(reviewed && !handoff.snapshot().active());
+            updater.onSafetyChanged();
         }
         @Override public void onServiceDisconnected(ComponentName name) {
             handoff = null;
@@ -161,6 +165,7 @@ public final class MainActivity extends Activity {
         Button accountData = button("Review, export or delete saved account sources", body);
         accountData.setOnClickListener(view -> startActivity(new Intent(Intent.ACTION_VIEW,
                 Uri.parse(LocalBridge.ACCOUNT_ORIGIN + "/phone/account"))));
+        updater = new AndroidUpdater(this, body, this::canInstallUpdate);
 
         status = text("No source read yet.", 14, MUTED);
         status.setPadding(0, dp(12), 0, dp(6));
@@ -260,6 +265,7 @@ public final class MainActivity extends Activity {
     }
 
     private void readSource(int source) {
+        if (updater.blocksCollection()) { status.setText("Finish or cancel the Android update before reading a source."); return; }
         if (!started || permissionPendingSource != 0 || cancellation != null || collectionDisclosure != null || preparingTransfer || store == null) {
             status.setText("Finish the current approval or read before starting another source.");
             return;
@@ -289,6 +295,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startApprovedRead(int source) {
+        if (updater.blocksCollection()) { status.setText("Android is handling an app update. No source read started."); return; }
         if (handoff == null) { failure("handoff", "unavailable", "Wait for the handoff controls to connect before reading a source."); return; }
         String iso = country.getText().toString().trim().toUpperCase(Locale.ROOT);
         if (!iso.matches("[A-Z]{2}")) {
@@ -395,6 +402,7 @@ public final class MainActivity extends Activity {
     }
 
     private void beginRead(int source, String iso) {
+        if (updater.blocksCollection()) { approvedSource = 0; status.setText("Android is handling an app update. No source read started."); return; }
         if (approvedSource != source || permissionPendingSource != 0) {
             status.setText("Approve this source in the app before reading metadata.");
             return;
@@ -547,9 +555,14 @@ public final class MainActivity extends Activity {
             choice.setTextColor(TEXT);
             choice.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
             choice.setChecked(selectedIds.contains(contact.sourceId));
-            choice.setOnCheckedChangeListener((button, checked) -> {
+            choice.setOnClickListener(view -> {
+                if (updater.blocksCollection()) {
+                    choice.setChecked(!choice.isChecked());
+                    status.setText("Finish or cancel the Android update before changing this local review.");
+                    return;
+                }
                 noteReviewDataChanged();
-                if (checked) selectedIds.add(contact.sourceId); else selectedIds.remove(contact.sourceId);
+                if (choice.isChecked()) selectedIds.add(contact.sourceId); else selectedIds.remove(contact.sourceId);
             });
             choices.addView(choice);
         }
@@ -561,6 +574,7 @@ public final class MainActivity extends Activity {
     }
 
     private void reviewSelected() {
+        if (updater.blocksCollection()) { review.setText("Finish or cancel the Android update before reviewing contacts."); return; }
         if (cancellation != null || preparingTransfer || !contactsAvailable || store == null) { review.setText("Finish reading contacts before review."); return; }
         if (selectedIds.isEmpty()) { review.setText("Select at least one contact to review."); return; }
         int generation = ++reviewGeneration;
@@ -600,8 +614,19 @@ public final class MainActivity extends Activity {
 
     private void noteReviewDataChanged() {
         snapshotCollectedAt = Instant.now();
+        savedAckForCurrentReview = false;
         invalidateReview();
         progressPanel.selectionChanged();
+        updater.onSafetyChanged();
+    }
+
+    private boolean canInstallUpdate() {
+        boolean activeHandoff = handoff == null || handoff.snapshot().active();
+        boolean localSourceHeld = contactsAvailable || callsAvailable || messagesAvailable ||
+                reviewed || !selectedIds.isEmpty();
+        return UpdateSafety.canInstall(new UpdateSafety.State(started, collectionDisclosure != null || approvedSource != 0,
+                permissionPendingSource != 0 || activePermissionRequestCode != 0, cancellation != null,
+                preparingTransfer, activeHandoff, localSourceHeld, savedAckForCurrentReview));
     }
 
     private boolean clearSource(int source) {
@@ -648,6 +673,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startHandoff() {
+        if (updater.blocksCollection()) { status.setText("Finish or cancel the Android update before pairing."); return; }
         if (!started || handoff == null || !reviewed || selectedIds.isEmpty() || !contactsAvailable || cancellation != null || preparingTransfer || store == null) {
             status.setText("Read contacts, select them, and review the current selection first.");
             return;
@@ -691,7 +717,10 @@ public final class MainActivity extends Activity {
                     if (isDestroyed() || !started || generation != reviewGeneration || handoff == null) {
                         ready.close(); return;
                     }
-                    try { handoff.approve(ready); }
+                    try {
+                        handoff.approve(ready);
+                        handoffReviewGeneration = generation;
+                    }
                     catch (RuntimeException unavailable) {
                         ready.close();
                         progressPanel.handoff("failed", 0, 0);
@@ -732,6 +761,8 @@ public final class MainActivity extends Activity {
             status.setText(R.string.handoff_received_status);
             review.setText(R.string.handoff_received_review);
         } else {
+            if (value.state().equals("completed") && handoffReviewGeneration == reviewGeneration)
+                savedAckForCurrentReview = true;
             reviewed = false;
             String message = switch (value.state()) {
                 case "completed" -> getString(R.string.handoff_saved_status);
@@ -745,6 +776,7 @@ public final class MainActivity extends Activity {
             review.setText(value.state().equals("completed")
                     ? "Confirmed saved sources remain in your signed-in AMPLIFai account. Open the account page to review or export them."
                     : "The previous pairing code is no longer available. Any sources already saved in your account remain there; check the account before retrying.");
+            updater.onSafetyChanged();
         }
     }
 
@@ -752,6 +784,7 @@ public final class MainActivity extends Activity {
         super.onStart();
         started = true;
         bound = bindService(new Intent(this, HandoffService.class), connection, BIND_AUTO_CREATE);
+        updater.onStart();
     }
 
     @Override protected void onResume() {
@@ -774,10 +807,12 @@ public final class MainActivity extends Activity {
             if (handoff == null) cancelHandoffOnConnect = true;
             failure("permission", "revoked", "A source permission changed. That source is unavailable; reread and review permitted sources before pairing.");
         }
+        updater.onResume();
     }
 
     @Override protected void onStop() {
         started = false;
+        updater.onStop();
         progressPanel.pause();
         if (permissionPendingSource != 0) status.setText("Permission prompt interrupted. Review and approve this source again before reading.");
         approvedSource = 0;
@@ -797,6 +832,7 @@ public final class MainActivity extends Activity {
     @Override protected void onDestroy() {
         if (cancellation != null) cancellation.cancel();
         progressPanel.close();
+        updater.close();
         SanitizedStore closing = store;
         executor.execute(() -> { if (closing != null) closing.close(); });
         executor.shutdown();

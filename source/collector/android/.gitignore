@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+# Release-signed test APKs are disposable local fixtures, never public source.
+/app/src/androidTest/assets/*.apk
