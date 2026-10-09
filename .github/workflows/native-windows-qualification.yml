@@ -75,9 +75,21 @@ jobs:
           $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
           try {
             if (-not $process.WaitForInputIdle(30000)) { throw 'Frozen GUI did not become idle' }
-            $process.Refresh()
-            if ($process.MainWindowHandle -eq 0 -or $process.MainWindowTitle -notlike 'AMPLIFai Phone*') {
-              throw 'Frozen GUI window was not observed'
+            $deadline = (Get-Date).AddSeconds(90)
+            do {
+              $process.Refresh()
+              if ($process.HasExited) { throw 'Frozen GUI exited before clean inspection' }
+              if ($process.MainWindowTitle -like 'AMPLIFai Phone*inspection failed') {
+                throw 'Frozen GUI initial inspection failed'
+              }
+              if ($process.MainWindowTitle -like 'AMPLIFai Phone*temporary data remains') {
+                throw 'Frozen GUI found marked temporary data; do not close or collect'
+              }
+              if ($process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -like 'AMPLIFai Phone*ready') { break }
+              Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $deadline)
+            if ($process.MainWindowHandle -eq 0 -or $process.MainWindowTitle -notlike 'AMPLIFai Phone*ready') {
+              throw 'Frozen GUI did not reach clean inspection readiness'
             }
             if (-not $process.CloseMainWindow()) { throw 'Frozen GUI close was not accepted' }
             if (-not $process.WaitForExit(15000)) { throw 'Frozen GUI did not exit after close' }

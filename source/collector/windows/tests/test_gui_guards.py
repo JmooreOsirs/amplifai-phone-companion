@@ -63,6 +63,25 @@ def source_window():
 
 
 class GuiGuardsTests(unittest.TestCase):
+    def test_window_ready_only_after_clean_completed_inspection(self):
+        window = source_window()
+        title = window.close.__globals__["window_title"]
+        state = Session()
+        state.begin("inspect")
+        self.assertFalse(title(state).endswith(" · ready"))
+        state.handle({"kind": "residue", "sessions": []})
+        state.exited(0)
+        self.assertTrue(title(state).endswith(" · ready"))
+        state.begin("inspect")
+        self.assertFalse(title(state).endswith(" · ready"))
+        state.exited(1)
+        self.assertTrue(title(state).endswith(" · inspection failed"))
+        state = Session()
+        state.begin("inspect")
+        state.handle({"kind": "residue", "sessions": [{"name": "session-" + "a" * 32, "bytes": 0}]})
+        state.exited(0)
+        self.assertTrue(title(state).endswith(" · temporary data remains"))
+
     def test_private_write_failure_requests_cooperative_stop_not_termination(self):
         window = source_window()
         window.helper.write.side_effect = OSError("private helper detail")

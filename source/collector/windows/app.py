@@ -17,6 +17,17 @@ BACKGROUND, PANEL, BORDER = "#0f1525", "#141d30", "#263146"
 HEADING, BODY, MUTED = "#edeff3", "#c8cfd9", "#a1a9b5"
 LIME, BLUE = "#a6e63d", "#5c87df"
 GUARANTEE = "Data & Privacy Guarantee: What We Collect, How It's Protected, and Why"
+WINDOW_TITLE = "AMPLIFai Phone · Windows source candidate"
+
+
+def window_title(state: Session) -> str:
+    if not state.running and state.inspected and not state.needs_inspection and not state.residue:
+        return WINDOW_TITLE + " · ready"
+    if not state.running and state.inspected and state.residue:
+        return WINDOW_TITLE + " · temporary data remains"
+    if not state.running and state.phase == "error":
+        return WINDOW_TITLE + " · inspection failed"
+    return WINDOW_TITLE
 
 
 class PhoneWindow:
@@ -30,7 +41,7 @@ class PhoneWindow:
         self.contact_query = tk.StringVar(value="")
         self.contact_page = tk.StringVar(value="No contacts loaded.")
         self._rendering_contacts = False
-        self.window.title("AMPLIFai Phone · Windows source candidate")
+        self.window.title(WINDOW_TITLE)
         self.window.geometry("920x800")
         self.window.minsize(680, 680)
         self.window.configure(background=BACKGROUND)
@@ -307,6 +318,7 @@ class PhoneWindow:
 
     def refresh(self) -> None:
         state = self.state
+        self.window.title(window_title(state))
         self.status.set(state.status)
         self.approve.configure(state="normal" if self.checked.get() and state.inspected and not state.residue and not state.running else "disabled")
         self.connect.configure(state="normal" if state.can_connect else "disabled")
