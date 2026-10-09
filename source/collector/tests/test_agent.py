@@ -459,7 +459,7 @@ class AgentProtocolTest(unittest.TestCase):
             )
 
         source = io.StringIO(
-            '{"action":"contacts","query":"","cursor":200}\n'
+            '{"action":"contacts","query":"","cursor":200,"scanId":"00000000-0000-4000-8000-000000000001"}\n'
             '{"action":"contacts","query":"","cursor":400}\n'
             '{"action":"contacts","query":"Person 0449","cursor":0}\n'
             '{"action":"review","ids":[449]}\n'
@@ -473,6 +473,7 @@ class AgentProtocolTest(unittest.TestCase):
             [event["kind"] for event in events],
             ["state", "capture", "contacts", "contacts", "contacts", "review", "state"],
         )
+        self.assertEqual(events[2]["scanId"], "00000000-0000-4000-8000-000000000001")
         self.assertEqual(
             (
                 events[1]["totalContacts"],
@@ -635,6 +636,41 @@ class AgentProtocolTest(unittest.TestCase):
                 self.assertIn({"kind": "handoff", "state": "saved" if acknowledged else "received", "handoffId": run_id}, events)
                 self.assertEqual(events[-1], {"kind": "state", "state": "completed" if acknowledged else "disconnected"})
                 self.assertEqual(bridge.close.call_count, 1)
+
+    def test_destination_decision_requires_exact_review_and_never_finishes_unsaved(self) -> None:
+        async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+            return synthetic_capture()
+
+        run_id = "00000000-0000-4000-8000-000000000001"
+        intent_id = "00000000-0000-4000-8000-000000000002"
+        bridge = MagicMock()
+        bridge.code, bridge.port = "1234567890", 48751
+        bridge.handoff_id, bridge.payload_sha256 = run_id, "a" * 64
+        bridge.approve_destination.side_effect = lambda value, approved: value == intent_id and approved is True
+        bridge.handoff_state.return_value = "received"
+        bridge.pending_destination.return_value = {
+            "intentId": intent_id, "email": "synthetic@example.test", "course": "Synthetic course",
+        }
+        source = io.StringIO(
+            '{"action":"review","ids":[1]}\n{"action":"pair"}\n'
+            f'{{"action":"destination-decision","handoffId":"wrong","intentId":"{intent_id}","approved":true}}\n'
+            f'{{"action":"destination-decision","handoffId":"{run_id}","intentId":"wrong","approved":true}}\n'
+            f'{{"action":"destination-decision","handoffId":"{run_id}","intentId":"{intent_id}","approved":true}}\n'
+            f'{{"action":"handoff-status","handoffId":"{run_id}"}}\n'
+            f'{{"action":"finish","handoffId":"{run_id}"}}\n'
+            '{"action":"disconnect"}\n'
+        )
+        sink = io.StringIO()
+        with patch("amplifai_phone.agent.BridgeServer", return_value=bridge):
+            self.assertEqual(run_connect(source, sink, fake_collector), 0)
+        events = [json.loads(line) for line in sink.getvalue().splitlines()]
+        self.assertEqual(sum(event.get("code") == "handoff_unconfirmed" for event in events), 3)
+        self.assertIn({"kind": "destination", "state": "approved", "handoffId": run_id, "intentId": intent_id}, events)
+        self.assertIn({"kind": "destination", "state": "pending", "handoffId": run_id,
+                       "intentId": intent_id, "email": "synthetic@example.test", "course": "Synthetic course"}, events)
+        self.assertNotIn({"kind": "state", "state": "completed"}, events)
+        bridge.approve_destination.assert_called_with(intent_id, True)
+        bridge.close.assert_called_once()
 
     def test_pairing_bind_failure_keeps_local_review_available(self) -> None:
         async def fake_collector(**_kwargs: object) -> IPhoneCapture:

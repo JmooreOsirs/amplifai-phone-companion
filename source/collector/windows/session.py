@@ -61,6 +61,17 @@ class Session:
         self._pairing_invalidated = False
         self._retired_handoff_id = ""
         self._capture_received = False
+        self.selecting_all = False
+        self.select_all_visited = 0
+        self._select_all_ids: set[int] = set()
+        self._select_all_cursor = 0
+        self._select_all_scan_id = ""
+        self._select_all_cancel = False
+        self.destination_intent_id = ""
+        self.destination_email = ""
+        self.destination_course = ""
+        self.destination_requested_approval: bool | None = None
+        self.destination_approved = False
         self._failure_status = ""
         self._completed = self._saved_exit = self._stopping = self._failed = False
 
@@ -73,8 +84,14 @@ class Session:
         return self.running and self.mode == "connect" and self.phase in {"selecting", "reviewing"} and not self._stopping and not self._finishing
 
     @property
+    def can_select_all(self) -> bool:
+        return (self.can_select and not self.selecting_all and self.pending_contact is None
+                and self._pending_review is None and not self._pairing and not self._polling
+                and not self.handoff_id and not self._retired_handoff_id and self.total_contacts > 0)
+
+    @property
     def can_review(self) -> bool:
-        return (self.can_select and self._pending_review is None and self.pending_contact is None
+        return (self.can_select and not self.selecting_all and self._pending_review is None and self.pending_contact is None
                 and not self._pairing and not self._polling and not self.handoff_id
                 and not self._retired_handoff_id)
 
@@ -84,7 +101,7 @@ class Session:
                 and self.reviewed and bool(self.selection) and not self.saved_acknowledged
                 and not self._stopping and not self._finishing and not self._pairing
                 and not self._polling and self._pending_review is None
-                and self.pending_contact is None and not self._retired_handoff_id)
+                and self.pending_contact is None and not self.selecting_all and not self._retired_handoff_id)
 
     def approve(self, checked: bool) -> None:
         self.approval = str(uuid.uuid4()) if checked and self.inspected and not self.needs_inspection and not self.residue and not self.running else None
@@ -103,9 +120,11 @@ class Session:
             self.previous_contact_cursors = []
             self.pending_contact = None
             self.selected_ids.clear()
+            self._clear_select_all()
             self.selection = ()
             self.reviewed = self.saved_acknowledged = False
             self.handoff_id = self.pair_code = ""
+            self._clear_destination()
             self._saved_exit = self._capture_received = False
         self.approval = None
         self._completed = self._stopping = self._failed = False
@@ -135,6 +154,7 @@ class Session:
         self._review_next_cursor = self._review_expected_ack = 0
         self.reviewed = self.saved_acknowledged = False
         self.handoff_id = self.pair_code = ""
+        self._clear_destination()
         self.phase = "selecting"
         self.status = "Reviewing only the selected contacts and matching metadata…"
         return self._next_review_page()
@@ -151,7 +171,7 @@ class Session:
 
     def update_visible_selection(self, ids: list[int]) -> dict | None:
         visible = {item["id"] for item in self.contacts}
-        if (not self.can_select or self.pending_contact is not None or not isinstance(ids, list)
+        if (not self.can_select or self.selecting_all or self.pending_contact is not None or not isinstance(ids, list)
                 or any(type(item) is not int for item in ids) or len(set(ids)) != len(ids)
                 or not set(ids) <= visible):
             raise ProtocolError("Invalid contact-page selection")
@@ -162,7 +182,7 @@ class Session:
         return self.invalidate_selection(clear_selected=False)
 
     def request_contacts(self, query: str, cursor: int = 0) -> dict:
-        if (not self.can_select or self._pending_review is not None or self._pairing
+        if (not self.can_select or self.selecting_all or self._pending_review is not None or self._pairing
                 or not isinstance(query, str) or len(query) > MAX_CONTACT_QUERY_LENGTH
                 or type(cursor) is not int or not 0 <= cursor <= self.total_contacts):
             raise ProtocolError("Invalid contact page request")
@@ -187,6 +207,105 @@ class Session:
         cursor = self.previous_contact_cursors.pop()
         return self.request_contacts(self.contact_query, cursor)
 
+    def select_all_contacts(self) -> dict:
+        if not self.can_select_all:
+            raise ProtocolError("Wait for the current review before selecting all contacts")
+        self.invalidate_selection(clear_selected=False)
+        self.selecting_all = True
+        self.select_all_visited = 0
+        self._select_all_ids = set()
+        self._select_all_cursor = 0
+        self._select_all_scan_id = str(uuid.uuid4())
+        self._select_all_cancel = False
+        self.pending_contact = ("", 0)
+        self.status = f"Checking all {self.total_contacts} contacts before changing the selection…"
+        return self._next_select_all_page()
+
+    def _next_select_all_page(self) -> dict:
+        return {"action": "contacts", "query": "", "cursor": self._select_all_cursor,
+                "scanId": self._select_all_scan_id}
+
+    def cancel_select_all(self) -> None:
+        if self.selecting_all:
+            self._select_all_cancel = True
+            self.status = "Stopping the all-contact check. The previous selection stays unchanged."
+
+    def _clear_select_all(self) -> None:
+        self.selecting_all = False
+        self.select_all_visited = 0
+        self._select_all_ids = set()
+        self._select_all_cursor = 0
+        self._select_all_scan_id = ""
+        self._select_all_cancel = False
+
+    def clear_all_contacts(self) -> dict | None:
+        if not self.can_select or self.selecting_all or self.pending_contact is not None or self._pending_review is not None:
+            raise ProtocolError("Wait for the current contact operation before clearing selection")
+        if not self.selected_ids:
+            return None
+        return self.invalidate_selection()
+
+    def _accept_select_all_page(self, event: dict) -> dict | None:
+        if event.get("scanId") != self._select_all_scan_id or event.get("cursor") != self._select_all_cursor:
+            raise ProtocolError("Contact scan does not match this review")
+        if self._select_all_cancel:
+            self.pending_contact = None
+            self._clear_select_all()
+            self.status = "All-contact check stopped. The previous selection is unchanged; review it again before connecting."
+            return None
+        old_page = (self.contacts, self.total_contacts, self.contact_query, self.contact_cursor,
+                    self.next_contact_cursor, self.pending_contact)
+        try:
+            self._accept_contact_page(event, first=False)
+            page = self.contacts
+            next_cursor = self.next_contact_cursor
+            expected_size = min(CONTACT_PAGE_SIZE, self.total_contacts - self._select_all_cursor)
+            if (len(page) != expected_size or
+                    next_cursor != (self._select_all_cursor + expected_size if
+                                    self._select_all_cursor + expected_size < self.total_contacts else None)):
+                raise ProtocolError("Incomplete all-contact page")
+            page_ids = {item["id"] for item in page}
+            if page_ids & self._select_all_ids:
+                raise ProtocolError("Duplicate contact across pages")
+        finally:
+            (self.contacts, self.total_contacts, self.contact_query, self.contact_cursor,
+             self.next_contact_cursor, self.pending_contact) = old_page
+        self._select_all_ids.update(page_ids)
+        self.select_all_visited += len(page)
+        if next_cursor is not None:
+            self._select_all_cursor = next_cursor
+            self.pending_contact = ("", next_cursor)
+            self.status = f"Checked {self.select_all_visited} of {self.total_contacts} contacts…"
+            return self._next_select_all_page()
+        if self.select_all_visited != self.total_contacts or len(self._select_all_ids) != self.total_contacts:
+            raise ProtocolError("All-contact coverage is incomplete")
+        self.selected_ids = self._select_all_ids
+        selected = len(self.selected_ids)
+        self.pending_contact = None
+        self._clear_select_all()
+        self.status = f"All {selected} contacts selected across the complete review. Review before connecting."
+        return None
+
+    def _clear_destination(self) -> None:
+        self.destination_intent_id = ""
+        self.destination_email = ""
+        self.destination_course = ""
+        self.destination_requested_approval = None
+        self.destination_approved = False
+
+    @property
+    def can_decide_destination(self) -> bool:
+        return (self.can_select and self.reviewed and self.handoff_id != ""
+                and self.destination_intent_id != "" and self.destination_requested_approval is None
+                and not self.destination_approved and set(self.selection) == self.selected_ids)
+
+    def decide_destination(self, approved: bool) -> dict:
+        if type(approved) is not bool or not self.can_decide_destination:
+            raise ProtocolError("Account destination approval is unavailable")
+        self.destination_requested_approval = approved
+        return {"action": "destination-decision", "handoffId": self.handoff_id,
+                "intentId": self.destination_intent_id, "approved": approved}
+
     def invalidate_selection(self, *, clear_selected: bool = True) -> dict | None:
         if not self.can_select:
             return None
@@ -205,6 +324,7 @@ class Session:
         self._review_next_cursor = self._review_expected_ack = 0
         self.reviewed = self.saved_acknowledged = False
         self.handoff_id = self.pair_code = ""
+        self._clear_destination()
         self._polling = False
         self.phase = "selecting"
         self.status = "Selection changed. Pending responses cannot approve it; review the current selection again."
@@ -216,6 +336,7 @@ class Session:
         self._pairing = True
         self._pairing_invalidated = False
         self.handoff_id = self.pair_code = ""
+        self._clear_destination()
         self.saved_acknowledged = False
         self.status = "Preparing an exact-origin, five-minute initial browser pairing…"
         return {"action": "pair"}
@@ -248,6 +369,8 @@ class Session:
         self._stopping = True
         self.approval = None
         self.handoff_id = self.pair_code = ""
+        self._clear_destination()
+        self._clear_select_all()
         self.inspected = False
         self.needs_inspection = True
         self.phase = "cancelling"
@@ -287,12 +410,13 @@ class Session:
         seen: set[int] = set()
         for item in contacts:
             if (not isinstance(item, dict) or type(item.get("id")) is not int
-                    or item["id"] in seen or not isinstance(item.get("name"), str)):
+                    or item["id"] < 0 or item["id"] in seen
+                    or not isinstance(item.get("name"), str) or len(item["name"]) > 240):
                 raise ProtocolError("Invalid contact preview")
-            count(item.get("phoneCount"))
+            phone_count = count(item.get("phoneCount"))
             ends = item.get("phoneEnds")
-            if (not isinstance(ends, list) or len(ends) > item["phoneCount"]
-                    or any(not isinstance(end, str) or not re.fullmatch(r"[0-9]{1,4}", end)
+            if (phone_count > 20 or not isinstance(ends, list) or len(ends) != phone_count
+                    or any(not isinstance(end, str) or not re.fullmatch(r"[0-9]{4}", end)
                            for end in ends)):
                 raise ProtocolError("Invalid contact preview")
             seen.add(item["id"])
@@ -344,6 +468,12 @@ class Session:
         elif kind == "contacts":
             if self.mode != "connect" or not self._capture_received:
                 raise ProtocolError("Unexpected contact page")
+            if event.get("scanId") is not None:
+                if not self.selecting_all:
+                    return None
+                return self._accept_select_all_page(event)
+            if self.selecting_all:
+                raise ProtocolError("Ordinary contact page arrived during all-contact check")
             # A later search may have superseded an in-flight response; never
             # let it move the visible cursor or alter reviewed selection.
             if self.pending_contact != (event.get("query"), event.get("cursor")):
@@ -394,7 +524,47 @@ class Session:
             if not self.reviewed:
                 raise ProtocolError("Pairing does not match reviewed selection")
             self.handoff_id, self.pair_code = binding, code
-            self.status = "Enter this one-use code on the approved website. Received is not saved."
+            self.status = "Use Connect in your signed-in account. The temporary code remains a manual recovery option; received is not saved."
+        elif kind == "destination":
+            if (event.get("handoffId") != self.handoff_id or not self.handoff_id
+                    or not self.reviewed or set(self.selection) != self.selected_ids):
+                raise ProtocolError("Account destination does not match this reviewed handoff")
+            intent_id = event.get("intentId")
+            try:
+                valid_id = isinstance(intent_id, str) and str(uuid.UUID(intent_id)) == intent_id
+            except (ValueError, AttributeError):
+                valid_id = False
+            if not valid_id:
+                raise ProtocolError("Invalid account destination intent")
+            if event.get("state") == "pending":
+                email, course = event.get("email"), event.get("course")
+                if (not isinstance(email, str) or not 0 < len(email) <= 254 or "@" not in email
+                        or not isinstance(course, str) or not 0 < len(course) <= 160
+                        or any(ord(char) < 32 for char in email + course)
+                        or self.destination_intent_id not in ("", intent_id)
+                        or self.destination_intent_id == intent_id and
+                        (self.destination_email != email or self.destination_course != course)):
+                    raise ProtocolError("Invalid server-confirmed account destination")
+                self.destination_intent_id = intent_id
+                self.destination_email = email
+                self.destination_course = course
+                if self.destination_requested_approval is None:
+                    self.status = "Confirm the server-verified signed-in destination in this companion. Connecting does not save sources."
+            elif event.get("state") in {"approved", "denied"}:
+                if (intent_id != self.destination_intent_id or self.destination_requested_approval is None
+                        or (event["state"] == "approved") != self.destination_requested_approval):
+                    raise ProtocolError("Account destination decision does not match")
+                if event["state"] == "approved":
+                    self.destination_approved = True
+                    self.status = "Destination approved here. Waiting for the account browser; each source still requires Save approval."
+                else:
+                    self._clear_destination()
+                    self.handoff_id = self.pair_code = ""
+                    self.reviewed = False
+                    self.status = "Destination denied. This pairing was revoked; review and create a new connection if wanted."
+                    return {"action": "revoke"}
+            else:
+                raise ProtocolError("Invalid account destination state")
         elif kind == "handoff":
             state = event.get("state")
             if not isinstance(state, str) or state not in {"saved", "saved_pending_browser_receipt", "received", "expired", "waiting"}:
@@ -414,6 +584,7 @@ class Session:
                 self.status = "Account parts are saved; waiting for the browser's verified final receipt. Keep this review open."
             elif state == "expired":
                 self.handoff_id = self.pair_code = ""
+                self._clear_destination()
                 self.status = "Pairing expired. Your local review remains; create a fresh pairing."
         elif kind == "residue":
             items = event.get("sessions")

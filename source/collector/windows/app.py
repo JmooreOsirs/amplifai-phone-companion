@@ -40,6 +40,7 @@ class PhoneWindow:
         self.pair_code = tk.StringVar(value="No browser pairing has been created.")
         self.contact_query = tk.StringVar(value="")
         self.contact_page = tk.StringVar(value="No contacts loaded.")
+        self.destination_status = tk.StringVar(value="Connect from your signed-in account after reviewing contacts.")
         self._rendering_contacts = False
         self.window.title(WINDOW_TITLE)
         self.window.geometry("920x800")
@@ -129,6 +130,14 @@ class PhoneWindow:
         self.previous_button.pack(side="left", padx=(0, 8))
         self.next_button = ttk.Button(paging, text="Next", command=self.next_contacts)
         self.next_button.pack(side="left")
+        selection_actions = ttk.Frame(outer)
+        selection_actions.pack(fill="x", pady=(0, 8))
+        self.select_all_button = ttk.Button(selection_actions, text="Select all contacts", command=self.select_all_contacts)
+        self.select_all_button.pack(side="left", padx=(0, 8))
+        self.cancel_select_all_button = ttk.Button(selection_actions, text="Stop check", command=self.cancel_select_all)
+        self.cancel_select_all_button.pack(side="left", padx=(0, 8))
+        self.clear_all_button = ttk.Button(selection_actions, text="Clear all", command=self.clear_all_contacts)
+        self.clear_all_button.pack(side="left")
         ttk.Label(outer, textvariable=self.contact_page).pack(anchor="w", pady=(0, 8))
         contact_frame = ttk.Frame(outer)
         contact_frame.pack(fill="both", expand=True)
@@ -140,9 +149,13 @@ class PhoneWindow:
         self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
         self.review_button = ttk.Button(outer, text="Review selected metadata", command=self.review)
         self.review_button.pack(anchor="w", pady=(8, 8))
+        self.label(outer, "After reviewing the exact selection, connect from your signed-in website account. Confirm the account and course here before preview transfer. Connect does not save; each source needs separate Save approval in the account.")
+        ttk.Label(outer, textvariable=self.destination_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
         ttk.Label(outer, textvariable=self.pair_code, font=("Arial", 18, "bold"), foreground=LIME).pack(anchor="w")
-        self.pair_button = ttk.Button(outer, text="Create one-time browser pairing", command=self.pair)
+        self.pair_button = ttk.Button(outer, text="Connect signed-in account", command=self.pair)
         self.pair_button.pack(anchor="w", pady=(8, 8))
+        self.copy_code_button = ttk.Button(outer, text="Copy temporary code for manual recovery", command=self.copy_pair_code)
+        self.copy_code_button.pack(anchor="w", pady=(0, 8))
         ttk.Button(outer, text="Open approved account browser", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/phone/account")).pack(anchor="w", pady=(0, 8))
         recovery = ttk.Frame(outer)
         recovery.pack(fill="x")
@@ -268,6 +281,30 @@ class PhoneWindow:
     def previous_contacts(self) -> None:
         self._page(self.state.previous_contacts)
 
+    def select_all_contacts(self) -> None:
+        try:
+            self.send(self.state.select_all_contacts())
+        except ProtocolError:
+            self.state.status = "Wait for the current page or review before checking all contacts."
+        self.refresh()
+
+    def cancel_select_all(self) -> None:
+        self.state.cancel_select_all()
+        self.refresh()
+
+    def clear_all_contacts(self) -> None:
+        try:
+            self.send(self.state.clear_all_contacts())
+        except ProtocolError:
+            self.state.status = "Wait for the current contact operation before clearing selection."
+        self.render_contacts()
+        self.refresh()
+
+    def copy_pair_code(self) -> None:
+        if self.state.pair_code:
+            self.window.clipboard_clear()
+            self.window.clipboard_append(self.state.pair_code)
+
     def review(self) -> None:
         try:
             self.send(self.state.review(sorted(self.state.selected_ids)))
@@ -277,7 +314,7 @@ class PhoneWindow:
 
     def pair(self) -> None:
         replacing = " This replaces the current browser pairing." if self.state.handoff_id else ""
-        if messagebox.askyesno("Share selected context?", "Create an exact-origin pairing for " + WEBSITE_ORIGIN + "? Only selected metadata is shared. Browser receipt is not account saving. Account saving requires separate verified permission there." + replacing):
+        if messagebox.askyesno("Connect the signed-in account?", "Create an exact-origin local pairing for " + WEBSITE_ORIGIN + "? Choose Connect on the signed-in account page, then confirm its server-verified destination here. Only the reviewed preview transfers. Each source requires separate account Save approval." + replacing):
             try:
                 self.send(self.state.pair())
             except ProtocolError:
@@ -324,17 +361,20 @@ class PhoneWindow:
         self.connect.configure(state="normal" if state.can_connect else "disabled")
         self.agreement.configure(state="disabled" if state.running else "normal")
         self.decline_button.configure(state="disabled" if state.running else "normal")
-        self.contacts.configure(state="normal" if state.can_select else "disabled")
+        self.contacts.configure(state="normal" if state.can_select and not state.selecting_all else "disabled")
         self.review_button.configure(state="normal" if state.can_review and state.selected_ids else "disabled")
-        self.search_entry.configure(state="normal" if state.can_select and state.pending_contact is None else "disabled")
-        self.search_button.configure(state="normal" if state.can_select and state.pending_contact is None else "disabled")
-        self.previous_button.configure(state="normal" if state.can_select and state.pending_contact is None and state.previous_contact_cursors else "disabled")
-        self.next_button.configure(state="normal" if state.can_select and state.pending_contact is None and state.next_contact_cursor is not None else "disabled")
+        self.search_entry.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None else "disabled")
+        self.search_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None else "disabled")
+        self.previous_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None and state.previous_contact_cursors else "disabled")
+        self.next_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None and state.next_contact_cursor is not None else "disabled")
+        self.select_all_button.configure(state="normal" if state.can_select_all else "disabled")
+        self.cancel_select_all_button.configure(state="normal" if state.selecting_all and not state._select_all_cancel else "disabled")
+        self.clear_all_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None and state.selected_ids else "disabled")
         if state._capture_received:
-            self.contact_page.set(
+            self.contact_page.set((f"Checking {state.select_all_visited} of {state.total_contacts} contacts. "
+                                   f"Selection remains {len(state.selected_ids)} until complete.") if state.selecting_all else
                 f"{len(state.contacts)} on this page · {state.total_contacts} total contacts · "
-                f"{len(state.selected_ids)} selected across pages"
-            )
+                f"{len(state.selected_ids)} selected across pages")
         self.pair_button.configure(state="normal" if state.can_pair else "disabled")
         self.password_button.configure(state="normal" if state.phase == "password_required" else "disabled")
         self.password.configure(state="normal" if state.phase == "password_required" else "disabled")
@@ -343,7 +383,10 @@ class PhoneWindow:
         self.stop_button.configure(state="normal" if state.running and state.phase != "cancelling" else "disabled")
         self.force_button.configure(state="normal" if state.running and state.phase == "cancelling" else "disabled")
         self.progress.configure(value=state.progress or 0)
-        self.pair_code.set("One-use code: " + state.pair_code if state.pair_code else "No browser pairing has been created.")
+        self.pair_code.set("Temporary recovery code: " + state.pair_code if state.pair_code else "No browser pairing has been created.")
+        self.copy_code_button.configure(state="normal" if state.pair_code else "disabled")
+        self.destination_status.set(("Server-confirmed destination: " + state.destination_email + " · " + state.destination_course)
+                                    if state.destination_intent_id else "Connect from your signed-in account after reviewing contacts.")
 
     def pump(self) -> None:
         try:
@@ -359,8 +402,15 @@ class PhoneWindow:
                 else:
                     command = self.state.handle(event)
                     self.send(command)
-                    if event.get("kind") in {"capture", "contacts"} and self.state._capture_received:
+                    if event.get("kind") in {"capture", "contacts"} and self.state._capture_received and not self.state.selecting_all:
                         self.render_contacts()
+                    if event.get("kind") == "destination" and self.state.can_decide_destination:
+                        approved = messagebox.askyesno(
+                            "Confirm signed-in account destination",
+                            f"Account: {self.state.destination_email}\nCourse: {self.state.destination_course}\n\n"
+                            "These details came from AMPLIFai's authenticated server. Connect sends the reviewed preview only. Each source still needs separate Save approval in the account. Connect to this account?",
+                        )
+                        self.send(self.state.decide_destination(approved))
                     if event.get("kind") == "review" and self.state.reviewed:
                         selected, calls, messages = self.state.review_counts
                         self.state.status += f" {selected} contacts · {calls} matching calls · {messages} matching messages. Unavailable: {', '.join(self.state.missing) or 'none reported; coverage remains partial'}."

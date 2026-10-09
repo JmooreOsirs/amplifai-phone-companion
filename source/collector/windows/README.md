@@ -1,6 +1,6 @@
 # Windows companion source candidate
 
-This wrapper presents the rc12-compatible iPhone collector on Windows. It is **not a signed installer or supported download**. Mac rc12 and Android rc8 remain the published packages. The Windows candidate has no Apple driver, ordinary non-admin installation, signed binary, physical-phone, or authenticated hosted-save proof.
+This wrapper presents the rc12-compatible iPhone collector on Windows. It is **not a signed installer or supported download**. Mac rc13 and Android rc8 remain the published packages. The Windows candidate has no Apple driver, ordinary non-admin installation, signed binary, physical-phone, or authenticated hosted-save proof.
 
 ## Local collection and review
 
@@ -10,7 +10,7 @@ The helper uses the shared disk-backed sanitized record store. The window keeps 
 
 The browser's received state and saved parts awaiting final browser receipt cannot finish the native session. Only the matching bridge's verified saved state permits finish; the helper must then exit successfully and an empty marked-residue inspection must complete. A fresh pairing replaces the old bridge. The five-minute deadline applies to initial admission; an authorized active transfer uses the shared v2 keepalive and durable ACK contract.
 
-This Tk window remains a **manual-code, 200-contact-page** interface. It does not implement Mac rc12's all-page Select all/Clear all or native confirmed-account code-free approval. The current website detects that this helper lacks `/v3/discover` before creating an account connection intent or clearing an existing review, then offers the temporary-code path. The rc12-derived helper includes Contacts/Messages size validation and typed optional-source evidence, without implying that the Windows GUI exposes every Mac feature.
+This source candidate adds all-page Select all/Clear all and native approval of the server-confirmed account destination before code-free Connect. The helper now supports the fixed-origin `/v3/discover` contract; the temporary one-use code remains an explicit recovery path. The website still blocks Windows setup/download, so these source checks do not establish a customer installer or physical account Save.
 
 Stop closes the helper's input cooperatively. It cannot promise interruption of synchronous capture. A separately confirmed Force stop targets only the owned helper, bypasses cleanup, and requires a new residue inspection. Failed cleanup is reported, never counted as completion or silently deleted.
 

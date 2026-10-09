@@ -63,6 +63,61 @@ def source_window():
 
 
 class GuiGuardsTests(unittest.TestCase):
+    def test_all_page_controls_expose_exact_progress_without_early_selection(self):
+        window = source_window()
+        for name in ("approve", "connect", "agreement", "decline_button", "contacts", "review_button",
+                     "search_entry", "search_button", "previous_button", "next_button", "select_all_button",
+                     "cancel_select_all_button", "clear_all_button", "pair_button", "password_button",
+                     "inspect", "clear", "stop_button", "force_button", "progress", "copy_code_button",
+                     "status", "pair_code", "destination_status"):
+            setattr(window, name, Mock())
+        window.checked = Mock()
+        window.checked.get.return_value = False
+        window.state.handle({"kind": "capture", "contacts": [
+            {"id": index + 1, "name": f"Person {index + 1}",
+             "phoneCount": 1, "phoneEnds": ["0123"]} for index in range(200)],
+            "query": "", "cursor": 0, "nextCursor": 200, "totalContacts": 201,
+            "availableCalls": 0, "availableMessages": 0, "missing": []})
+        window.state.update_visible_selection([1])
+        window.state.select_all_contacts()
+        type(window).refresh(window)
+        self.assertEqual(window.state.selected_ids, {1})
+        self.assertIn("Selection remains 1", window.contact_page.set.call_args.args[0])
+        window.select_all_button.configure.assert_called_with(state="disabled")
+        window.cancel_select_all_button.configure.assert_called_with(state="normal")
+        window.review_button.configure.assert_called_with(state="disabled")
+
+    def test_account_destination_dialog_uses_helper_confirmed_values_and_does_not_save(self):
+        window = source_window()
+        window.state.handle({"kind": "capture", "contacts": [
+            {"id": 1, "name": "Avery Lindqvist", "phoneCount": 1, "phoneEnds": ["0123"]}],
+            "query": "", "cursor": 0, "nextCursor": None, "totalContacts": 1,
+            "availableCalls": 0, "availableMessages": 0, "missing": []})
+        window.state.update_visible_selection([1])
+        command = window.state.review([1])
+        window.state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+        window.state.handle({"kind": "review", "reviewId": command["reviewId"],
+                             "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                             "selected_contacts": 1, "matched_calls": 0,
+                             "matched_messages": 0, "missing_sources": []})
+        window.state.pair()
+        handoff = "11111111-1111-4111-8111-111111111111"
+        intent = "22222222-2222-4222-8222-222222222222"
+        window.state.handle({"kind": "pairing", "pairCode": "1234567890", "port": 48751,
+                             "expiresInSeconds": 300, "handoffId": handoff,
+                             "payloadSha256": "a" * 64})
+        dialog = window.pump.__globals__["messagebox"]
+        dialog.askyesno.return_value = True
+        window.events.put({"kind": "destination", "state": "pending", "handoffId": handoff,
+                           "intentId": intent, "email": "confirmed@example.test", "course": "Course"})
+        window.pump()
+        self.assertIn("confirmed@example.test", dialog.askyesno.call_args.args[1])
+        window.helper.write.assert_any_call({"action": "destination-decision", "handoffId": handoff,
+                                             "intentId": intent, "approved": True})
+        self.assertFalse(window.state.saved_acknowledged)
+        window.copy_pair_code()
+        window.window.clipboard_append.assert_called_once_with("1234567890")
+
     def test_window_ready_only_after_clean_completed_inspection(self):
         window = source_window()
         title = window.close.__globals__["window_title"]

@@ -55,6 +55,180 @@ def paired():
 
 
 class SessionTests(unittest.TestCase):
+    def test_select_all_commits_only_after_exact_1205_contact_scan_and_review_ack(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+        total = 1_205
+
+        def page(cursor, scan_id=None):
+            end = min(cursor + 200, total)
+            result = {"contacts": [{"id": index + 1, "name": f"Person {index + 1}",
+                                    "phoneCount": 1, "phoneEnds": ["0123"]}
+                                   for index in range(cursor, end)],
+                      "query": "", "cursor": cursor, "nextCursor": end if end < total else None,
+                      "totalContacts": total}
+            if scan_id is not None:
+                result["scanId"] = scan_id
+            return result
+
+        state.handle({"kind": "capture", **page(0), "availableCalls": 0,
+                      "availableMessages": 0, "missing": []})
+        state.update_visible_selection([1])
+        command = state.select_all_contacts()
+        self.assertEqual(state.selected_ids, {1})
+        for cursor in range(0, total, 200):
+            self.assertEqual(command["cursor"], cursor)
+            self.assertEqual(command["query"], "")
+            command = state.handle({"kind": "contacts", **page(cursor, command["scanId"])})
+            self.assertLessEqual(len(state.contacts), 200)
+            if command is not None:
+                self.assertEqual(state.selected_ids, {1})
+        self.assertIsNone(command)
+        self.assertEqual(len(state.selected_ids), total)
+        self.assertEqual(state.total_contacts, total)
+        self.assertEqual(len(state.contacts), 200)
+        command = state.review(sorted(state.selected_ids))
+        self.assertEqual(len(command["ids"]), 1_000)
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 999})
+        self.assertFalse(state.can_pair)
+        second = state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1_000})
+        self.assertEqual(len(second["ids"]), 205)
+        state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": total})
+        state.handle({"kind": "review", "reviewId": command["reviewId"],
+                      "selection_sha256": hashlib.sha256("".join(f"{item}\n" for item in range(1, total + 1)).encode()).hexdigest(),
+                      "selected_contacts": total, "matched_calls": 0, "matched_messages": 0,
+                      "missing_sources": []})
+        self.assertTrue(state.can_pair)
+
+    def test_select_all_cancel_and_partial_or_duplicate_page_never_change_selection(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+
+        def page(cursor, scan_id=None):
+            result = {"contacts": [{"id": index + 1, "name": f"Person {index + 1}",
+                                    "phoneCount": 1, "phoneEnds": ["0123"]}
+                                   for index in range(cursor, cursor + 200)],
+                      "query": "", "cursor": cursor, "nextCursor": cursor + 200,
+                      "totalContacts": 401}
+            if scan_id:
+                result["scanId"] = scan_id
+            return result
+
+        state.handle({"kind": "capture", **page(0), "availableCalls": 0,
+                      "availableMessages": 0, "missing": []})
+        state.update_visible_selection([1])
+        command = state.select_all_contacts()
+        self.assertEqual(state.handle({"kind": "contacts", **page(0, command["scanId"])})["cursor"], 200)
+        state.cancel_select_all()
+        state.handle({"kind": "contacts", **page(200, command["scanId"])})
+        self.assertEqual(state.selected_ids, {1})
+        self.assertFalse(state.selecting_all)
+        self.assertFalse(state.reviewed)
+        command = state.select_all_contacts()
+        wrong = page(0, command["scanId"])
+        wrong["contacts"] = wrong["contacts"][:-1]
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "contacts", **wrong})
+        self.assertEqual(state.selected_ids, {1})
+        state.cooperative_failure()
+        self.assertFalse(state.can_pair)
+
+    def test_select_all_rejects_stale_scan_and_cross_page_duplicate(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+
+        def page(cursor, scan_id):
+            end = min(cursor + 200, 401)
+            return {"kind": "contacts", "contacts": [
+                {"id": index + 1, "name": f"Person {index + 1}",
+                 "phoneCount": 1, "phoneEnds": ["0123"]} for index in range(cursor, end)],
+                "query": "", "cursor": cursor, "nextCursor": end if end < 401 else None,
+                "totalContacts": 401, "scanId": scan_id}
+
+        initial = page(0, "")
+        initial.pop("scanId")
+        initial["kind"] = "capture"
+        initial.update({"availableCalls": 0, "availableMessages": 0, "missing": []})
+        state.handle(initial)
+        command = state.select_all_contacts()
+        with self.assertRaises(ProtocolError):
+            state.handle(page(0, "22222222-2222-4222-8222-222222222222"))
+        self.assertEqual(state.selected_ids, set())
+        next_command = state.handle(page(0, command["scanId"]))
+        duplicate = page(200, next_command["scanId"])
+        duplicate["contacts"][0]["id"] = 1
+        with self.assertRaises(ProtocolError):
+            state.handle(duplicate)
+        self.assertEqual(state.selected_ids, set())
+
+    def test_clear_all_revokes_review_and_requires_fresh_exact_selection(self):
+        state = reviewed()
+        self.assertTrue(state.reviewed)
+        self.assertIsNone(state.clear_all_contacts())
+        self.assertEqual(state.selected_ids, set())
+        self.assertFalse(state.reviewed)
+        self.assertFalse(state.can_pair)
+
+    def test_server_confirmed_destination_requires_exact_handoff_decision_and_still_not_saved(self):
+        state = paired()
+        intent = "22222222-2222-4222-8222-222222222222"
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "destination", "state": "pending", "handoffId": "foreign",
+                          "intentId": intent, "email": "account@example.test", "course": "Course"})
+        state.handle({"kind": "destination", "state": "pending", "handoffId": BINDING,
+                      "intentId": intent, "email": "account@example.test", "course": "Course"})
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "destination", "state": "pending", "handoffId": BINDING,
+                          "intentId": intent, "email": "changed@example.test", "course": "Course"})
+        self.assertEqual(state.decide_destination(True), {"action": "destination-decision",
+                         "handoffId": BINDING, "intentId": intent, "approved": True})
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "destination", "state": "denied", "handoffId": BINDING,
+                          "intentId": intent})
+        state.handle({"kind": "destination", "state": "approved", "handoffId": BINDING,
+                      "intentId": intent})
+        self.assertTrue(state.destination_approved)
+        self.assertFalse(state.saved_acknowledged)
+        with self.assertRaises(ProtocolError):
+            state.finish()
+
+    def test_destination_rejects_invalid_labels_and_replayed_decisions(self):
+        state = paired()
+        intent = "22222222-2222-4222-8222-222222222222"
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "destination", "state": "pending", "handoffId": BINDING,
+                          "intentId": intent, "email": "not-an-email", "course": "Course"})
+        state.handle({"kind": "destination", "state": "pending", "handoffId": BINDING,
+                      "intentId": intent, "email": "account@example.test", "course": "Course"})
+        state.decide_destination(True)
+        with self.assertRaises(ProtocolError):
+            state.decide_destination(True)
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "destination", "state": "approved", "handoffId": BINDING,
+                          "intentId": "33333333-3333-4333-8333-333333333333"})
+
+    def test_denied_or_expired_destination_preserves_manual_recovery_guard(self):
+        state = paired()
+        self.assertEqual(state.pair_code, "1234567890")
+        intent = "22222222-2222-4222-8222-222222222222"
+        state.handle({"kind": "destination", "state": "pending", "handoffId": BINDING,
+                      "intentId": intent, "email": "account@example.test", "course": "Course"})
+        state.decide_destination(False)
+        self.assertEqual(state.handle({"kind": "destination", "state": "denied",
+                         "handoffId": BINDING, "intentId": intent}), {"action": "revoke"})
+        self.assertEqual(state.pair_code, "")
+        self.assertFalse(state.saved_acknowledged)
+        state = paired()
+        state.poll()
+        state.handle({"kind": "handoff", "state": "expired", "handoffId": BINDING})
+        self.assertEqual(state.handoff_id, "")
+        self.assertEqual(state.pair_code, "")
+        self.assertFalse(state.saved_acknowledged)
+
     def test_unchecked_and_stale_approval_cannot_launch_collection(self):
         state = inspected()
         self.assertFalse(state.can_connect)

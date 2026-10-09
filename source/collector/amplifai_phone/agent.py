@@ -249,6 +249,8 @@ def run_connect(
                 "availableMessages": len(capture.messages.records),
                 "since": capture.since,
                 "missing": capture.missing_sources,
+                "backupEncrypted": capture.backup_encrypted,
+                "unavailableReasons": dict(capture.unavailable_reasons),
             },
         )
         while True:
@@ -264,12 +266,29 @@ def run_connect(
                 _emit(sink, {"kind": "state", "state": "pairing_revoked"})
                 continue
             if action == "contacts":
+                scan_id = command.get("scanId")
+                if scan_id is not None and (set(command) != {"action", "query", "cursor", "scanId"}
+                                            or not isinstance(scan_id, str)
+                                            or str(UUID(scan_id)) != scan_id):
+                    raise ValueError("Invalid contact scan")
                 page = _contact_page(
                     capture.contacts.records,
                     command.get("query"),
                     command.get("cursor"),
                 )
-                _emit(sink, {"kind": "contacts", **page})
+                _emit(sink, {"kind": "contacts", **page,
+                             **({"scanId": scan_id} if scan_id is not None else {})})
+                continue
+            if action == "destination-decision":
+                if (set(command) != {"action", "handoffId", "intentId", "approved"}
+                        or bridge is None or command.get("handoffId") != bridge.handoff_id
+                        or not isinstance(command.get("intentId"), str)
+                        or not isinstance(command.get("approved"), bool)
+                        or not bridge.approve_destination(command["intentId"], command["approved"])):
+                    _emit(sink, {"kind": "error", "code": "handoff_unconfirmed"})
+                    continue
+                _emit(sink, {"kind": "destination", "state": "approved" if command["approved"] else "denied",
+                             "handoffId": bridge.handoff_id, "intentId": command["intentId"]})
                 continue
             if action in {"handoff-status", "finish"}:
                 if (
@@ -290,6 +309,10 @@ def run_connect(
                     sink,
                     {"kind": "handoff", "state": state, "handoffId": bridge.handoff_id},
                 )
+                destination = bridge.pending_destination()
+                if destination is not None:
+                    _emit(sink, {"kind": "destination", "state": "pending", "handoffId": bridge.handoff_id,
+                                 **destination})
                 continue
             if action == "pair":
                 if selected_ids is None:

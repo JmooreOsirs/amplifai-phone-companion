@@ -7,6 +7,7 @@ The owner must first select contacts and explicitly approve a browser handoff.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import hmac
 import json
 import re
@@ -30,6 +31,37 @@ PAGE_BYTES = 128 * 1024
 PAIR_SECONDS = 5 * 60
 TRANSFER_SECONDS = 2 * 60 * 60
 MAX_PAIR_ATTEMPTS = 5
+CONNECT_API_HOST = "amplifai-database-engine.vercel.app"
+CONNECT_API_PATH = "/api/v1/phone-connect-intents/"
+CONNECT_CAPABILITY = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+CONNECT_ID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z")
+
+
+def verify_account_intent(action: str, command: dict[str, str]) -> dict[str, object] | None:
+    """Fixed TLS Production authority; no browser cookie, account ID or arbitrary URL."""
+    if action not in ("claim", "consume"):
+        return None
+    body = json.dumps(command, separators=(",", ":")).encode("ascii")
+    if len(body) > 1024:
+        return None
+    connection = http.client.HTTPSConnection(CONNECT_API_HOST, timeout=5)
+    try:
+        connection.request("POST", CONNECT_API_PATH + action, body,
+                           {"Content-Type": "application/json", "Accept": "application/json"})
+        response = connection.getresponse()
+        if response.status != 200 or not response.getheader("Content-Type", "").startswith("application/json"):
+            return None
+        if int(response.getheader("Content-Length", "0")) > 2048:
+            return None
+        encoded = response.read(2049)
+        if len(encoded) > 2048:
+            return None
+        value = json.loads(encoded)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    finally:
+        connection.close()
 
 
 class BridgeError(ValueError):
@@ -65,6 +97,8 @@ def selected_metadata(capture: IPhoneCapture, ids: set[int]) -> bytes:
         "since": capture.since,
         "collectedAt": capture.collected_at,
         "missingSources": list(capture.missing_sources),
+        "backupEncrypted": capture.backup_encrypted,
+        "unavailableReasons": dict(capture.unavailable_reasons),
         "sourceStats": {
             kind: {"rowsSeen": source.rows_seen, "rowsIncluded": included[kind]}
             for kind, source in sources.items()
@@ -103,6 +137,7 @@ class BridgeServer:
         port: int = BRIDGE_PORT,
         origin: str = PILOT_ORIGIN,
         now: Any = time.monotonic,
+        account_proof: Any = verify_account_intent,
     ):
         self.handoff_id = str(uuid4())
         if isinstance(ids, SelectionSnapshot) and (
@@ -118,12 +153,17 @@ class BridgeServer:
         self.browser_confirmed_saved = False
         self.origin = origin
         self.now = now
+        self.account_proof = account_proof
         self.expires_at = now() + PAIR_SECONDS
         self.transfer_expires_at: float | None = None
         self.code = f"{secrets.randbelow(10**10):010d}"
         self.token: str | None = None
         self.attempts = 0
         self.used = False
+        self.connecting = False
+        self.releasing = False
+        self.destination: dict[str, str] | None = None
+        self.destination_state = "waiting"
         self.next_cursor = 0
         self.source_cursors = {"contacts": 0, "calls": 0, "messages": 0}
         self.source_dispositions = {
@@ -166,10 +206,10 @@ class BridgeServer:
             def do_OPTIONS(self) -> None:
                 metadata_path = re.fullmatch(r"/v1/metadata(?:\?cursor=(0|[1-9][0-9]{0,3}))?", self.path)
                 source_path = re.fullmatch(r"/v2/source/(contacts|calls|messages)\?cursor=(0|[1-9][0-9]{0,9})", self.path)
-                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete", "/v1/acknowledge-save", "/v1/confirm-ack-received", "/v2/decline", "/v2/keepalive") and metadata_path is None and source_path is None):
+                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete", "/v1/acknowledge-save", "/v1/confirm-ack-received", "/v2/decline", "/v2/keepalive", "/v3/discover", "/v3/status", "/v3/connect", "/v3/release") and metadata_path is None and source_path is None):
                     self._reply(403)
                     return
-                expected_method = "GET" if metadata_path is not None or source_path is not None else "POST"
+                expected_method = "GET" if metadata_path is not None or source_path is not None or self.path in ("/v3/discover", "/v3/status") else "POST"
                 if self.headers.get_all("Access-Control-Request-Method") != [
                     expected_method
                 ]:
@@ -190,6 +230,12 @@ class BridgeServer:
             def do_POST(self) -> None:
                 if not self._authorized_origin():
                     self._reply(403)
+                    return
+                if self.path == "/v3/connect":
+                    self._connect_account()
+                    return
+                if self.path == "/v3/release":
+                    self._release_account()
                     return
                 if self.path == "/v1/complete":
                     self._complete()
@@ -246,6 +292,9 @@ class BridgeServer:
                     ):
                         self._reply(410)
                         return
+                    if bridge.destination_state in ("pending", "approved", "released"):
+                        self._reply(409)
+                        return
                     bridge.attempts += 1
                     if bridge.attempts > MAX_PAIR_ATTEMPTS or not hmac.compare_digest(
                         command["code"], bridge.code
@@ -254,20 +303,97 @@ class BridgeServer:
                         return
                     bridge.token = secrets.token_urlsafe(32)
                     bridge.transfer_expires_at = bridge.now() + TRANSFER_SECONDS
-                    response = {
-                            "token": bridge.token,
-                            "handoffId": bridge.handoff_id,
-                            "payloadSha256": bridge.payload_sha256,
-                            "confirmReceiptRequired": True,
-                            "expiresInSeconds": max(
-                                0, int(bridge.expires_at - bridge.now())
-                            ),
-                        }
-                    if bridge.transfer is not None:
-                        response.update({"format": "paged-records-v2", "manifestJson": json.dumps(
-                            bridge.transfer.manifest, ensure_ascii=True, separators=(",", ":")
-                        )})
-                    body = json.dumps(response, separators=(",", ":")).encode()
+                    body = json.dumps(bridge._pair_response(), separators=(",", ":")).encode()
+                self._reply(200, body)
+
+            def _json_command(self, fields: set[str]) -> dict[str, str] | None:
+                if self.headers.get("Transfer-Encoding") or self.headers.get_all("Content-Type") != ["application/json"]:
+                    return None
+                lengths = self.headers.get_all("Content-Length")
+                try:
+                    length = int(lengths[0]) if lengths is not None and len(lengths) == 1 else 0
+                except ValueError:
+                    return None
+                if not 0 < length <= MAX_REQUEST_BYTES:
+                    return None
+                try:
+                    command = json.loads(self.rfile.read(length))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return None
+                return command if isinstance(command, dict) and set(command) == fields and all(
+                    isinstance(value, str) for value in command.values()) else None
+
+            def _connect_account(self) -> None:
+                command = self._json_command({"intentId", "capability", "handoffId", "payloadSha256"})
+                if (command is None or CONNECT_ID.fullmatch(command["intentId"]) is None
+                        or CONNECT_CAPABILITY.fullmatch(command["capability"]) is None):
+                    self._reply(400)
+                    return
+                with bridge.lock:
+                    if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None or bridge.used:
+                        self._reply(410)
+                        return
+                    if (bridge.connecting or bridge.releasing or bridge.destination_state in ("pending", "approved", "released")
+                            or command["handoffId"] != bridge.handoff_id
+                            or command["payloadSha256"] != bridge.payload_sha256):
+                        self._reply(409)
+                        return
+                    bridge.connecting = True
+                try:
+                    result = bridge.account_proof("claim", command)
+                except Exception:
+                    result = None
+                with bridge.lock:
+                    bridge.connecting = False
+                    if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None:
+                        self._reply(410)
+                        return
+                    email = result.get("destinationEmail") if isinstance(result, dict) else None
+                    course = result.get("destinationCourse") if isinstance(result, dict) else None
+                    if (not isinstance(email, str) or len(email) > 254 or "@" not in email or
+                            not isinstance(course, str) or not 0 < len(course) <= 160 or
+                            any(ord(char) < 32 for char in email + course)):
+                        self._reply(409)
+                        return
+                    bridge.destination = {**command, "email": email, "course": course}
+                    bridge.destination_state = "pending"
+                self._reply(200, b'{"pending":true}')
+
+            def _release_account(self) -> None:
+                command = self._json_command({"intentId", "capability", "releaseCode"})
+                if (command is None or CONNECT_ID.fullmatch(command["intentId"]) is None or
+                        CONNECT_CAPABILITY.fullmatch(command["capability"]) is None or
+                        CONNECT_CAPABILITY.fullmatch(command["releaseCode"]) is None):
+                    self._reply(400)
+                    return
+                with bridge.lock:
+                    pending = bridge.destination
+                    if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None:
+                        self._reply(410)
+                        return
+                    if (pending is None or bridge.destination_state != "approved" or bridge.releasing or
+                            pending["intentId"] != command["intentId"] or not hmac.compare_digest(
+                                pending["capability"], command["capability"])):
+                        self._reply(403)
+                        return
+                    bridge.releasing = True
+                    proof = {**command, "handoffId": bridge.handoff_id, "payloadSha256": bridge.payload_sha256}
+                try:
+                    result = bridge.account_proof("consume", proof)
+                except Exception:
+                    result = None
+                with bridge.lock:
+                    bridge.releasing = False
+                    if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None:
+                        self._reply(410)
+                        return
+                    if not isinstance(result, dict) or result.get("consumed") is not True:
+                        self._reply(409)
+                        return
+                    bridge.token = secrets.token_urlsafe(32)
+                    bridge.transfer_expires_at = bridge.now() + TRANSFER_SECONDS
+                    bridge.destination_state = "released"
+                    body = json.dumps(bridge._pair_response(), separators=(",", ":")).encode("ascii")
                 self._reply(200, body)
 
             def _complete(self) -> None:
@@ -436,6 +562,31 @@ class BridgeServer:
                 if not self._authorized_origin():
                     self._reply(403)
                     return
+                if self.path == "/v3/discover":
+                    with bridge.lock:
+                        if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None:
+                            self._reply(410)
+                            return
+                        body = json.dumps({"format": "account-connect-v1", "handoffId": bridge.handoff_id,
+                            "payloadSha256": bridge.payload_sha256,
+                            "expiresInSeconds": max(1, int(bridge.expires_at - bridge.now()))},
+                            separators=(",", ":")).encode("ascii")
+                    self._reply(200, body)
+                    return
+                if self.path == "/v3/status":
+                    authorizations = self.headers.get_all("Authorization")
+                    with bridge.lock:
+                        if bridge.closed or bridge.now() >= bridge.expires_at:
+                            self._reply(410)
+                            return
+                        pending = bridge.destination
+                        if (pending is None or authorizations is None or len(authorizations) != 1 or
+                                not hmac.compare_digest(authorizations[0], "Bearer " + pending["capability"])):
+                            self._reply(403)
+                            return
+                        state = bridge.destination_state
+                    self._reply(200, json.dumps({"state": state}, separators=(",", ":")).encode("ascii"))
+                    return
                 source_match = re.fullmatch(r"/v2/source/(contacts|calls|messages)\?cursor=(0|[1-9][0-9]{0,9})", self.path)
                 if source_match is not None and bridge.transfer is not None:
                     self._source_page(source_match.group(1), int(source_match.group(2)))
@@ -521,6 +672,35 @@ class BridgeServer:
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.timer = threading.Timer(PAIR_SECONDS, self._expire_unclaimed)
         self.timer.daemon = True
+
+    def _pair_response(self) -> dict[str, object]:
+        if self.token is None:
+            raise BridgeError("No authorized browser handoff")
+        response: dict[str, object] = {
+            "token": self.token, "handoffId": self.handoff_id,
+            "payloadSha256": self.payload_sha256, "confirmReceiptRequired": True,
+            "expiresInSeconds": max(1, int(self.expires_at - self.now())),
+        }
+        if self.transfer is not None:
+            response.update({"format": "paged-records-v2", "manifestJson": json.dumps(
+                self.transfer.manifest, ensure_ascii=True, separators=(",", ":"))})
+        return response
+
+    def pending_destination(self) -> dict[str, str] | None:
+        with self.lock:
+            if (self.closed or self.now() >= self.expires_at or self.destination_state != "pending"
+                    or self.destination is None):
+                return None
+            return {"intentId": self.destination["intentId"], "email": self.destination["email"],
+                    "course": self.destination["course"]}
+
+    def approve_destination(self, intent_id: str, approved: bool) -> bool:
+        with self.lock:
+            if (self.closed or self.now() >= self.expires_at or self.destination_state != "pending"
+                    or self.destination is None or self.destination["intentId"] != intent_id):
+                return False
+            self.destination_state = "approved" if approved else "denied"
+            return True
 
     def start(self) -> None:
         self.thread.start()

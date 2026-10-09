@@ -6,10 +6,11 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from amplifai_phone.bridge import BridgeError, BridgeServer, selected_metadata
+from amplifai_phone.bridge import BRIDGE_PORT, PILOT_ORIGIN, BridgeError, BridgeServer, selected_metadata
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import Contact, Interaction, SourceResult
 from amplifai_phone.paged_transfer import EMPTY_CHAIN, PagedTransfer
@@ -59,6 +60,108 @@ def fixture() -> IPhoneCapture:
 
 
 class BridgeTest(unittest.TestCase):
+    def test_account_connection_requires_server_proof_native_approval_and_one_use_release(self) -> None:
+        self.assertEqual(BRIDGE_PORT, 48751)
+        self.assertEqual(PILOT_ORIGIN, "https://amplifai-database-engine.vercel.app")
+        proofs: list[tuple[str, dict[str, str]]] = []
+        def account_proof(action: str, command: dict[str, str]) -> dict[str, object]:
+            proofs.append((action, command))
+            return ({"destinationEmail": "owner@example.test", "destinationCourse": "Synthetic course"}
+                    if action == "claim" else {"consumed": True})
+        bridge = BridgeServer(fixture(), {1}, port=0, account_proof=account_proof)
+        bridge.start()
+        intent = "11111111-1111-4111-8111-111111111111"
+        capability = "A" * 43
+        release = "B" * 43
+        try:
+            status, _, raw = self.request(bridge, "GET", "/v3/discover")
+            self.assertEqual(status, 200)
+            discovery = json.loads(raw)
+            self.assertEqual(set(discovery), {"format", "handoffId", "payloadSha256", "expiresInSeconds"})
+            self.assertNotIn("Synthetic", raw.decode())
+            self.assertEqual(self.request(bridge, "GET", "/v3/discover", origin="https://evil.test")[0], 403)
+            self.assertEqual(self.request(bridge, "GET", "/v3/discover", host="127.0.0.1:48751")[0], 403)
+            self.assertEqual(self.request(bridge, "GET", "/v3/discover",
+                                          origin="http://127.0.0.1:61839")[0], 403)
+            command = {"intentId": intent, "capability": capability,
+                       "handoffId": discovery["handoffId"], "payloadSha256": discovery["payloadSha256"]}
+            self.assertEqual(self.request(bridge, "POST", "/v3/connect",
+                             {**command, "payloadSha256": "0" * 64})[0], 409)
+            self.assertFalse(proofs)
+            self.assertEqual(self.request(bridge, "POST", "/v3/connect", command)[0], 200)
+            self.assertEqual(proofs[0], ("claim", command))
+            self.assertEqual(bridge.pending_destination(), {"intentId": intent, "email": "owner@example.test",
+                                                           "course": "Synthetic course"})
+            self.assertEqual(self.request(bridge, "POST", "/v1/pair", {"code": bridge.code})[0], 409)
+            self.assertEqual(self.request(bridge, "POST", "/v3/release",
+                             {"intentId": intent, "capability": capability, "releaseCode": release})[0], 403)
+            self.assertEqual(len(proofs), 1)
+            self.assertEqual(self.request(bridge, "GET", "/v3/status",
+                             authorization="Bearer " + "X" * 43)[0], 403)
+            self.assertEqual(json.loads(self.request(bridge, "GET", "/v3/status",
+                                         authorization="Bearer " + capability)[2]), {"state": "pending"})
+            self.assertFalse(bridge.approve_destination("22222222-2222-4222-8222-222222222222", True))
+            self.assertTrue(bridge.approve_destination(intent, True))
+            status, _, raw = self.request(bridge, "POST", "/v3/release",
+                                          {"intentId": intent, "capability": capability, "releaseCode": release})
+            self.assertEqual(status, 200)
+            paired = json.loads(raw)
+            self.assertEqual((paired["handoffId"], paired["payloadSha256"]),
+                             (bridge.handoff_id, bridge.payload_sha256))
+            self.assertTrue(paired["confirmReceiptRequired"])
+            self.assertNotIn("owner@example.test", raw.decode())
+            self.assertEqual(proofs[1][0], "consume")
+            self.assertEqual(self.request(bridge, "POST", "/v3/release",
+                             {"intentId": intent, "capability": capability, "releaseCode": release})[0], 410)
+            self.assertEqual(len(proofs), 2)
+        finally:
+            bridge.close()
+
+    def test_denied_account_proof_never_issues_pair_token_and_manual_code_remains_available(self) -> None:
+        bridge = BridgeServer(fixture(), {1}, port=0, account_proof=lambda _action, _command: None)
+        bridge.start()
+        try:
+            command = {"intentId": "11111111-1111-4111-8111-111111111111", "capability": "A" * 43,
+                       "handoffId": bridge.handoff_id, "payloadSha256": bridge.payload_sha256}
+            self.assertEqual(self.request(bridge, "POST", "/v3/connect", command)[0], 409)
+            self.assertIsNone(bridge.token)
+            self.assertEqual(self.request(bridge, "POST", "/v1/pair", {"code": bridge.code})[0], 200)
+        finally:
+            bridge.close()
+
+    def test_safe_optional_reason_and_encryption_state_are_digest_bound_in_both_wires(self) -> None:
+        capture = replace(fixture(), missing_sources=("calls", "messages"),
+                          calls=SourceResult(0, (), 0), backup_encrypted=False,
+                          unavailable_reasons=(("calls", "absent"), ("messages", "source_integrity")))
+        small = selected_metadata(capture, {1})
+        self.assertEqual(json.loads(small)["unavailableReasons"],
+                         {"calls": "absent", "messages": "source_integrity"})
+        self.assertIs(json.loads(small)["backupEncrypted"], False)
+        self.assertNotEqual(hashlib.sha256(small).digest(),
+                            hashlib.sha256(selected_metadata(replace(capture, backup_encrypted=True), {1})).digest())
+        with tempfile.TemporaryDirectory(prefix="amplifai-source-reason-test-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            directory = workspace.__enter__()
+            store = RecordStore(directory / "sanitized.sqlite3")
+            try:
+                store.add("contacts", Contact(1, "Synthetic", ("+15551234567",), ()))
+                paged = replace(capture, contacts=SourceResult(1, store.collection("contacts"), 0),
+                                calls=SourceResult(0, store.collection("calls"), 0),
+                                messages=SourceResult(0, store.collection("messages"), 0),
+                                review_workspace=workspace, record_store=store)
+                transfer = PagedTransfer(paged, {1}, directory / "transfer.sqlite3")
+                try:
+                    self.assertEqual(transfer.manifest["unavailableReasons"],
+                                     {"calls": "absent", "messages": "source_integrity"})
+                    self.assertIs(transfer.manifest["backupEncrypted"], False)
+                    self.assertEqual(transfer.sha256, hashlib.sha256(json.dumps(
+                        transfer.manifest, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest())
+                finally:
+                    transfer.close()
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
+
     def test_sqlite_full_and_io_errors_remain_storage_failures(self) -> None:
         full = sqlite3.OperationalError("database or disk is full")
         full.sqlite_errorcode = sqlite3.SQLITE_FULL
