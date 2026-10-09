@@ -1,13 +1,12 @@
 # AMPLIFai Phone Windows x64 source qualification
 
-**Mac and Android owner/partner test builds.** Normal fresh installation,
-owner-operated phone collection and hosted-browser transfer still need
-acceptance. These are not verified customer-ready downloads. Do not bypass
-Gatekeeper, Play Protect or device permission prompts. Windows and Intel Mac
-companions are not available as downloads.
+**Current Mac and website Android downloads are published.** Normal fresh
+installation, populated phone history and authenticated hosted Save/return still
+need owner acceptance. Do not bypass Gatekeeper, Play Protect or device
+permission prompts. Windows and Intel Mac companions are not customer downloads.
 
-- [Mac Apple Silicon/macOS 14+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.07-rc3): separately notarized owner-test companion. The Mac release has its own exact source tag and complete source archive.
-- [Android 8+ prerelease](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.08-rc4): release-signed owner/partner test APK for same-phone browser handoff. This in-place update copies a usable support code and requires a fresh, unchecked approval before reading each phone source. Its exact dotted build distinguishes Android from numeric Mac builds. Contacts, calls and SMS have independent permission/coverage outcomes; MMS/RCS are not collected. Provider scan limits reject incomplete reads before review. The account-saving web path is published, but a real signed-in Android-to-web saved acknowledgment remains unobserved.
+- [Mac Apple Silicon/macOS 14+ rc16](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.09-rc16-release): signed, notarized companion with its exact corresponding-source archive; it has not been installed over the owner's open review.
+- [Website Android 8+ rc9](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.09-rc9): release-signed APK with all-page contact review, explicit Android source permissions and server-confirmed account destination approval. The one-use code remains a recovery path. Normal installer and synthetic emulator checks do not prove populated physical call/SMS history or authenticated hosted account Save.
 - Start through your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account), or use the separate [browser-only pilot](https://amplifai-database-engine.vercel.app/phone). The temporary app-generated pairing code is not a phone number or email verification code.
 
 ## Android source and build
@@ -19,8 +18,10 @@ remaining physical-device matrix. The Android release carries its matching
 source archive, license/notices and checksums beside the APK. No private signing
 key, password, account source or owner phone data is included.
 
-This branch projects the exact Android source for `2026.10.08-rc4` from native
-revision `90646e6`. The APK is not Google Play-ready: this full-history build
+This Windows candidate branch retains a historical Android source projection for
+`2026.10.08-rc4` from native revision `90646e6`; the separate rc9 release and
+`codex/android-rc9-oct9` branch are authoritative for current Android bytes.
+The website APK is not Google Play-ready: this full-history build
 requests restricted SMS and call-log permissions without default-handler status
 or a reviewed Play exception. Ordinary download/install and physical-device
 permission behavior remain owner-operated release gates; do not turn off device
@@ -38,10 +39,12 @@ This candidate branch also projects the current Python collection engine and
 the Windows Tk wrapper under `source/collector/windows/`. The fixed package
 builder at `source/script/build_windows_candidate.py` creates a disposable
 dual-onedir candidate only on Windows x64/CPython 3.12. The branch's bounded
-Windows runner is configured to check private storage, synthetic protocol
-behavior, frozen helper imports/empty residue and GUI startup; it uploads no
-binary. No installer, Windows signature, public download, Apple USB/Trust/backup
-run, physical-device transfer or authenticated saved acknowledgment is implied.
+Windows runner checks private storage, synthetic protocol behavior, actual Tk
+review and consent controls, frozen helper imports/empty residue, GUI startup,
+and per-user WiX install/uninstall. It retains an **unsigned private draft MSI**,
+not a public download. The rc13 draft is preserved as rollback while rc14
+qualifies the narrow consent-row fit. No Windows signature, Apple USB/Trust run,
+physical-device transfer or authenticated saved acknowledgment is implied.
 
 ## Mac source package
 
@@ -56,8 +59,8 @@ under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
 `LICENSE` for the GPLv3 text, and `THIRD-PARTY-NOTICES.txt` for retained upstream
 notices. The separate private website/backend source is not part of this package.
 
-This is a source release candidate for the macOS arm64 companion and its frozen
-Python helper. It is not a signed app or installer. It includes the source and
+This branch also carries historical macOS arm64 companion and frozen-helper
+source; the current signed rc16 archive is in its own release. It includes the source and
 build inputs matched to the selected artifact inventory; it does not claim a
 byte-for-byte reproducible binary build or verified operation on an owner phone.
 

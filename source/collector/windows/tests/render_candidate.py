@@ -109,6 +109,11 @@ def main() -> None:
     for width, height in ((920, 800), (680, 680)):
         root.geometry(f"{width}x{height}+30+30")
         root.update()
+        canvas = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Canvas))
+        left, right = canvas.winfo_rootx(), canvas.winfo_rootx() + canvas.winfo_width()
+        for button in (view.approve, view.connect, view.decline_button, view.privacy_button):
+            if button.winfo_rootx() < left or button.winfo_rootx() + button.winfo_width() > right:
+                raise RuntimeError(f"Consent action clipped at {width}px: {button.cget('text')}")
         records.append(capture(root, args.output, f"{width}x{height}-top", scroll=0.0))
         records.append(capture(root, args.output, f"{width}x{height}-review", scroll=0.55))
     root.focus_force()

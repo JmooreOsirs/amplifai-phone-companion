@@ -1,6 +1,6 @@
 {
   "status": "private-unsigned-per-user-installer-candidate-not-supported-download",
-  "baseRelease": "rc15-compatible local iPhone collector validation core; Android rc8 is a separate website app",
+  "baseRelease": "rc15-compatible local iPhone collector validation core; published Mac rc16 and website Android rc9 are separate apps",
   "windowEntrypoint": "collector/windows/app.py",
   "pythonModules": [
     "collector/windows/session.py",
@@ -28,7 +28,7 @@
     {
       "sourceOwner": "script/build_windows_candidate.py",
       "destination": "resources/legal/",
-      "contract": "exact COPYRIGHT, LICENSE and THIRD-PARTY-NOTICES.txt byte hashes from rc12 source root"
+      "contract": "exact COPYRIGHT, LICENSE and THIRD-PARTY-NOTICES.txt byte hashes from the candidate source root"
     }
   ],
   "install": "WiX 3 per-user limited-privilege MSI to LocalAppDataFolder, unsigned and private draft only; normal non-admin/SmartScreen/driver and physical account acceptance remain unqualified.",
