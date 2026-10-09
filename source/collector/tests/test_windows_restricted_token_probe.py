@@ -172,12 +172,15 @@ class RestrictedProbeTest(unittest.TestCase):
 
         output_stream = io.StringIO()
         with (patch.object(probe, "restricted_storage_token", synthetic_os_boundary),
+              patch.object(probe, "fixture_owner_matches_user", return_value=None),
               patch("sys.stdout", output_stream)):
             self.assertEqual(probe.main(), 1)
         self.assertEqual(json.loads(output_stream.getvalue()), {
             "kind": "reduced-token-storage", "ready": False,
             "native_stage": 15, "win32_code": 183, "requested_access": 0,
             "api_code": 1, "ancestor_index": 0,
+            "old_fixture_owner_matches_user": None,
+            "failed_is_fixture_parent": False, "failed_ancestor_index": 0,
         })
         self.assertIsNone(native.created)
         self.assertNotIn("Traceback", output_stream.getvalue())

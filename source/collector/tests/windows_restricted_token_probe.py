@@ -15,12 +15,13 @@ import ctypes
 import json
 import os
 import tempfile
+import uuid
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from amplifai_phone import windows_storage as storage
-from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
+from amplifai_phone.workspace import ROOT_MARKER, SessionWorkspace, WorkspaceError
 
 DWORD = ctypes.c_uint32
 BOOL = ctypes.c_int32
@@ -287,6 +288,57 @@ def directory_diagnostic(error: storage._DirectoryHandleError) -> dict[str, obje
     }
 
 
+def fixture_owner_matches_user(path: Path) -> bool | None:
+    """Compare only SIDs; never disclose the fixture path or security descriptor."""
+    api = storage._NativeSecurity()
+    with ExitStack() as lifetime:
+        try:
+            handle = api.open_directory(path, lifetime)
+        except storage._DirectoryHandleError:
+            return None
+        owner, descriptor = PTR(), PTR()
+        try:
+            status = api.security.GetSecurityInfo(
+                handle, 1, 0x01, ctypes.byref(owner), None, None, None,
+                ctypes.byref(descriptor),
+            )
+            if status != 0 or not owner.value or not descriptor.value:
+                return None
+            return bool(api.security.EqualSid(owner, api.current_sid()))
+        finally:
+            if descriptor.value:
+                storage._require(not api.kernel.LocalFree(descriptor), 29)
+
+
+def ancestor_fixture_diagnostic(root: Path, fixture: Path) -> dict[str, object]:
+    api = storage._NativeSecurity()
+    try:
+        with ExitStack() as lifetime:
+            api.pin_parents(root, lifetime)
+    except storage._DirectoryHandleError as error:
+        return {"failed_is_fixture_parent":
+                error.ancestor_index == list(reversed(root.parents)).index(fixture),
+                "failed_ancestor_index": error.ancestor_index}
+    return {"failed_is_fixture_parent": False, "failed_ancestor_index": None}
+
+
+def remove_verified_probe_fixture(path: Path) -> bool:
+    """Remove only a verified marker-only synthetic root after token restoration."""
+    if not path.exists():
+        return True
+    try:
+        storage.private_windows_directory(path)
+        marker = path / ROOT_MARKER
+        if (marker.is_symlink() or marker.read_bytes() != b"AMPLIFAI_PHONE_SESSIONS_V1\n"
+                or set(path.iterdir()) != {marker}):
+            return False
+        marker.unlink()
+        path.rmdir()
+        return True
+    except (OSError, PermissionError, WorkspaceError):
+        return False
+
+
 def observe_legacy_ancestor_access(root: Path) -> dict[str, object]:
     """Read-only old-mask observation, not storage admission or a fallback."""
     api = storage._NativeSecurity()
@@ -308,41 +360,49 @@ def observe_legacy_ancestor_access(root: Path) -> dict[str, object]:
 def main() -> int:
     # Storage operations remain on this thread; no worker/subprocess inherits
     # the unrestricted process token. Only synthetic bytes are ever written.
+    fixture = Path(tempfile.gettempdir()) / ("amplifai-reduced-storage-" + uuid.uuid4().hex)
+    evidence: dict[str, object] = {}
+    result: dict[str, object]
     try:
-        with tempfile.TemporaryDirectory(prefix="amplifai-reduced-storage-") as parent:
-            root = Path(parent) / "sessions"
+        with tempfile.TemporaryDirectory(prefix="amplifai-legacy-fixture-") as old_parent:
+            old_parent_path = Path(old_parent)
+            old_root = old_parent_path / "sessions"
+            evidence["old_fixture_owner_matches_user"] = fixture_owner_matches_user(old_parent_path)
             with restricted_storage_token() as proof:
-                legacy = observe_legacy_ancestor_access(root)
-                workspace = SessionWorkspace(root)
-                with workspace as directory:
-                    synthetic = directory / "synthetic-source"
-                    synthetic.write_bytes(b"synthetic-only")
-                    require(synthetic.read_bytes() == b"synthetic-only", 80)
+                evidence.update(ancestor_fixture_diagnostic(old_root, old_parent_path))
+                # This fixture is created under the effective restricted token
+                # with the same explicit owner/protected DACL as production.
+                # Its direct Temp parent remains pinned; no ancestor is skipped.
+                with SessionWorkspace(fixture) as parent_directory:
+                    root = parent_directory / "sessions"
+                    legacy = observe_legacy_ancestor_access(root)
+                    workspace = SessionWorkspace(root)
+                    with workspace as directory:
+                        synthetic = directory / "synthetic-source"
+                        synthetic.write_bytes(b"synthetic-only")
+                        require(synthetic.read_bytes() == b"synthetic-only", 80)
+                        storage.private_windows_directory(root)
+                    require(not directory.exists(), 80)
                     storage.private_windows_directory(root)
-                require(not directory.exists(), 80)
-                storage.private_windows_directory(root)
-    except (WorkspaceError, PermissionError) as failure:
+        result = {
+            "kind": "reduced-token-storage", "ready": True,
+            "scope": "same-identity synchronous storage only",
+            "legacy_ancestor_access": legacy, **proof, **evidence,
+        }
+    except (WorkspaceError, PermissionError, OSError) as failure:
         error = failure.__cause__ if isinstance(failure, WorkspaceError) else failure
         diagnostic = (
             directory_diagnostic(error)
             if isinstance(error, storage._DirectoryHandleError)
             else {"code": "storage_probe_failed"}
         )
-        print(json.dumps({"kind": "reduced-token-storage", "ready": False, **diagnostic}))
-        return 1
-    print(
-        json.dumps(
-            {
-                "kind": "reduced-token-storage",
-                "ready": True,
-                "scope": "same-identity synchronous storage only",
-                "legacy_ancestor_access": legacy,
-                **proof,
-            },
-            sort_keys=True,
-        )
-    )
-    return 0
+        result = {"kind": "reduced-token-storage", "ready": False,
+                  **diagnostic, **evidence}
+    if not remove_verified_probe_fixture(fixture):
+        result = {"kind": "reduced-token-storage", "ready": False,
+                  "code": "probe_cleanup_unconfirmed", **evidence}
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["ready"] else 1
 
 
 if __name__ == "__main__":
