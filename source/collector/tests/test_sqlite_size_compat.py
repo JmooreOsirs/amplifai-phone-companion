@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,6 +26,16 @@ except ImportError:
 from amplifai_phone import sqlite_size_compat as compat
 
 
+@contextmanager
+def open_db(path):
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 class SizeCompatibilityTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='size-compat-fictional-')
@@ -37,7 +48,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def database(self):
         path = self.root/'fictional.sqlite'
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.executescript('PRAGMA page_size=4096; CREATE TABLE ABPerson(First TEXT,Last TEXT); CREATE TABLE ABMultiValue(record_id INTEGER,property INTEGER,value TEXT);')
             db.executemany('INSERT INTO ABPerson VALUES (?,?)',[('Fictional',str(i)) for i in range(3)])
         return path
@@ -62,7 +73,7 @@ class SizeCompatibilityTests(unittest.TestCase):
         target.parent.mkdir(exist_ok=True)
         target.write_bytes(raw)
         content_digest = hashlib.sha1(raw).digest() if digest is True else None if digest is False else digest
-        with sqlite3.connect(self.root/'Manifest.db') as db:
+        with open_db(self.root/'Manifest.db') as db:
             db.execute('CREATE TABLE Files(fileID TEXT PRIMARY KEY,domain TEXT,relativePath TEXT,flags INTEGER,file BLOB)')
             db.execute('INSERT INTO Files VALUES(?,?,?,?,?)',(file_id,'HomeDomain',relative,1,self.archive(archive_relative or relative,expected,content_digest)))
             if duplicate:
@@ -89,7 +100,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_live_data_preserving_compaction_is_accepted_and_contacts_parser_works(self):
         path = self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE TABLE fictional_padding(payload BLOB)')
             db.executemany('INSERT INTO fictional_padding VALUES (?)',[(b'x'*8192,) for _ in range(64)])
             db.commit()
@@ -126,7 +137,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_supported_populated_derived_fts_does_not_affect_contacts_scope(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE ABPersonFullTextSearch USING fts4(text,tokenize=porter)')
             db.execute('INSERT INTO ABPersonFullTextSearch VALUES (?)',('Fictional running words',))
         backup=self.backup(path.read_bytes())
@@ -136,11 +147,11 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_derived_fts_content_index_inconsistency_is_explicitly_out_of_scope(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE ABPersonFullTextSearch USING fts4(text,tokenize=porter)')
             db.execute('INSERT INTO ABPersonFullTextSearch VALUES (?)',('Fictional running words',))
             db.execute('UPDATE ABPersonFullTextSearch_content SET c0text=?',('Fictional replacement text',))
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             self.assertNotEqual(db.execute('PRAGMA integrity_check(1)').fetchall(),[('ok',)])
         backup=self.backup(path.read_bytes())
         samples=[]
@@ -150,7 +161,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_missing_apple_tokenizer_in_populated_unused_cache_needs_no_substitute(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE ABPersonFullTextSearch USING fts4(text,tokenize=porter)')
             db.execute('INSERT INTO ABPersonFullTextSearch VALUES (?)',('Fictional running words',))
             db.execute('PRAGMA writable_schema=ON')
@@ -168,7 +179,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_empty_unsupported_cache_needs_no_substitute_tokenizer(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE ABPersonFullTextSearch USING fts4(text,tokenize=porter)')
             db.execute('PRAGMA writable_schema=ON')
             db.execute('UPDATE sqlite_schema SET sql=replace(sql,?,?) WHERE name=?',
@@ -183,7 +194,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_unrecognized_virtual_table_is_never_enabled(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE FictionalUnsupportedCache USING fts4(text)')
         backup=self.backup(path.read_bytes())
         samples=[]
@@ -193,7 +204,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_canonical_multivalue_page_corruption_is_rejected_with_matching_digest(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             root=db.execute("SELECT rootpage FROM sqlite_schema WHERE name='ABMultiValue'").fetchone()[0]
         raw=bytearray(path.read_bytes())
         raw[(root-1)*4096]=255
@@ -201,7 +212,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_canonical_index_record_mismatch_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE INDEX FictionalPersonName ON ABPerson(First)')
             root=db.execute("SELECT rootpage FROM sqlite_schema WHERE name='FictionalPersonName'").fetchone()[0]
         raw=bytearray(path.read_bytes())
@@ -213,7 +224,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_orphan_parser_consumed_owner_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('INSERT INTO ABMultiValue VALUES (?,?,?)',(999,3,'fictional-phone-value'))
         backup=self.backup(path.read_bytes())
         samples=[]
@@ -223,7 +234,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_orphan_unconsumed_property_does_not_change_parser_scope(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('INSERT INTO ABMultiValue VALUES (?,?,?)',(999,8,'fictional-unused-address'))
         backup=self.backup(path.read_bytes())
         self.assertTrue(_extract_database(backup,DATABASES['contacts'],self.root/'copy'))
@@ -231,7 +242,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_blob_person_name_is_rejected_before_silent_parser_exclusion(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('UPDATE ABPerson SET First=?,Last=NULL WHERE ROWID=1',(b'fictional binary name',))
         backup=self.backup(path.read_bytes())
         samples=[]
@@ -241,7 +252,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_blob_consumed_value_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('INSERT INTO ABMultiValue VALUES (?,?,?)',(1,3,b'fictional binary phone'))
         backup=self.backup(path.read_bytes())
         samples=[]
@@ -251,7 +262,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_text_property_cannot_silently_bypass_numeric_parser_branch(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.executescript('DROP TABLE ABMultiValue; CREATE TABLE ABMultiValue(record_id INTEGER,property TEXT,value TEXT);')
             db.execute('INSERT INTO ABMultiValue VALUES (?,?,?)',(1,'3','fictional-phone-value'))
         backup=self.backup(path.read_bytes())
@@ -284,19 +295,19 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_canonical_view_cannot_substitute_for_person_table(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.executescript('ALTER TABLE ABPerson RENAME TO FictionalUnderlying; CREATE VIEW ABPerson AS SELECT rowid,First,Last FROM FictionalUnderlying;')
         self.reject(self.backup(path.read_bytes()))
 
     def test_generated_parser_field_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.executescript("DROP TABLE ABPerson; CREATE TABLE ABPerson(base TEXT,First TEXT GENERATED ALWAYS AS (upper(base)),Last TEXT); INSERT INTO ABPerson(base,Last) VALUES ('fictional','example');")
         self.reject(self.backup(path.read_bytes()))
 
     def test_shadowed_rowid_identity_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.executescript("DROP TABLE ABPerson; CREATE TABLE ABPerson(ROWID TEXT,First TEXT,Last TEXT); INSERT INTO ABPerson VALUES ('fictional-id','Fictional','Example');")
         self.reject(self.backup(path.read_bytes()))
 
@@ -309,14 +320,14 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_bad_unused_derived_page_is_out_of_scope_but_contacts_remain_readable(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE ABPersonFullTextSearch USING fts4(text)')
             db.execute('INSERT INTO ABPersonFullTextSearch VALUES (?)',('Fictional searchable text',))
             root=db.execute("SELECT rootpage FROM sqlite_schema WHERE name='ABPersonFullTextSearch_content'").fetchone()[0]
         raw=bytearray(path.read_bytes())
         raw[(root-1)*4096]=255
         path.write_bytes(raw)
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             try:failed=db.execute('PRAGMA integrity_check(1)').fetchall()!=[('ok',)]
             except sqlite3.DatabaseError:failed=True
         self.assertTrue(failed)
@@ -326,7 +337,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_unused_page_change_with_original_producer_digest_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE ABPersonFullTextSearch USING fts4(text)')
             db.execute('INSERT INTO ABPersonFullTextSearch VALUES (?)',('Fictional searchable text',))
         original=path.read_bytes()
@@ -340,7 +351,7 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_catalog_root_outside_physical_file_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE TABLE FictionalUnused(value TEXT)')
             db.execute('PRAGMA writable_schema=ON')
             db.execute("UPDATE sqlite_schema SET rootpage=99999 WHERE name='FictionalUnused'")

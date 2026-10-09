@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import stat
 import subprocess
 import uuid
 import xml.etree.ElementTree as ET
@@ -18,7 +17,6 @@ NS = "http://schemas.microsoft.com/wix/2006/wi"
 ET.register_namespace("", NS)
 UPGRADE_CODE = "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871"
 VERSION = "1.0.12"
-REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 def tag(name: str) -> str:

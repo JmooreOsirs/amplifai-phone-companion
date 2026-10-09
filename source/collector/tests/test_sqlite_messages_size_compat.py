@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,6 +23,17 @@ except ImportError:
     SelectedPayloadIntegrityError = UnsupportedSchema  # rc3 preserves its generic error contract.
 from amplifai_phone import sqlite_messages_size_compat as compat
 
+
+@contextmanager
+def open_db(path):
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
+
+
 class MessagesCompatibilityTests(unittest.TestCase):
     def setUp(self):
         temporary=tempfile.TemporaryDirectory(prefix='messages-compat-fictional-')
@@ -30,7 +42,7 @@ class MessagesCompatibilityTests(unittest.TestCase):
         self.addCleanup(setattr,os,'devnull',previous)
     def database(self):
         path=self.root/'fictional.sqlite'
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.executescript('PRAGMA page_size=4096; CREATE TABLE message(date INTEGER,service TEXT,is_from_me INTEGER,handle_id INTEGER,text TEXT); CREATE TABLE handle(id TEXT);')
             db.execute('INSERT INTO handle VALUES (?)',('+12025550110',))
             db.execute('INSERT INTO message VALUES (?,?,?,?,?)',(100000,'SMS',1,1,'FICTIONAL_PRIVATE_BODY_SENTINEL'))
@@ -41,7 +53,7 @@ class MessagesCompatibilityTests(unittest.TestCase):
         path=self.root/file_id[:2]/file_id;path.parent.mkdir(exist_ok=True);path.write_bytes(raw)
         hashed=hashlib.sha1(raw).digest() if digest is True else None if digest is False else digest
         archive=lambda rel,size,value:contact_fixtures.SizeCompatibilityTests.archive(self,rel,size,value)
-        with sqlite3.connect(self.root/'Manifest.db') as db:
+        with open_db(self.root/'Manifest.db') as db:
             db.execute('CREATE TABLE Files(fileID TEXT PRIMARY KEY,domain TEXT,relativePath TEXT,flags INTEGER,file BLOB)')
             db.execute('INSERT INTO Files VALUES(?,?,?,?,?)',(file_id,'HomeDomain',relative,1,archive(archive_relative or relative,expected,hashed)))
             if duplicate:
@@ -74,7 +86,7 @@ class MessagesCompatibilityTests(unittest.TestCase):
         self.assertEqual((parsed.rows_seen,len(parsed.records)),(1,1))
     def test_valid_compaction_preserves_normal_metadata_parser(self):
         path=self.database();before=read_messages(path,RETAINED_HISTORY_START)
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE TABLE FictionalPadding(value BLOB)')
             db.executemany('INSERT INTO FictionalPadding VALUES (?)',[(b'x'*4096,) for _ in range(64)])
             db.commit();db.execute('DELETE FROM FictionalPadding');db.commit();previous=path.stat().st_size
@@ -99,13 +111,13 @@ class MessagesCompatibilityTests(unittest.TestCase):
         self.reject(self.backup(bytes(raw)),'structural_invalid')
     def test_corrupt_unused_table_is_also_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE TABLE FictionalUnused(value TEXT)');root=db.execute("SELECT rootpage FROM sqlite_schema WHERE name='FictionalUnused'").fetchone()[0]
         raw=bytearray(path.read_bytes());raw[(root-1)*4096]=255
         self.reject(self.backup(bytes(raw)),'structural_invalid')
     def test_canonical_index_inconsistency_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE INDEX FictionalSender ON handle(id)');root=db.execute("SELECT rootpage FROM sqlite_schema WHERE name='FictionalSender'").fetchone()[0]
         raw=bytearray(path.read_bytes());offset=raw.find(b'+12025550110',(root-1)*4096,root*4096);self.assertGreaterEqual(offset,0);raw[offset]=ord('!')
         self.reject(self.backup(bytes(raw)),'structural_invalid')
@@ -114,21 +126,21 @@ class MessagesCompatibilityTests(unittest.TestCase):
         self.reject(self.backup(bytes(raw)),'structural_invalid')
     def test_unsupported_schema_is_rejected(self):
         path=self.database()
-        with sqlite3.connect(path) as db:db.execute('ALTER TABLE message RENAME TO FictionalWrongTable')
+        with open_db(path) as db:db.execute('ALTER TABLE message RENAME TO FictionalWrongTable')
         self.reject(self.backup(path.read_bytes()),'structural_invalid')
     def test_optional_join_schema_is_checked_when_used(self):
         path=self.database()
-        with sqlite3.connect(path) as db:db.executescript('CREATE TABLE chat_message_join(message_id INTEGER);CREATE TABLE chat_handle_join(chat_id INTEGER,handle_id INTEGER);')
+        with open_db(path) as db:db.executescript('CREATE TABLE chat_message_join(message_id INTEGER);CREATE TABLE chat_handle_join(chat_id INTEGER,handle_id INTEGER);')
         self.reject(self.backup(path.read_bytes()),'structural_invalid')
     def test_unknown_virtual_table_dependency_is_not_bypassed(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE FictionalSearch USING fts4(text)');db.execute('PRAGMA writable_schema=ON')
             db.execute("UPDATE sqlite_schema SET sql=replace(sql,'fts4','fictional_unavailable_module') WHERE name='FictionalSearch'");db.execute('PRAGMA writable_schema=OFF')
         self.reject(self.backup(path.read_bytes()),'unavailable')
     def test_unknown_cache_tokenizer_is_not_replaced(self):
         path=self.database()
-        with sqlite3.connect(path) as db:
+        with open_db(path) as db:
             db.execute('CREATE VIRTUAL TABLE FictionalSearch USING fts4(text,tokenize=simple)')
             db.execute('PRAGMA writable_schema=ON')
             db.execute("UPDATE sqlite_schema SET sql=replace(sql,'tokenize=simple','tokenize=fictional_unavailable') WHERE name='FictionalSearch'")
@@ -192,7 +204,7 @@ class MessagesCompatibilityTests(unittest.TestCase):
         self.reject(backup,'active_shm')
     def test_schema_view_cannot_replace_canonical_messages_table(self):
         path=self.database()
-        with sqlite3.connect(path) as db:db.executescript('ALTER TABLE message RENAME TO FictionalBase;CREATE VIEW message AS SELECT * FROM FictionalBase;')
+        with open_db(path) as db:db.executescript('ALTER TABLE message RENAME TO FictionalBase;CREATE VIEW message AS SELECT * FROM FictionalBase;')
         self.reject(self.backup(path.read_bytes()),'structural_invalid')
     def test_destination_change_after_worker_result_is_rejected(self):
         raw=self.database().read_bytes();backup=self.backup(raw);target=self.root/'copy'

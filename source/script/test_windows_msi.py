@@ -6,7 +6,6 @@ import hashlib
 import json
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
