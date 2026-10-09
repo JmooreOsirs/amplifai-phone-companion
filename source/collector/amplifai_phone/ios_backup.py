@@ -14,7 +14,7 @@ import tempfile
 import time
 import xml.parsers.expat
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -63,6 +63,8 @@ class IPhoneCapture:
     missing_sources: tuple[str, ...]
     review_workspace: SessionWorkspace | None = None
     record_store: RecordStore | None = None
+    backup_encrypted: bool | None = field(default=None, compare=False)
+    unavailable_reasons: tuple[tuple[str, str], ...] = field(default=(), compare=False)
 
     def close(self) -> None:
         if self.record_store is not None:
@@ -109,12 +111,18 @@ def _extract_database(
     bound_callback: Callable[[], None] | None = None,
     workspace: SessionWorkspace | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    *,
+    payload_diagnostic_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> bool:
     """Materialize only the selected DB and its available SQLite sidecars."""
     from pyiosbackup.exceptions import MissingEntryError
 
     found_main = False
+    source_kind = next(
+        (key for key, path in DATABASES.items() if path == relative_path), None
+    )
     for suffix in ("", "-wal", "-shm"):
+        component = suffix.removeprefix("-") or "database"
         try:
             entry = backup.get_entry_by_domain_and_path(
                 HOME_DOMAIN, relative_path + suffix
@@ -146,21 +154,76 @@ def _extract_database(
             raise SelectedPayloadMissing(
                 f"Selected backup payload missing: {Path(relative_path).name}{suffix}"
             ) from None
-        copied = copy_backup_file(
-            source,
-            Path(str(destination) + suffix),
-            keybag=backup.keybag if backup.is_encrypted else None,
-            encryption_key=entry.encryption_key,
-            padded=backup.is_encrypted,
-            workspace=workspace,
-            bound_callback=bound_callback,
-            progress_callback=progress_callback,
-        )
-        if copied != entry.size:
-            raise SelectedPayloadIntegrityError(
-                "Selected backup payload length does not match its manifest",
-                code="selected_payload_length",
+        def raw_size() -> int | None:
+            try:
+                from stat import S_ISREG
+                info = source.stat(follow_symlinks=False)
+                return info.st_size if S_ISREG(info.st_mode) else None
+            except OSError:
+                return None
+
+        diagnostic = None
+        raw_before_size = raw_size()
+        if payload_diagnostic_callback is not None:
+            diagnostic = {
+                "source": source_kind, "component": component,
+                "manifest_bytes": entry.size,
+                "raw_before_bytes": raw_before_size,
+                "encrypted": backup.is_encrypted is True,
+                "entry_key_present": isinstance(entry.encryption_key, bytes) and bool(entry.encryption_key),
+                "result": "copying",
+            }
+            import hashlib
+            diagnostic['standard_file_id'] = entry.file_id == hashlib.sha1((HOME_DOMAIN+'-'+relative_path+suffix).encode()).hexdigest()
+            payload_diagnostic_callback(diagnostic)
+        try:
+            copied = copy_backup_file(
+                source,
+                Path(str(destination) + suffix),
+                keybag=backup.keybag if backup.is_encrypted else None,
+                encryption_key=entry.encryption_key,
+                padded=backup.is_encrypted,
+                workspace=workspace,
+                bound_callback=bound_callback,
+                progress_callback=progress_callback,
             )
+        except SelectedPayloadIntegrityError:
+            if diagnostic is not None:
+                payload_diagnostic_callback({**diagnostic, "result": "copy_failed"})
+            raise
+        validation = None
+        if copied != entry.size:
+            if (source_kind == 'contacts' and not suffix and backup.is_encrypted is False
+                    and raw_before_size == copied == raw_size()):
+                from .sqlite_size_compat import validate_contacts_size_difference
+
+                validation = validate_contacts_size_difference(
+                    backup, entry, destination, copied, workspace=workspace,
+                    bound_callback=bound_callback,
+                )
+            elif (source_kind == 'messages' and not suffix and backup.is_encrypted is False
+                    and raw_before_size == copied == raw_size()):
+                from .sqlite_messages_size_compat import validate_messages_size_difference
+
+                validation = validate_messages_size_difference(
+                    backup, entry, destination, copied, workspace=workspace,
+                    bound_callback=bound_callback,
+                )
+        if diagnostic is not None:
+            sample = {
+                **diagnostic, 'raw_after_bytes': raw_size(),
+                'copied_plaintext_bytes': copied,
+                'result': 'match' if copied == entry.size else 'length_mismatch',
+            }
+            if validation is not None:
+                sample['size_difference_validation'] = validation.code
+                sample['size_difference_validation_scope'] = validation.scope
+            payload_diagnostic_callback(sample)
+        if copied != entry.size:
+            if validation is None or not validation.accepted:
+                raise SelectedPayloadIntegrityError(
+                    "Selected backup payload length does not match its manifest", code="selected_payload_length"
+                )
         found_main = found_main or not suffix
     return found_main
 
@@ -259,6 +322,7 @@ def _parse_entries(
     record_store: RecordStore | None = None,
 ) -> IPhoneCapture:
     missing = []
+    reasons: dict[str, str] = {}
     available = {}
     for key, path in DATABASES.items():
         destination = extracted / key
@@ -266,14 +330,17 @@ def _parse_entries(
             available[key] = _extract_database(
                 backup, path, destination, bound_callback, workspace, progress_callback
             )
-        except (SelectedPayloadMissing, SelectedPayloadIntegrityError):
+        except (SelectedPayloadMissing, SelectedPayloadIntegrityError) as error:
             if key == "contacts":
                 raise
             available[key] = False
+            reasons[key] = "absent" if isinstance(error, SelectedPayloadMissing) else "source_integrity"
         if bound_callback is not None:
             bound_callback()
         if not available[key]:
             missing.append(key)
+            if key != "contacts":
+                reasons.setdefault(key, "absent")
     if available["contacts"]:
         try:
             contacts = read_contacts(extracted / "contacts", bound_callback, record_store)
@@ -293,10 +360,12 @@ def _parse_entries(
             return SourceResult(0, (), 0)
         try:
             return reader()
-        except (UnsupportedSchema, SourceReadCapacityLimit, sqlite3.DatabaseError):
+        except (UnsupportedSchema, SourceReadCapacityLimit, sqlite3.DatabaseError) as error:
             if record_store is not None:
                 record_store.discard_category(key)
             missing.append(key)
+            reasons[key] = ("source_capacity" if isinstance(error, SourceReadCapacityLimit) else
+                            "unsupported_schema" if isinstance(error, UnsupportedSchema) else "source_invalid")
             return SourceResult(0, (), 0)
 
     calls = optional_source(
@@ -305,8 +374,11 @@ def _parse_entries(
     messages = optional_source(
         "messages", lambda: read_messages(extracted / "messages", since, bound_callback, record_store)
     )
+    encrypted_state = getattr(backup, "is_encrypted", None)
     return IPhoneCapture(
-        contacts, calls, messages, now.isoformat(), since.isoformat(), tuple(missing)
+        contacts, calls, messages, now.isoformat(), since.isoformat(), tuple(missing),
+        backup_encrypted=encrypted_state if isinstance(encrypted_state, bool) else None,
+        unavailable_reasons=tuple((key, reasons[key]) for key in ("calls", "messages") if key in reasons),
     )
 
 
@@ -436,6 +508,7 @@ async def collect_iphone(
                             parsed.contacts, parsed.calls, parsed.messages,
                             parsed.collected_at, parsed.since, parsed.missing_sources,
                             review_workspace, record_store,
+                            parsed.backup_encrypted, parsed.unavailable_reasons,
                         )
                         return review_capture
                     except BaseException:

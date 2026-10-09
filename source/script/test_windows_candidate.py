@@ -15,6 +15,7 @@ from build_windows_candidate import (
     file_records,
     freezer_command,
     gui_digest,
+    legal_records,
     parse_helper_packet,
 )
 
@@ -91,6 +92,22 @@ class WindowsCandidateBoundaryTests(unittest.TestCase):
                          {"kind": "residue", "sessions": []})
         with self.assertRaisesRegex(ValueError, "mode"):
             parse_helper_packet(b"{}\n", "connect")
+
+    def test_internal_validation_workers_fail_closed_on_empty_input(self):
+        for mode in ("contacts-worker", "messages-worker"):
+            self.assertEqual(parse_helper_packet(b'{"code":"unsafe"}\n', mode), {"code": "unsafe"})
+            with self.assertRaisesRegex(ValueError, "worker"):
+                parse_helper_packet(b'{"code":"validated_contacts_tables"}\n', mode)
+
+    def test_legal_inventory_requires_regular_exact_files(self):
+        for name in ("COPYRIGHT", "LICENSE", "THIRD-PARTY-NOTICES.txt"):
+            (self.root / name).write_bytes(name.encode())
+        records = legal_records(self.root)
+        self.assertEqual(set(records), {"COPYRIGHT", "LICENSE", "THIRD-PARTY-NOTICES.txt"})
+        (self.root / "LICENSE").unlink()
+        (self.root / "LICENSE").symlink_to(self.root / "COPYRIGHT")
+        with self.assertRaisesRegex(ValueError, "linked"):
+            legal_records(self.root)
 
     def test_file_inventory_binds_relative_bytes_and_rejects_links(self):
         nested = self.root / "_internal/runtime.dll"

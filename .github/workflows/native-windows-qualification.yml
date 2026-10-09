@@ -5,7 +5,7 @@ on:
     branches: [codex/windows-x64-candidate-oct8]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: windows-x64-candidate-oct8
@@ -15,7 +15,7 @@ jobs:
   windows:
     # Standard PUBLIC-repository runner minutes are free. No cache/artifact storage.
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       PYTHONPATH: source/collector;source/collector/tests;source/collector/windows;source/script
     steps:
@@ -38,6 +38,8 @@ jobs:
         run: |
           git rev-parse HEAD
           python source/script/test_windows_candidate.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python source/script/test_windows_msi.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install exact hash-pinned Windows dependencies
         shell: pwsh
@@ -66,7 +68,7 @@ jobs:
         run: |
           $python = (Get-Command python).Source
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
-          python source/script/build_windows_candidate.py --source source --python $python --output $output
+          python source/script/build_windows_candidate.py --source source --python $python --output $output --legal-root .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise frozen GUI startup and normal close
         shell: pwsh
@@ -99,6 +101,60 @@ jobs:
             $process.Refresh()
             if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
           }
+      - name: Identify WiX 3 and build private per-user MSI
+        shell: pwsh
+        run: |
+          $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
+          $candle = Join-Path $wixBin 'candle.exe'
+          $light = Join-Path $wixBin 'light.exe'
+          if (-not (Test-Path $candle) -or -not (Test-Path $light)) { throw 'WiX 3.14 compiler/linker missing from standard runner' }
+          $candleVersion = (Get-Item $candle).VersionInfo.FileVersion
+          $lightVersion = (Get-Item $light).VersionInfo.FileVersion
+          if ($candleVersion -notlike '3.14.*' -or $lightVersion -notlike '3.14.*') { throw 'Unexpected WiX compiler/linker version' }
+          "RUNNER_IMAGE=$env:ImageOS/$env:ImageVersion"
+          "WIX_CANDLE=$candleVersion WIX_LIGHT=$lightVersion"
+          $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          $package = Join-Path $candidate 'wrapper-dist\AmplifaiPhone'
+          $receipt = Join-Path $candidate 'candidate-receipt.json'
+          $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
+          python source/script/build_windows_msi.py --package $package --receipt $receipt --output $installer --candle $candle --light $light
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install, verify and uninstall under runner user
+        shell: pwsh
+        run: |
+          $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc12-unsigned.msi'
+          $receipt = Join-Path $candidate 'candidate-receipt.json'
+          $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
+          if (Test-Path $installed) { throw 'Per-user install path is not clean' }
+          $installLog = Join-Path $installer 'msi-install.log'
+          $install = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart /L*V `"$installLog`"" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "MSI install failed: $($install.ExitCode)" }
+          python source/script/verify_windows_install.py --install $installed --receipt $receipt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $uninstallLog = Join-Path $installer 'msi-uninstall.log'
+          $uninstall = Start-Process -FilePath msiexec.exe -ArgumentList "/x `"$msi`" /qn /norestart /L*V `"$uninstallLog`"" -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "MSI uninstall failed: $($uninstall.ExitCode)" }
+          python source/script/verify_windows_install.py --install $installed --receipt $receipt --removed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          'Private unsigned MSI installed and uninstalled under runner user; no phone/app launch.'
+      - name: Retain exact unsupported candidate in private draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'windows-rc12-private-' + $env:GITHUB_SHA.Substring(0, 12)
+          $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc12-unsigned.msi'
+          $msiReceipt = Join-Path $installer 'msi-receipt.json'
+          $frozenReceipt = Join-Path $candidate 'candidate-receipt.json'
+          gh release create $tag "$msi#AmplifaiPhone-rc12-unsigned.msi" "$msiReceipt#msi-receipt.json" "$frozenReceipt#candidate-receipt.json" --draft --target $env:GITHUB_SHA --title 'Windows rc12 private unsigned candidate' --notes 'Private unsupported qualification only. Unsigned per-user MSI; no customer download. Apple USB driver, normal non-admin user, DPI/accessibility, physical iPhone and authenticated account Save/ACK remain unverified.'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $draft = gh release view $tag --json isDraft --jq '.isDraft'
+          if ($LASTEXITCODE -ne 0 -or $draft.Trim() -ne 'true') { throw 'Retained release is not draft' }
+          "PRIVATE_DRAFT_TAG=$tag"
       - name: Show bounded freezer diagnostics on failure
         if: failure()
         shell: pwsh
@@ -106,5 +162,10 @@ jobs:
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           foreach ($name in @('helper-freeze.log', 'wrapper-freeze.log')) {
             $log = Join-Path $output $name
+            if (Test-Path $log) { Get-Content $log -Tail 35 }
+          }
+          $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
+          foreach ($name in @('wix-compile.log', 'wix-link.log', 'msi-install.log', 'msi-uninstall.log')) {
+            $log = Join-Path $installer $name
             if (Test-Path $log) { Get-Content $log -Tail 35 }
           }

@@ -12,7 +12,7 @@ import re
 import sqlite3
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import closing, contextmanager, nullcontext
+from contextlib import AbstractContextManager, closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -215,8 +215,9 @@ def _private_index(path: Path, prefix: str) -> Iterator[sqlite3.Connection]:
 def read_contacts(
     path: Path, check_callback: Callable[[], None] | None = None,
     store: RecordStore | None = None,
+    *, open_connection: Callable[[Path], AbstractContextManager] | None = None,
 ) -> SourceResult:
-    with _open_readonly(path) as db:
+    with (open_connection or _open_readonly)(path) as db:
         _require_columns(db, "ABPerson", {"ROWID", "First", "Last"})
         _require_columns(db, "ABMultiValue", {"record_id", "property", "value"})
         # The selected database is already inside the app-owned private parsing
@@ -305,8 +306,9 @@ def read_contacts(
 def read_calls(
     path: Path, since: datetime, check_callback: Callable[[], None] | None = None,
     store: RecordStore | None = None,
+    *, open_connection: Callable[[Path], AbstractContextManager] | None = None,
 ) -> SourceResult:
-    with _open_readonly(path) as db:
+    with (open_connection or _open_readonly)(path) as db:
         _require_columns(
             db,
             "ZCALLRECORD",
@@ -361,8 +363,9 @@ def read_calls(
 def read_messages(
     path: Path, since: datetime, check_callback: Callable[[], None] | None = None,
     store: RecordStore | None = None,
+    *, open_connection: Callable[[Path], AbstractContextManager] | None = None,
 ) -> SourceResult:
-    with _open_readonly(path) as db:
+    with (open_connection or _open_readonly)(path) as db:
         _require_columns(db, "message", {"date", "service", "is_from_me", "handle_id"})
         _require_columns(db, "handle", {"ROWID", "id"})
         has_chat = all(

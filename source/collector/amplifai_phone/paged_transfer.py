@@ -83,6 +83,8 @@ class PagedTransfer:
                 "schema": 2, "platform": "iphone", "since": capture.since,
                 "collectedAt": capture.collected_at,
                 "missingSources": list(capture.missing_sources),
+                "backupEncrypted": capture.backup_encrypted,
+                "unavailableReasons": dict(capture.unavailable_reasons),
                 "sampleContactNames": samples, "sources": sources,
             }
             self.sha256 = hashlib.sha256(_encode(self.manifest)).hexdigest()

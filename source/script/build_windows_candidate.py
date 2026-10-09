@@ -24,6 +24,11 @@ ENTRY = "collector/agent_entry.py"
 EXPECTED_LOGO_SHA256 = "07dabb73a6c03cb400079b05fc2ac7b26042529674f0fe56f261f2028e731dce"
 EXPECTED_LOCK_SHA256 = "aa8ee933827681ebda483c2a889dc6156f7d9de906fe21d90f055fd06939c95d"
 MAX_HELPER_PACKET_BYTES = 65536
+LEGAL_FILES = ("COPYRIGHT", "LICENSE", "THIRD-PARTY-NOTICES.txt")
+WORKER_MODES = {
+    "contacts-worker": "--internal-contacts-size-validation",
+    "messages-worker": "--internal-messages-size-validation",
+}
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
@@ -66,6 +71,10 @@ def gui_digest(source: Path) -> str:
     return digest.hexdigest()
 
 
+def legal_records(root: Path) -> dict[str, str]:
+    return {relative: _sha256(_source_file(root, relative)) for relative in LEGAL_FILES}
+
+
 def clean_child_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
@@ -90,7 +99,7 @@ def freezer_command(*, python: Path, source: Path, build: Path, window: bool) ->
 
 
 def parse_helper_packet(data: bytes, mode: str) -> dict:
-    if mode not in {"runtime-check", "inspect"}:
+    if mode not in {"runtime-check", "inspect", *WORKER_MODES}:
         raise ValueError("invalid inspection mode")
     if len(data) > MAX_HELPER_PACKET_BYTES or data.count(b"\n") != 1 or not data.endswith(b"\n"):
         raise ValueError("invalid helper frame")
@@ -104,6 +113,8 @@ def parse_helper_packet(data: bytes, mode: str) -> dict:
         raise ValueError("frozen helper runtime is not ready")
     if mode == "inspect" and (packet.get("kind") != "residue" or packet.get("sessions") != []):
         raise ValueError("frozen helper has residue or could not inspect it")
+    if mode in WORKER_MODES and packet != {"code": "unsafe"}:
+        raise ValueError("internal validation worker did not reject empty input")
     return packet
 
 
@@ -144,12 +155,13 @@ def _run(command: list[str], *, cwd: Path, log: Path | None, timeout_seconds: in
     return result.stdout
 
 
-def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
+def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Path) -> dict:
     if sys.platform != "win32" or sys.version_info[:2] != (3, 12) or struct.calcsize("P") != 8:
         raise RuntimeError("candidate build requires Windows x64 CPython 3.12")
     source = source.absolute()
     python = python.absolute()
     output = output.absolute()
+    legal_root = legal_root.absolute()
     if output == source or source in output.parents:
         raise ValueError("candidate output must be outside source")
     _checked(source, directory=True)
@@ -159,6 +171,7 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
     lock = _source_file(source, LOCK)
     _source_file(source, ENTRY)
     source_digest = gui_digest(source)
+    legal = legal_records(legal_root)
     if _sha256(logo) != EXPECTED_LOGO_SHA256:
         raise ValueError("Original logo bytes differ from the fixed package input")
     if _sha256(lock) != EXPECTED_LOCK_SHA256:
@@ -182,6 +195,12 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
     resources.mkdir()
     shutil.copytree(helper, resources / "phone-helper")
     shutil.copy2(logo, resources / Path(LOGO).name)
+    legal_destination = resources / "legal"
+    legal_destination.mkdir()
+    for name in LEGAL_FILES:
+        shutil.copy2(_source_file(legal_root, name), legal_destination / name)
+        if _sha256(legal_destination / name) != legal[name]:
+            raise ValueError("staged legal file bytes changed")
     if _sha256(resources / Path(LOGO).name) != EXPECTED_LOGO_SHA256:
         raise ValueError("staged original logo bytes changed")
     frozen_helper = resources / "phone-helper/AmplifaiPhoneHelper.exe"
@@ -190,6 +209,10 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
             [str(frozen_helper), mode], cwd=frozen_helper.parent,
             log=None, timeout_seconds=60,
         )
+        parse_helper_packet(packet, mode)
+    for mode, flag in WORKER_MODES.items():
+        packet = _run([str(frozen_helper), flag], cwd=frozen_helper.parent,
+                      log=None, timeout_seconds=15)
         parse_helper_packet(packet, mode)
     records = file_records(package)
     inventory_sha256 = hashlib.sha256(
@@ -201,6 +224,8 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
         "entry_sha256": _sha256(source / ENTRY),
         "lock_sha256": EXPECTED_LOCK_SHA256,
         "logo_sha256": EXPECTED_LOGO_SHA256,
+        "legal_sha256": legal,
+        "worker_modes_inspected": list(WORKER_MODES),
         "package_files": len(records),
         "package_bytes": sum(int(record["bytes"]) for record in records),
         "package_inventory_sha256": inventory_sha256,
@@ -215,8 +240,10 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--python", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--legal-root", type=Path, required=True)
     args = parser.parse_args()
-    result = build_candidate(source=args.source, python=args.python, output=args.output)
+    result = build_candidate(source=args.source, python=args.python, output=args.output,
+                             legal_root=args.legal_root)
     print(json.dumps({key: value for key, value in result.items() if key != "files"}, sort_keys=True))
     return 0
 

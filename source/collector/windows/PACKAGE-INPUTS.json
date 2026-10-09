@@ -1,8 +1,11 @@
 {
-  "status": "source-candidate-only",
-  "baseRelease": "macos-2026.10.08-rc9 + android-2026.10.08-rc6 shared engine",
+  "status": "private-unsigned-per-user-installer-candidate-not-supported-download",
+  "baseRelease": "macos-2026.10.09-rc12-compatible helper; android-2026.10.08-rc8 separate website app",
   "windowEntrypoint": "collector/windows/app.py",
-  "pythonModules": ["collector/windows/session.py", "collector/windows/helper_process.py"],
+  "pythonModules": [
+    "collector/windows/session.py",
+    "collector/windows/helper_process.py"
+  ],
   "runtime": "Windows x64 CPython 3.12 with bundled Tcl/Tk; frozen helper and window runtimes are separate",
   "reviewProtocol": "200-contact searchable preview pages, cross-page selected IDs, 1000-ID review pages with exact UUID and SHA-256 selection binding; browser v2 immutable source pages and verified saved ACK remain in the shared engine",
   "newPythonDependencies": [],
@@ -12,9 +15,34 @@
   "resourceChecks": "frozen-only fixed paths, no symlink/reparse resource entries, readable contained runtime; shape checks do not replace build/hash/signature qualification",
   "childRuntime": "fixed helper executable with helper-directory cwd, private stdin/stdout, discarded stderr, shell=false, fresh copied env without PYTHONPATH/PYTHONHOME and PYINSTALLER_RESET_ENVIRONMENT=1",
   "resources": [
-    {"source": "public/brand/amplifai-by-nexus-original.png", "destination": "resources/amplifai-by-nexus-original.png", "transform": "none"},
-    {"sourceOwner": "script/build_windows_candidate.py", "destination": "resources/phone-helper/", "contract": "entire matching frozen AmplifaiPhoneHelper onedir including AmplifaiPhoneHelper.exe and its matching _internal/; not an isolated copied executable or source/PATH fallback"}
+    {
+      "source": "public/brand/amplifai-by-nexus-original.png",
+      "destination": "resources/amplifai-by-nexus-original.png",
+      "transform": "none"
+    },
+    {
+      "sourceOwner": "script/build_windows_candidate.py",
+      "destination": "resources/phone-helper/",
+      "contract": "entire matching frozen AmplifaiPhoneHelper onedir including AmplifaiPhoneHelper.exe and its matching _internal/; not an isolated copied executable or source/PATH fallback"
+    },
+    {
+      "sourceOwner": "script/build_windows_candidate.py",
+      "destination": "resources/legal/",
+      "contract": "exact COPYRIGHT, LICENSE and THIRD-PARTY-NOTICES.txt byte hashes from rc12 source root"
+    }
   ],
-  "install": "Per-user non-admin installer and signed distribution remain unqualified; no public download",
-  "releaseGates": ["Windows GUI freeze/build", "Tcl/Tk runtime inclusion", "complete matching helper runtime/dependency hashes and driver qualification", "non-elevated private Windows ACL/PID ownership", "cooperative capture cancellation", "normal per-user installer/SmartScreen path", "signed source/archive hashes", "physical iPhone Trust/password path", "exact-origin authenticated browser receipt/save ACK", "rendered accessibility and DPI qualification"]
+  "install": "WiX 3 per-user limited-privilege MSI to LocalAppDataFolder, unsigned and private draft only; normal non-admin/SmartScreen/driver and physical account acceptance remain unqualified.",
+  "releaseGates": [
+    "Windows GUI freeze/build",
+    "Tcl/Tk runtime inclusion",
+    "complete matching helper runtime/dependency hashes and driver qualification",
+    "non-elevated private Windows ACL/PID ownership",
+    "cooperative capture cancellation",
+    "normal per-user installer/SmartScreen path",
+    "signed source/archive hashes",
+    "physical iPhone Trust/password path",
+    "exact-origin authenticated browser receipt/save ACK",
+    "rendered accessibility and DPI qualification"
+  ],
+  "windowProtocol": "Manual one-time code, 200-contact UI pages, 1000 selected IDs/review command. Mac rc12 all-page buttons and no-code confirmed destination are absent in this Tk wrapper; web falls back on missing v3 discovery."
 }
