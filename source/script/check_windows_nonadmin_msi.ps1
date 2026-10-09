@@ -7,7 +7,6 @@ $ErrorActionPreference = 'Stop'
 $name = 'ampfiqa' + $env:GITHUB_RUN_ID.Substring([Math]::Max(0, $env:GITHUB_RUN_ID.Length - 5))
 $password = ConvertTo-SecureString (([Guid]::NewGuid().ToString('N')) + 'aA1!') -AsPlainText -Force
 $user = $null
-$credential = $null
 $profile = $null
 $installed = $null
 $installExit = $null
@@ -23,11 +22,10 @@ $packageRemoved = $false
 $firstFailure = $null
 $firstFailureHResult = $null
 $firstFailureNativeCode = $null
-$stage = 'create-disposable-user'
+$stage = 'load-profiled-process-helper'
 $accountRemoved = $false
 $stagedMsi = $null
 $tokenFile = Join-Path $env:RUNNER_TEMP 'amplifai-nonadmin-token-private.json'
-$tokenErrorFile = Join-Path $env:RUNNER_TEMP 'amplifai-nonadmin-token-error-private.txt'
 $installLog = $null
 $uninstallLog = $null
 function Get-BoundedMsiCodes([string]$path) {
@@ -46,29 +44,31 @@ function Get-BoundedMsiFailureActions([string]$path) {
   }
   return @($actions | Sort-Object | Select-Object -First 8)
 }
-function Get-BoundedChildError([string]$path) {
-  if (-not (Test-Path $path)) { return 'no-child-error-output' }
-  $message = Get-Content $path -Raw
-  if ($message -match '(?i)ParserError|Missing.*(?:expression|statement)|Unexpected token') { return 'child-script-parser-error' }
-  if ($message -match '(?i)Add-Type|csc\.exe|compiler') { return 'child-dynamic-compiler-error' }
-  if ($message -match '(?i)Access is denied|UnauthorizedAccess') { return 'child-access-denied' }
-  if ($message -match '(?i)profile|folder') { return 'child-profile-resolution-error' }
-  if ([string]::IsNullOrWhiteSpace($message)) { return 'empty-child-error-output' }
-  return 'other-child-error'
-}
 $childErrorReason = $null
+$cleanupFailureReason = $null
 try {
+  . (Resolve-Path 'source/script/windows_profile_process.ps1').Path
+  $stage = 'create-disposable-user'
   $user = New-LocalUser -Name $name -Password $password -Description 'Disposable AMPLIFai MSI acceptance fixture'
   $administrators = Get-LocalGroup -SID 'S-1-5-32-544'
   $isAdmin = Get-LocalGroupMember -Group $administrators.Name | Where-Object { $_.SID.Value -eq $user.SID.Value }
   if ($isAdmin) { throw 'Disposable account unexpectedly has administrative membership' }
-  $credential = [pscredential]::new(".\$name", $password)
   $stage = 'probe-standard-user-token'
+  New-Item -ItemType File -Path $tokenFile -ErrorAction Stop | Out-Null
+  $tokenAcl = Get-Acl -LiteralPath $tokenFile
+  $tokenRule = [Security.AccessControl.FileSystemAccessRule]::new($user.SID, [Security.AccessControl.FileSystemRights]::Modify, [Security.AccessControl.AccessControlType]::Allow)
+  $tokenAcl.AddAccessRule($tokenRule)
+  Set-Acl -LiteralPath $tokenFile -AclObject $tokenAcl
   $probe = (Resolve-Path 'source/script/windows_nonadmin_child_probe.ps1').Path
-  $child = Start-Process -FilePath (Get-Command pwsh.exe).Source -Credential $credential -LoadUserProfile -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', "`"$probe`"") -RedirectStandardOutput $tokenFile -RedirectStandardError $tokenErrorFile -Wait -PassThru
-  if ($child.ExitCode -ne 0) {
-    $childErrorReason = Get-BoundedChildError $tokenErrorFile
-    throw "Standard-user token probe failed: $($child.ExitCode)"
+  $probeArguments = "-NoLogo -NoProfile -NonInteractive -File `"$probe`" -OutputPath `"$tokenFile`""
+  $probeExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command pwsh.exe).Source -Arguments $probeArguments -WorkingDirectory (Get-Location).Path
+  if ($probeExit -ne 0) {
+    if (Test-Path -LiteralPath $tokenFile) {
+      $childError = Get-Content -Raw -LiteralPath $tokenFile | ConvertFrom-Json
+      $childErrorReason = $childError.errorReason
+    }
+    if (-not $childErrorReason) { $childErrorReason = 'no-child-error-receipt' }
+    throw "Standard-user token probe failed: $probeExit"
   }
   $token = Get-Content -Raw $tokenFile | ConvertFrom-Json
   if ($token.sid -ne $user.SID.Value -or $token.enabledAdministratorRole -ne $false) { throw 'Child process token is not the disposable standard user' }
@@ -101,8 +101,7 @@ try {
   $uninstallLog = Join-Path $token.tokenKnownLocalAppData 'amplifai-nonadmin-uninstall.log'
 
   $stage = 'install-private-msi'
-  $install = Start-Process -FilePath (Get-Command msiexec.exe).Source -Credential $credential -LoadUserProfile -ArgumentList "/i `"$stagedMsi`" /qn /norestart /L*V `"$installLog`"" -Wait -PassThru
-  $installExit = $install.ExitCode
+  $installExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/i `"$stagedMsi`" /qn /norestart /L*V `"$installLog`"" -WorkingDirectory (Get-Location).Path
   if ($installExit -ne 0) { throw "Standard-user MSI install failed: $installExit" }
   $stage = 'verify-installed-frozen-inventory'
   python source/script/verify_windows_install.py --install $installed --receipt $FrozenReceipt
@@ -110,8 +109,7 @@ try {
   $inventoryVerified = $true
 
   $stage = 'uninstall-private-msi'
-  $uninstall = Start-Process -FilePath (Get-Command msiexec.exe).Source -Credential $credential -LoadUserProfile -ArgumentList "/x `"$stagedMsi`" /qn /norestart /L*V `"$uninstallLog`"" -Wait -PassThru
-  $uninstallExit = $uninstall.ExitCode
+  $uninstallExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/x `"$stagedMsi`" /qn /norestart /L*V `"$uninstallLog`"" -WorkingDirectory (Get-Location).Path
   if ($uninstallExit -ne 0) { throw "Standard-user MSI uninstall failed: $uninstallExit" }
   $stage = 'verify-no-installed-package-residue'
   python source/script/verify_windows_install.py --install $installed --receipt $FrozenReceipt --removed
@@ -120,12 +118,15 @@ try {
 } catch {
   $firstFailure = $stage
   $firstFailureHResult = $_.Exception.HResult
-  if ($_.Exception.InnerException -is [System.ComponentModel.Win32Exception]) { $firstFailureNativeCode = $_.Exception.InnerException.NativeErrorCode }
+  if ($_.Exception -is [System.ComponentModel.Win32Exception]) { $firstFailureNativeCode = $_.Exception.NativeErrorCode }
+  elseif ($_.Exception.InnerException -is [System.ComponentModel.Win32Exception]) { $firstFailureNativeCode = $_.Exception.InnerException.NativeErrorCode }
   Write-Error "Focused standard-user check failed at $stage (HRESULT $firstFailureHResult; native $firstFailureNativeCode)" -ErrorAction Continue
 } finally {
-  if ($credential -and $installed -and (Test-Path $installed) -and -not $packageRemoved) {
-    $cleanup = Start-Process -FilePath (Get-Command msiexec.exe).Source -Credential $credential -LoadUserProfile -ArgumentList "/x `"$stagedMsi`" /qn /norestart /L*V `"$uninstallLog`"" -Wait -PassThru -ErrorAction SilentlyContinue
-    if ($cleanup -and $cleanup.ExitCode -eq 0) { $packageRemoved = -not (Test-Path $installed) }
+  if ($user -and $stagedMsi -and $installed -and (Test-Path $installed) -and -not $packageRemoved -and (Get-Command Invoke-ProfiledProcess -ErrorAction SilentlyContinue)) {
+    try {
+      $cleanupExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/x `"$stagedMsi`" /qn /norestart /L*V `"$uninstallLog`"" -WorkingDirectory (Get-Location).Path
+      if ($cleanupExit -eq 0) { $packageRemoved = -not (Test-Path $installed) }
+    } catch { $cleanupFailureReason = 'profiled-uninstall-retry-failed' }
   }
   $installCodes = @(Get-BoundedMsiCodes $installLog)
   $uninstallCodes = @(Get-BoundedMsiCodes $uninstallLog)
@@ -166,10 +167,11 @@ try {
     firstFailureHResult = $firstFailureHResult
     firstFailureNativeCode = $firstFailureNativeCode
     childErrorReason = $childErrorReason
+    cleanupFailureReason = $cleanupFailureReason
+    processLaunchMode = 'CreateProcessWithLogonW-profiled-null-environment'
   }
   $receipt | ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8 (Join-Path $env:RUNNER_TEMP 'nonadmin-receipt.json')
   Remove-Item $tokenFile -Force -ErrorAction SilentlyContinue
-  Remove-Item $tokenErrorFile -Force -ErrorAction SilentlyContinue
 }
 if ($firstFailure) { exit 1 }
 $receipt.status
