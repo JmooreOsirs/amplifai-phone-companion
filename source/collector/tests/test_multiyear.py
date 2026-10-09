@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import http.client
 import json
 import sqlite3
@@ -33,19 +35,19 @@ class MultiYearPhoneTest(unittest.TestCase):
             )
             base = datetime(2023, 1, 1, tzinfo=timezone.utc)
             phone = lambda index: f"555{index + 1:07d}"
-            with sqlite3.connect(contacts_path) as db:
+            with closing(sqlite3.connect(contacts_path)) as db, db:
                 db.execute("CREATE TABLE ABPerson (First TEXT, Last TEXT)")
                 db.execute("CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)")
                 db.executemany("INSERT INTO ABPerson VALUES (?, ?)",
                                ((f"Person {index}", "Synthetic") for index in range(500)))
                 db.executemany("INSERT INTO ABMultiValue VALUES (?, 3, ?)",
                                ((index + 1, phone(index)) for index in range(500)))
-            with sqlite3.connect(calls_path) as db:
+            with closing(sqlite3.connect(calls_path)) as db, db:
                 db.execute("CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)")
                 db.executemany("INSERT INTO ZCALLRECORD VALUES (?, 42, ?, 0, 1)",
                                ((cocoa(base + timedelta(days=index % 1200)), phone(index % 500))
                                 for index in range(12_000)))
-            with sqlite3.connect(messages_path) as db:
+            with closing(sqlite3.connect(messages_path)) as db, db:
                 db.execute("CREATE TABLE handle (id TEXT)")
                 db.execute("CREATE TABLE message (date INTEGER, service TEXT, is_from_me INTEGER, handle_id INTEGER, text TEXT)")
                 db.executemany("INSERT INTO handle VALUES (?)", ((phone(index),) for index in range(500)))

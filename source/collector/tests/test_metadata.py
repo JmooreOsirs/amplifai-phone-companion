@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
 import sqlite3
 import tempfile
@@ -42,7 +44,7 @@ class MetadataTest(unittest.TestCase):
 
     def make_db(self, name: str, statements: list[str]) -> Path:
         path = self.root / name
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             for statement in statements:
                 db.execute(statement)
         return path
@@ -54,7 +56,7 @@ class MetadataTest(unittest.TestCase):
                 "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)"
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executemany("INSERT INTO ZCALLRECORD VALUES (?, ?, ?, ?, ?)", rows)
         return path
 
@@ -63,7 +65,7 @@ class MetadataTest(unittest.TestCase):
             "CREATE TABLE ABPerson (First TEXT, Last TEXT, Note TEXT)",
             "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
         ])
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executemany("INSERT INTO ABPerson VALUES (?, ?, ?)",
                            [(f"Person {index}", "Example", "SECRET-NOTE") for index in range(5)])
             db.executemany("INSERT INTO ABMultiValue VALUES (?, 3, ?)",
@@ -87,7 +89,7 @@ class MetadataTest(unittest.TestCase):
             "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
             "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
         ])
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute("INSERT INTO ABPerson VALUES (?, NULL)", (full_name,))
             db.execute("INSERT INTO ABMultiValue VALUES (1, 3, '+15551234567')")
         store = RecordStore(self.root / "long-contact-sanitized.sqlite3")
@@ -172,7 +174,7 @@ class MetadataTest(unittest.TestCase):
                 for duration in (10, float("nan"), 20)
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             value, storage_type = db.execute(
                 "SELECT ZDURATION, typeof(ZDURATION) FROM ZCALLRECORD WHERE ROWID = ?",
                 (2,),
@@ -247,7 +249,7 @@ class MetadataTest(unittest.TestCase):
                         "INSERT INTO ABPerson VALUES ('Many', 'Values')",
                     ],
                 )
-                with sqlite3.connect(path) as db:
+                with closing(sqlite3.connect(path)) as db, db:
                     db.executemany(
                         "INSERT INTO ABMultiValue VALUES (1, ?, ?)",
                         [(property_id, value) for value in values[:20]],
@@ -261,7 +263,7 @@ class MetadataTest(unittest.TestCase):
                     ),
                     20,
                 )
-                with sqlite3.connect(path) as db:
+                with closing(sqlite3.connect(path)) as db, db:
                     db.execute(
                         "INSERT INTO ABMultiValue VALUES (1, ?, ?)",
                         (property_id, values[20]),
@@ -282,7 +284,7 @@ class MetadataTest(unittest.TestCase):
                 "INSERT INTO ABMultiValue VALUES (1, 3, '5551234567')",
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executemany(
                 "INSERT INTO ABMultiValue VALUES (?, 3, ?)",
                 ((index, f"+1202555{index:07d}") for index in range(2, 80_002)),
@@ -422,7 +424,7 @@ class MetadataTest(unittest.TestCase):
                 "INSERT INTO chat_message_join VALUES (1, 7)",
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             for index in range(1, 52):
                 db.execute("INSERT INTO handle VALUES (?)", (f"+1555{index:07d}",))
                 db.execute("INSERT INTO chat_handle_join VALUES (7, ?)", (index,))
@@ -461,7 +463,7 @@ class MetadataTest(unittest.TestCase):
             [("+15551234567", "+15559876543")] * 2,
         )
         self.assertNotIn("SECRET", repr(result))
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute("INSERT INTO chat_message_join VALUES (1, 7)")
             db.execute("INSERT INTO chat_message_join VALUES (1, 7)")
         with (
@@ -487,7 +489,7 @@ class MetadataTest(unittest.TestCase):
         )
         unmatched = read_messages(path, self.since)
         self.assertEqual((unmatched.rows_seen, unmatched.excluded), (1, 1))
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute("UPDATE chat_message_join SET chat_id = '7'")
         matched = read_messages(path, self.since)
         self.assertEqual(matched.records[0].participants, ("+15551234567",))
@@ -506,7 +508,7 @@ class MetadataTest(unittest.TestCase):
                 "INSERT INTO chat_message_join VALUES (1, 7)",
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executemany(
                 "INSERT INTO chat_message_join VALUES (?, 7)",
                 ((index,) for index in range(2, 80_002)),

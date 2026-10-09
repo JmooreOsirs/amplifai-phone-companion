@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
 import io
 import json
+import os
 import plistlib
 import sqlite3
 import struct
@@ -86,13 +89,14 @@ class StreamedFileTest(unittest.TestCase):
                 self.assertEqual(destination.read_bytes(), expected)
                 self.assertEqual(copied, len(expected))
                 self.assertLessEqual(max(counts), 128 * 1024)
-                self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+                if os.name != "nt":
+                    self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
 
     def test_encrypted_manifest_matches_sdk_without_entry_unpadding(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-crypto-test-") as temporary:
             root = Path(temporary)
             source = root / "manifest"
-            with sqlite3.connect(source) as db:
+            with closing(sqlite3.connect(source)) as db, db:
                 db.execute("CREATE TABLE Files (fileID TEXT)")
             plaintext = source.read_bytes()
             wrapping, key = b"w" * 32, b"k" * 32
@@ -106,7 +110,7 @@ class StreamedFileTest(unittest.TestCase):
             self.assertEqual(
                 destination.read_bytes(), keybag.decrypt(ciphertext, wrapped)
             )
-            with sqlite3.connect(destination) as db:
+            with closing(sqlite3.connect(destination)) as db, db:
                 self.assertEqual(
                     db.execute("SELECT COUNT(*) FROM Files").fetchone()[0], 0
                 )
@@ -278,7 +282,7 @@ class StreamedFileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="amplifai-bad-padding-") as temporary:
             root = Path(temporary)
             manifest_source = root / "synthetic-manifest"
-            with sqlite3.connect(manifest_source) as db:
+            with closing(sqlite3.connect(manifest_source)) as db, db:
                 db.execute(
                     "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB)"
                 )

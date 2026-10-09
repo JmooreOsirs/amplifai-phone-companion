@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import asyncio
 import plistlib
 import sqlite3
@@ -348,7 +350,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)
         with tempfile.TemporaryDirectory(prefix="amplifai-malformed-sms-") as temporary:
             extracted = Path(temporary)
-            with sqlite3.connect(extracted / "messages") as db:
+            with closing(sqlite3.connect(extracted / "messages")) as db, db:
                 db.execute("CREATE TABLE message (text TEXT)")
             with (
                 patch("amplifai_phone.ios_backup._extract_database", return_value=True),
@@ -392,7 +394,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             for name in ("Status.plist", "Info.plist"):
                 (backup_path / name).write_bytes(plistlib.dumps({}))
             manifest_path = backup_path / "Manifest.db"
-            with sqlite3.connect(manifest_path) as db:
+            with closing(sqlite3.connect(manifest_path)) as db, db:
                 db.execute(
                     "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
                     "flags INTEGER, file BLOB)"
@@ -428,7 +430,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             ):
                 (backup_path / name).write_bytes(plistlib.dumps(value))
             manifest_path = backup_path / "Manifest.db"
-            with sqlite3.connect(manifest_path) as db:
+            with closing(sqlite3.connect(manifest_path)) as db, db:
                 db.execute(
                     "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
                     "flags INTEGER, file BLOB)"
@@ -796,11 +798,12 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 "amplifai_phone.ios_backup.parse_selected_backup", return_value=expected
             ),
         ):
-            await collect_iphone(
+            result = await collect_iphone(
                 password_provider=lambda: "",
                 connection_callback=transports.append,
                 sessions_root=Path(temporary) / "sessions",
             )
+            result.close()
         self.assertEqual(
             [call.kwargs["connection_type"] for call in connect.await_args_list],
             ["USB"],

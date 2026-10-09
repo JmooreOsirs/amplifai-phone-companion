@@ -8,6 +8,8 @@ device proof; received/save-state assertions do not qualify a real account save.
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
 import io
 import json
@@ -76,7 +78,7 @@ class NonfiniteDurationPipelineTest(unittest.TestCase):
         contacts, calls, messages = (
             self.root / name for name in ("contacts.db", "calls.db", "messages.db")
         )
-        with sqlite3.connect(contacts) as db:
+        with closing(sqlite3.connect(contacts)) as db, db:
             db.execute("CREATE TABLE ABPerson (First TEXT, Last TEXT, Note TEXT)")
             db.execute(
                 "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)"
@@ -89,7 +91,7 @@ class NonfiniteDurationPipelineTest(unittest.TestCase):
                 "INSERT INTO ABMultiValue VALUES (?, ?, ?)",
                 [(1, 3, PHONE_SELECTED), (2, 3, PHONE_UNSELECTED)],
             )
-        with sqlite3.connect(calls) as db:
+        with closing(sqlite3.connect(calls)) as db, db:
             db.execute(
                 "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)"
             )
@@ -102,7 +104,7 @@ class NonfiniteDurationPipelineTest(unittest.TestCase):
                     (WHEN, 30, PHONE_SELECTED, 0, 1),
                 ],
             )
-        with sqlite3.connect(messages) as db:
+        with closing(sqlite3.connect(messages)) as db, db:
             db.execute("CREATE TABLE handle (id TEXT)")
             db.execute(
                 "CREATE TABLE message (date INTEGER, service TEXT, is_from_me INTEGER, handle_id INTEGER, text TEXT, attributedBody BLOB)"
@@ -134,7 +136,7 @@ class NonfiniteDurationPipelineTest(unittest.TestCase):
             )
             (backup / "Status.plist").write_bytes(plistlib.dumps({}))
             (backup / "Info.plist").write_bytes(plistlib.dumps({}))
-            with sqlite3.connect(backup / "Manifest.db") as db:
+            with closing(sqlite3.connect(backup / "Manifest.db")) as db, db:
                 db.execute(
                     "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB)"
                 )
@@ -253,7 +255,7 @@ class NonfiniteDurationPipelineTest(unittest.TestCase):
     def test_actual_optional_call_schema_failure_preserves_valid_sources_and_cleans_up(
         self,
     ) -> None:
-        with sqlite3.connect(self.root / "unsupported.db") as db:
+        with closing(sqlite3.connect(self.root / "unsupported.db")) as db, db:
             db.execute("CREATE TABLE ZCALLRECORD (ZDATE REAL)")
         self.payloads[DATABASES["calls"]] = (self.root / "unsupported.db").read_bytes()
 
