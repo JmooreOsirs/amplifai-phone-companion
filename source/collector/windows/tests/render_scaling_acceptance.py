@@ -29,13 +29,16 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=False)
     root = tk.Tk()
     root.tk.call("tk", "scaling", 1.75)
-    root.geometry("680x680+30+30")
     with patch.object(app, "HelperProcess"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), logo)
+    # PhoneWindow sets its normal initial geometry; the acceptance viewport must win.
+    root.geometry("680x680+30+30")
     view.state = selected_review()
     view.render_contacts()
     view.refresh()
     root.update()
+    if (root.winfo_width(), root.winfo_height()) != (680, 680):
+        raise RuntimeError("Synthetic narrow acceptance viewport was not 680x680")
     canvas = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Canvas))
     left, right = canvas.winfo_rootx(), canvas.winfo_rootx() + canvas.winfo_width()
     for button in (view.approve, view.connect, view.decline_button, view.privacy_button):
