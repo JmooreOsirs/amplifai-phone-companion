@@ -53,8 +53,17 @@ class InstallerAuthoringTests(unittest.TestCase):
         self.assertEqual(len(files), len(records))
         self.assertEqual({Path(item.attrib["Source"]).relative_to(self.package).as_posix() for item in files},
                          {item["path"] for item in records})
-        self.assertEqual(len(tree.findall(".//w:ComponentRef", ns)), len(records))
+        components = tree.findall(".//w:Component", ns)
+        self.assertEqual(len(components), 5)
+        self.assertEqual(len(tree.findall(".//w:ComponentRef", ns)), len(components))
+        for component in components:
+            registry = component.find("w:RegistryValue", ns)
+            self.assertEqual(registry.attrib["Root"], "HKCU")
+            self.assertEqual(registry.attrib["KeyPath"], "yes")
+            self.assertIsNotNone(component.find("w:RemoveFolder", ns))
+            self.assertTrue(all("KeyPath" not in file.attrib for file in component.findall("w:File", ns)))
         self.assertEqual(len(tree.findall(".//w:Shortcut", ns)), 1)
+        self.assertIsNotNone(tree.find(".//w:RemoveFolder[@Directory='ApplicationProgramsFolder']", ns))
 
     def test_changed_payload_fails(self) -> None:
         (self.package / "AmplifaiPhone.exe").write_bytes(b"changed")

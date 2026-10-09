@@ -81,29 +81,46 @@ def author_xml(records: list[dict], package: Path) -> ET.ElementTree:
     app = ET.SubElement(local, tag("Directory"), {"Id": "INSTALLFOLDER", "Name": "AMPLIFaiPhone"})
     program_menu = ET.SubElement(target, tag("Directory"), {"Id": "ProgramMenuFolder"})
     ET.SubElement(program_menu, tag("Directory"), {"Id": "ApplicationProgramsFolder", "Name": "AMPLIFai Phone"})
+    paths = {""}
+    for item in records:
+        parent = Path(item["path"]).parent
+        if parent == Path("."):
+            continue
+        current = ""
+        for part in parent.parts:
+            current = part if not current else current + "/" + part
+            paths.add(current)
     directories = {"": app}
-    refs = []
+    for path in sorted(paths - {""}, key=lambda value: (value.count("/"), value.casefold())):
+        parent, _, name = path.rpartition("/")
+        identifier = "D" + hashlib.sha256(path.casefold().encode()).hexdigest()[:20]
+        directories[path] = ET.SubElement(directories[parent], tag("Directory"), {
+            "Id": identifier, "Name": name,
+        })
+    components = {}
+    for path in sorted(paths, key=lambda value: (value.count("/"), value.casefold())):
+        identity = hashlib.sha256((path or "root").casefold().encode()).hexdigest()[:20]
+        component_id = "C" + identity
+        component = ET.SubElement(directories[path], tag("Component"), {
+            "Id": component_id,
+            "Guid": str(uuid.uuid5(uuid.UUID(UPGRADE_CODE), "directory:" + path.casefold())).upper(),
+        })
+        ET.SubElement(component, tag("RegistryValue"), {
+            "Root": "HKCU", "Key": r"Software\Satoris\AMPLIFaiPhone\Components",
+            "Name": identity, "Value": "1", "Type": "integer", "KeyPath": "yes",
+        })
+        ET.SubElement(component, tag("RemoveFolder"), {
+            "Id": "R" + identity, "Directory": directories[path].attrib["Id"], "On": "uninstall",
+        })
+        components[path] = component
     for index, item in enumerate(records, 1):
         relative = item["path"]
         parent_name = Path(relative).parent.as_posix()
         parent_name = "" if parent_name == "." else parent_name
-        if parent_name not in directories:
-            current = ""
-            for part in Path(parent_name).parts:
-                child = part if not current else current + "/" + part
-                if child not in directories:
-                    identifier = "D" + hashlib.sha256(child.encode()).hexdigest()[:20]
-                    directories[child] = ET.SubElement(directories[current], tag("Directory"), {"Id": identifier, "Name": part})
-                current = child
-        file_id = f"F{index:06d}"
-        component_id = f"C{index:06d}"
-        component = ET.SubElement(directories[parent_name], tag("Component"), {
-            "Id": component_id,
-            "Guid": str(uuid.uuid5(uuid.UUID(UPGRADE_CODE), relative.lower())).upper(),
-        })
+        component = components[parent_name]
         ET.SubElement(component, tag("File"), {
-            "Id": file_id, "Name": Path(relative).name,
-            "Source": str(package / Path(relative)), "KeyPath": "yes",
+            "Id": f"F{index:06d}", "Name": Path(relative).name,
+            "Source": str(package / Path(relative)),
         })
         if relative == "AmplifaiPhone.exe":
             ET.SubElement(component, tag("Shortcut"), {
@@ -115,10 +132,9 @@ def author_xml(records: list[dict], package: Path) -> ET.ElementTree:
                 "Id": "RemoveApplicationProgramsFolder", "Directory": "ApplicationProgramsFolder",
                 "On": "uninstall",
             })
-        refs.append(component_id)
     feature = ET.SubElement(product, tag("Feature"), {"Id": "Complete", "Title": "AMPLIFai Phone", "Level": "1"})
-    for component_id in refs:
-        ET.SubElement(feature, tag("ComponentRef"), {"Id": component_id})
+    for component in components.values():
+        ET.SubElement(feature, tag("ComponentRef"), {"Id": component.attrib["Id"]})
     return ET.ElementTree(root)
 
 
