@@ -27,6 +27,9 @@ class PhoneWindow:
         self.checked = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value=self.state.status)
         self.pair_code = tk.StringVar(value="No browser pairing has been created.")
+        self.contact_query = tk.StringVar(value="")
+        self.contact_page = tk.StringVar(value="No contacts loaded.")
+        self._rendering_contacts = False
         self.window.title("AMPLIFai Phone · Windows source candidate")
         self.window.geometry("920x800")
         self.window.minsize(680, 680)
@@ -105,6 +108,17 @@ class PhoneWindow:
         self.password_button = ttk.Button(password_row, text="Send backup password privately", command=self.send_password)
         self.password_button.pack(side="left")
         self.label(outer, "Select contacts below. Nothing is selected by default; unavailable history is not zero activity.")
+        paging = ttk.Frame(outer)
+        paging.pack(fill="x", pady=(0, 8))
+        self.search_entry = ttk.Entry(paging, textvariable=self.contact_query, width=28)
+        self.search_entry.pack(side="left", padx=(0, 8))
+        self.search_button = ttk.Button(paging, text="Search names", command=self.search_contacts)
+        self.search_button.pack(side="left", padx=(0, 8))
+        self.previous_button = ttk.Button(paging, text="Previous", command=self.previous_contacts)
+        self.previous_button.pack(side="left", padx=(0, 8))
+        self.next_button = ttk.Button(paging, text="Next", command=self.next_contacts)
+        self.next_button.pack(side="left")
+        ttk.Label(outer, textvariable=self.contact_page).pack(anchor="w", pady=(0, 8))
         contact_frame = ttk.Frame(outer)
         contact_frame.pack(fill="both", expand=True)
         self.contacts = tk.Listbox(contact_frame, selectmode=tk.EXTENDED, exportselection=False, height=6, background=PANEL, foreground=HEADING, selectbackground=BLUE, selectforeground=BACKGROUND, highlightbackground=BORDER, highlightcolor=LIME, font=("Arial", 12), activestyle="underline")
@@ -153,9 +167,13 @@ class PhoneWindow:
             return
         self.checked.set(False)
         if mode == "connect":
+            self.contact_query.set("")
+            self.contact_page.set("No contacts loaded.")
+            self._rendering_contacts = True
             self.contacts.configure(state="normal")
             self.contacts.delete(0, tk.END)
             self.contacts.configure(state="disabled")
+            self._rendering_contacts = False
             self.clear_password()
         try:
             self.helper.start(mode)
@@ -195,18 +213,60 @@ class PhoneWindow:
         self.refresh()
 
     def selection_changed(self, _event=None) -> None:
-        self.send(self.state.invalidate_selection())
+        if self._rendering_contacts or not self.state.can_select:
+            return
+        try:
+            self.send(self.state.update_visible_selection(
+                [self.state.contacts[index]["id"] for index in self.contacts.curselection()]
+            ))
+        except (ProtocolError, IndexError):
+            self.state.status = "The displayed contact selection changed unexpectedly. Review again."
         self.refresh()
+
+    def render_contacts(self) -> None:
+        self._rendering_contacts = True
+        try:
+            self.contacts.configure(state="normal")
+            self.contacts.delete(0, tk.END)
+            for index, item in enumerate(self.state.contacts):
+                self.contacts.insert(tk.END, item["name"] + " · phone ending " + ", ".join(item["phoneEnds"]))
+                if item["id"] in self.state.selected_ids:
+                    self.contacts.selection_set(index)
+            self.contact_query.set(self.state.contact_query)
+            shown = len(self.state.contacts)
+            self.contact_page.set(
+                f"{shown} on this page · {self.state.total_contacts} total contacts · "
+                f"{len(self.state.selected_ids)} selected across pages"
+            )
+        finally:
+            self._rendering_contacts = False
+
+    def _page(self, method) -> None:
+        try:
+            self.send(method())
+        except ProtocolError:
+            self.state.status = "Wait for the current contact page before navigating."
+        self.refresh()
+
+    def search_contacts(self) -> None:
+        self._page(lambda: self.state.search_contacts(self.contact_query.get()))
+
+    def next_contacts(self) -> None:
+        self._page(self.state.next_contacts)
+
+    def previous_contacts(self) -> None:
+        self._page(self.state.previous_contacts)
 
     def review(self) -> None:
         try:
-            self.send(self.state.review([self.state.contacts[index]["id"] for index in self.contacts.curselection()]))
-        except (ProtocolError, IndexError):
+            self.send(self.state.review(sorted(self.state.selected_ids)))
+        except ProtocolError:
             self.state.status = "Select contacts and wait for any pending response before reviewing again."
         self.refresh()
 
     def pair(self) -> None:
-        if messagebox.askyesno("Share selected context?", "Create an exact-origin pairing for " + WEBSITE_ORIGIN + "? Only selected metadata is shared. Browser receipt is not account saving. Account saving requires separate verified permission there."):
+        replacing = " This replaces the current browser pairing." if self.state.handoff_id else ""
+        if messagebox.askyesno("Share selected context?", "Create an exact-origin pairing for " + WEBSITE_ORIGIN + "? Only selected metadata is shared. Browser receipt is not account saving. Account saving requires separate verified permission there." + replacing):
             try:
                 self.send(self.state.pair())
             except ProtocolError:
@@ -239,8 +299,8 @@ class PhoneWindow:
     def close(self) -> None:
         if self.state.running:
             messagebox.showinfo("Keep recovery visible", "Request stop first. Keep this window open until the owned helper exits, then inspect temporary data. Force stop does not confirm cleanup.")
-        elif self.state.contacts and not self.state.saved_acknowledged:
-            if messagebox.askyesno("Discard unsaved local review?", "Browser received is not saved. Closing discards this in-memory review, not account records or temporary backup files. Close anyway?"):
+        elif self.state._capture_received and not self.state.saved_acknowledged:
+            if messagebox.askyesno("Discard unsaved local review?", "Browser received is not saved. Closing discards the private local review, not account records or temporary backup files. Close anyway?"):
                 self.window.destroy()
         else:
             self.window.destroy()
@@ -253,7 +313,16 @@ class PhoneWindow:
         self.agreement.configure(state="disabled" if state.running else "normal")
         self.decline_button.configure(state="disabled" if state.running else "normal")
         self.contacts.configure(state="normal" if state.can_select else "disabled")
-        self.review_button.configure(state="normal" if state.can_review and self.contacts.curselection() else "disabled")
+        self.review_button.configure(state="normal" if state.can_review and state.selected_ids else "disabled")
+        self.search_entry.configure(state="normal" if state.can_select and state.pending_contact is None else "disabled")
+        self.search_button.configure(state="normal" if state.can_select and state.pending_contact is None else "disabled")
+        self.previous_button.configure(state="normal" if state.can_select and state.pending_contact is None and state.previous_contact_cursors else "disabled")
+        self.next_button.configure(state="normal" if state.can_select and state.pending_contact is None and state.next_contact_cursor is not None else "disabled")
+        if state._capture_received:
+            self.contact_page.set(
+                f"{len(state.contacts)} on this page · {state.total_contacts} total contacts · "
+                f"{len(state.selected_ids)} selected across pages"
+            )
         self.pair_button.configure(state="normal" if state.can_pair else "disabled")
         self.password_button.configure(state="normal" if state.phase == "password_required" else "disabled")
         self.password.configure(state="normal" if state.phase == "password_required" else "disabled")
@@ -276,12 +345,10 @@ class PhoneWindow:
                     if mode != "inspect":
                         self.start("inspect")
                 else:
-                    self.state.handle(event)
-                    if event.get("kind") == "capture" and self.state.phase == "selecting":
-                        self.contacts.configure(state="normal")
-                        self.contacts.delete(0, tk.END)
-                        for item in self.state.contacts:
-                            self.contacts.insert(tk.END, item["name"] + " · phone ending " + ", ".join(item["phoneEnds"]))
+                    command = self.state.handle(event)
+                    self.send(command)
+                    if event.get("kind") in {"capture", "contacts"} and self.state._capture_received:
+                        self.render_contacts()
                     if event.get("kind") == "review" and self.state.reviewed:
                         selected, calls, messages = self.state.review_counts
                         self.state.status += f" {selected} contacts · {calls} matching calls · {messages} matching messages. Unavailable: {', '.join(self.state.missing) or 'none reported; coverage remains partial'}."

@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Awaitable
 from typing import TypeVar
 
-from pymobiledevice3.exceptions import ConnectionTerminatedError
+from pymobiledevice3.exceptions import ConnectionTerminatedError, NotEnoughDiskSpaceError
 
 from . import backup_watchdog
 from .backup_stream import DeviceBackupRejected
@@ -91,6 +91,8 @@ def _reason(error: BaseException | None) -> str:
         return error.code
     if isinstance(error, DeviceBackupRejected):
         return "device_backup_failed"
+    if isinstance(error, NotEnoughDiskSpaceError):
+        return "backup_host_space"
     if isinstance(error, (ConnectionTerminatedError, ConnectionError)):
         return "connection_lost"
     if isinstance(error, TimeoutError):

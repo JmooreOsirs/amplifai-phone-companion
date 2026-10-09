@@ -1,5 +1,6 @@
 import io
 import json
+import hashlib
 import sys
 import unittest
 from pathlib import Path
@@ -9,6 +10,24 @@ from session import Session, ProtocolError
 from helper_process import HelperProcess
 
 BINDING = "11111111-1111-4111-8111-111111111111"
+
+
+def captured(state):
+    state.handle({"kind": "capture", "contacts": [{"id": 1, "name": "Avery Lindqvist",
+                  "phoneCount": 1, "phoneEnds": ["0123"]}], "query": "", "cursor": 0,
+                  "nextCursor": None, "totalContacts": 1,
+                  "availableCalls": 2, "availableMessages": 3, "missing": []})
+    state.update_visible_selection([1])
+
+
+def review_result(state, *, calls=2, messages=3):
+    command = state.review([1])
+    state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+    packet = {"kind": "review", "reviewId": command["reviewId"],
+              "selected_contacts": 1, "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+              "matched_calls": calls, "matched_messages": messages, "missing_sources": []}
+    state.handle(packet)
+    return packet
 
 
 def inspected():
@@ -23,9 +42,8 @@ def reviewed():
     state = inspected()
     state.approve(True)
     state.begin("connect")
-    state.handle({"kind": "capture", "contacts": [{"id": 1, "name": "Avery Lindqvist", "phoneCount": 1, "phoneEnds": ["0123"]}], "availableCalls": 2, "availableMessages": 3, "missing": []})
-    state.review([1])
-    state.handle({"kind": "review", "selected_contacts": 1, "matched_calls": 2, "matched_messages": 3, "missing_sources": []})
+    captured(state)
+    review_result(state)
     return state
 
 
@@ -51,12 +69,15 @@ class SessionTests(unittest.TestCase):
 
     def test_selection_must_be_reviewed_and_changed_selection_invalidates_pairing(self):
         state = reviewed()
-        state.review([1])
+        command = state.review([1])
         with self.assertRaises(ProtocolError):
             state.pair()
         with self.assertRaises(ProtocolError):
             state.review([999])
-        state.handle({"kind": "review", "selected_contacts": 1, "matched_calls": 2, "matched_messages": 3, "missing_sources": []})
+        state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+        state.handle({"kind": "review", "reviewId": command["reviewId"],
+                      "selected_contacts": 1, "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                      "matched_calls": 2, "matched_messages": 3, "missing_sources": []})
         self.assertEqual(state.pair(), {"action": "pair"})
 
     def test_received_is_not_saved_and_foreign_ack_cannot_complete(self):
@@ -70,6 +91,81 @@ class SessionTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             state.handle({"kind": "handoff", "state": "saved", "handoffId": "22222222-2222-4222-8222-222222222222"})
         self.assertFalse(state.saved_acknowledged)
+
+    def test_paged_preview_selects_more_than_25000_without_retaining_old_pages(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+        total = 25_001
+
+        def page(cursor):
+            end = min(cursor + 200, total)
+            return {"contacts": [{"id": index + 1, "name": f"Person {index + 1}",
+                                   "phoneCount": 1, "phoneEnds": ["0123"]}
+                                  for index in range(cursor, end)],
+                    "query": "", "cursor": cursor,
+                    "nextCursor": end if end < total else None, "totalContacts": total}
+
+        state.handle({"kind": "capture", **page(0), "availableCalls": 0,
+                      "availableMessages": 0, "missing": []})
+        for cursor in range(0, total, 200):
+            if cursor:
+                self.assertEqual(state.request_contacts("", cursor),
+                                 {"action": "contacts", "query": "", "cursor": cursor})
+                state.handle({"kind": "contacts", **page(cursor)})
+            state.update_visible_selection([item["id"] for item in state.contacts])
+            self.assertLessEqual(len(state.contacts), 200)
+        self.assertEqual(len(state.selected_ids), total)
+        command = state.review(sorted(state.selected_ids))
+        sent = 0
+        while command is not None:
+            self.assertEqual(command["cursor"], sent)
+            self.assertLessEqual(len(command["ids"]), 1000)
+            sent += len(command["ids"])
+            command = state.handle({"kind": "review-page", "reviewId": command["reviewId"],
+                                    "nextCursor": sent})
+        self.assertEqual(sent, total)
+        digest = hashlib.sha256("".join(f"{index}\n" for index in range(1, total + 1)).encode("ascii")).hexdigest()
+        state.handle({"kind": "review", "reviewId": state._pending_review_id,
+                      "selection_sha256": digest, "selected_contacts": total,
+                      "matched_calls": 0, "matched_messages": 0, "missing_sources": []})
+        self.assertTrue(state.can_pair)
+
+    def test_saved_parts_pending_final_browser_receipt_cannot_finish(self):
+        state = paired()
+        state.poll()
+        state.handle({"kind": "handoff", "state": "saved_pending_browser_receipt",
+                      "handoffId": BINDING})
+        self.assertFalse(state.saved_acknowledged)
+        with self.assertRaises(ProtocolError):
+            state.finish()
+
+    def test_active_handoff_cannot_be_replaced_without_revocation(self):
+        state = paired()
+        with self.assertRaises(ProtocolError):
+            state.review([1])
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.update_visible_selection([]), {"action": "revoke"})
+        self.assertEqual(state.handoff_id, "")
+        self.assertFalse(state.can_pair)
+
+    def test_stale_page_and_review_digest_cannot_grant_pairing(self):
+        state = reviewed()
+        command = state.search_contacts("Avery")
+        self.assertEqual(command, {"action": "contacts", "query": "Avery", "cursor": 0})
+        state.handle({"kind": "contacts", "contacts": [], "query": "older", "cursor": 0,
+                      "nextCursor": None, "totalContacts": 1})
+        self.assertEqual(state.contact_query, "")
+        state.handle({"kind": "contacts", "contacts": [{"id": 1, "name": "Avery Lindqvist",
+                      "phoneCount": 1, "phoneEnds": ["0123"]}], "query": "Avery", "cursor": 0,
+                      "nextCursor": None, "totalContacts": 1})
+        command = state.review([1])
+        state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "review", "reviewId": command["reviewId"],
+                          "selection_sha256": "0" * 64, "selected_contacts": 1,
+                          "matched_calls": 0, "matched_messages": 0, "missing_sources": []})
+        self.assertFalse(state.can_pair)
 
     def test_complete_requires_matching_saved_ack_clean_exit_and_residue_inspection(self):
         state = paired()
@@ -139,19 +235,20 @@ class SessionTests(unittest.TestCase):
 
     def test_inflight_review_is_serialized_and_invalidated_response_is_not_approval(self):
         state = reviewed()
-        state.review([1])
+        command = state.review([1])
         with self.assertRaises(ProtocolError):
             state.review([1])
         state.invalidate_selection()
-        state.handle({"kind": "review", "selected_contacts": 1, "matched_calls": 2,
-                      "matched_messages": 3, "missing_sources": []})
+        state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+        state.handle({"kind": "review", "reviewId": command["reviewId"],
+                      "selected_contacts": 1, "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                      "matched_calls": 2, "matched_messages": 3, "missing_sources": []})
         self.assertFalse(state.reviewed)
         self.assertEqual(state.selection, ())
         with self.assertRaises(ProtocolError):
             state.pair()
-        state.review([1])
-        state.handle({"kind": "review", "selected_contacts": 1, "matched_calls": 2,
-                      "matched_messages": 3, "missing_sources": []})
+        state.update_visible_selection([1])
+        review_result(state)
         self.assertTrue(state.reviewed)
 
     def test_inflight_pairing_is_revoked_and_late_code_is_not_presented(self):

@@ -350,7 +350,8 @@ class StreamedFileTest(unittest.TestCase):
             events = [json.loads(line) for line in output.getvalue().splitlines()]
             self.assertFalse(any(event["kind"] == "capture" for event in events))
             self.assertEqual(
-                events[-1], {"kind": "error", "code": "unsupported_schema"}
+                events[-1],
+                {"kind": "error", "code": "selected_payload_crypto", "stage": "connecting"},
             )
             self.assertFalse(session[0].exists())
             self.assertNotIn(str(root), output.getvalue())

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import queue
 import sys
 import types
@@ -30,6 +31,9 @@ class DisabledWidget:
         if self.state == "normal":
             self.values.append(value)
 
+    def selection_set(self, _index):
+        pass
+
 
 def source_window():
     toolkit = types.ModuleType("tkinter")
@@ -52,6 +56,9 @@ def source_window():
     window.password = Mock()
     window.events = queue.Queue()
     window.refresh = Mock()
+    window.contact_query = Mock()
+    window.contact_page = Mock()
+    window._rendering_contacts = False
     return window
 
 
@@ -122,10 +129,15 @@ class GuiGuardsTests(unittest.TestCase):
     def test_stale_review_packet_does_not_render_old_output_counts(self):
         window = source_window()
         window.state.handle({"kind": "capture", "contacts": [
-            {"id": 1, "name": "Avery Lindqvist", "phoneCount": 1, "phoneEnds": ["0123"]}]})
-        window.state.review([1])
+            {"id": 1, "name": "Avery Lindqvist", "phoneCount": 1, "phoneEnds": ["0123"]}],
+            "query": "", "cursor": 0, "nextCursor": None, "totalContacts": 1,
+            "availableCalls": 2, "availableMessages": 3, "missing": []})
+        window.state.update_visible_selection([1])
+        command = window.state.review([1])
         window.state.invalidate_selection()
-        window.events.put({"kind": "review", "selected_contacts": 1, "matched_calls": 2,
+        window.events.put({"kind": "review", "reviewId": command["reviewId"],
+                           "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                           "selected_contacts": 1, "matched_calls": 2,
                            "matched_messages": 3, "missing_sources": []})
         window.pump()
         self.assertFalse(window.state.reviewed)
@@ -135,7 +147,9 @@ class GuiGuardsTests(unittest.TestCase):
         window = source_window()
         window.contacts = DisabledWidget(["previous local review"])
         window.events.put({"kind": "capture", "contacts": [
-            {"id": 1, "name": "Avery Lindqvist", "phoneCount": 1, "phoneEnds": ["0123"]}]})
+            {"id": 1, "name": "Avery Lindqvist", "phoneCount": 1, "phoneEnds": ["0123"]}],
+            "query": "", "cursor": 0, "nextCursor": None, "totalContacts": 1,
+            "availableCalls": 2, "availableMessages": 3, "missing": []})
         window.pump()
         self.assertEqual(window.contacts.values, ["Avery Lindqvist · phone ending 0123"])
 

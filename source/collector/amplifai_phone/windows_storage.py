@@ -243,11 +243,10 @@ class _NativeSecurity:
     ) -> object:
         # OPEN_REPARSE_POINT inspects the directory itself, not a junction target.
         # No FILE_SHARE_DELETE: the parent/root cannot be replaced while pinned.
-        # Zero-access ancestor handles can inspect attributes without requiring
-        # FILE_READ_ATTRIBUTES on protected parents. The root still needs its
-        # independent owner/DACL readback rights.
-        # Only the root requires READ_CONTROL for independent owner/DACL readback.
-        access = 0 if ancestor else _FILE_READ_ATTRIBUTES | _READ_CONTROL
+        # Ancestors need attribute readback; only the root needs READ_CONTROL
+        # for independent owner/DACL validation. The disposable reduced-token
+        # fixture must have the actual app-style protected owner/DACL.
+        access = _FILE_READ_ATTRIBUTES if ancestor else _FILE_READ_ATTRIBUTES | _READ_CONTROL
         handle = self.kernel.CreateFileW(
             str(path), access, 0x03, None, 3, 0x02200000, None
         )

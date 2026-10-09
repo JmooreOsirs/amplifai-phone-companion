@@ -10,8 +10,11 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import os
+import plistlib
 import struct
+import tempfile
 import time
+import xml.parsers.expat
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -28,12 +31,22 @@ from pymobiledevice3.services.device_link import (
     FILE_TRANSFER_TERMINATOR,
     DeviceLink,
 )
+from pymobiledevice3.service_connection import parse_plist
 
-from .backup_watchdog import RECEIVE_CHUNK_BYTES, BackupWatchdog
-from .metadata import SourceCapacityLimit, UnsupportedSchema
+from .backup_watchdog import MAX_CONTROL_BYTES, RECEIVE_CHUNK_BYTES, BackupWatchdog
+from .metadata import (
+    BackupControlFrameLimit,
+    BackupControlPathLimit,
+    UnsupportedSchema,
+)
 from .workspace import SessionWorkspace, WorkspaceError
 
 MAX_PATH_BYTES = 4096
+# DeviceLink sends a single length-prefixed plist for a whole batch of backup
+# file operations. A large photo library can exceed the service reader's 16 MiB
+# per-read guard even when each path is valid. Stream only these DeviceLink
+# frames through a private temporary file; keep a separate finite parsing bound.
+MAX_CONTROL_MESSAGE_BYTES = 128 * 1024 * 1024
 NO_COPY_METADATA = frozenset({"Info.plist", "Status.plist", "Manifest.plist"})
 
 
@@ -77,8 +90,34 @@ class StreamedDeviceLink(DeviceLink):
         self._reserved_paths: dict[Path, int] = {}
 
     async def receive_message(self):
-        message = await super().receive_message()
+        (size,) = struct.unpack(">I", await self._recvall(4))
+        if size == 0:
+            raise UnsupportedSchema("Invalid backup control frame")
+        if size > MAX_CONTROL_MESSAGE_BYTES:
+            raise BackupControlFrameLimit("Backup control frame exceeds safe parsing bounds")
+        if size <= MAX_CONTROL_BYTES:
+            message = parse_plist(await self._recvall(size))
+        else:
+            # Never ask the service reader for an oversized read or retain a
+            # second raw frame in memory. The file is unlinked on every exit.
+            with tempfile.TemporaryFile(mode="w+b", dir=self.workspace.directory) as frame:
+                remaining = size
+                while remaining:
+                    self.watchdog.raise_if_aborted()
+                    payload = await self._recvall(min(remaining, RECEIVE_CHUNK_BYTES))
+                    self.workspace.write_chunk(frame, payload)
+                    remaining -= len(payload)
+                    await asyncio.sleep(0)
+                frame.seek(0)
+                try:
+                    message = plistlib.load(frame)
+                except (plistlib.InvalidFileException, ValueError, xml.parsers.expat.ExpatError):
+                    raise UnsupportedSchema("Invalid backup control frame") from None
+        if not isinstance(message, list) or not message or not isinstance(message[0], str):
+            raise UnsupportedSchema("Invalid backup control message")
         if message[0] == "DLMessageProcessMessage":
+            if len(message) < 2:
+                raise UnsupportedSchema("Invalid backup completion status")
             status = message[1]
             if isinstance(status, dict) and status.get("ErrorCode") != 0:
                 raw_code = status.get("ErrorCode")
@@ -116,6 +155,10 @@ class StreamedDeviceLink(DeviceLink):
 
     def publish_progress(self, *, final: bool = False) -> None:
         now = self._clock()
+        # A DeviceLink handshake/preflight failure must not look like a backup
+        # file transfer merely because the context manager is closing.
+        if self._received == 0 and self._files == 0:
+            return
         if self._transfer_callback is None or (
             not final and now - self._last_emitted < 0.5
         ):
@@ -135,7 +178,7 @@ class StreamedDeviceLink(DeviceLink):
     async def _prefixed_recv(self) -> str:
         (size,) = struct.unpack(">I", await self._recvall(4))
         if size > MAX_PATH_BYTES:
-            raise SourceCapacityLimit("Backup control path exceeds safe memory bounds")
+            raise BackupControlPathLimit("Backup control path exceeds safe memory bounds")
         try:
             return (await self._recvall(size)).decode("utf-8")
         except UnicodeError:
@@ -212,11 +255,14 @@ class StreamedDeviceLink(DeviceLink):
                 size, code = await self._consume_file_transfer(size, code)
             self._files += 1
             if code == CODE_ERROR_REMOTE:
-                if size > MAX_PATH_BYTES:
-                    raise SourceCapacityLimit(
-                        "Backup control error exceeds safe memory bounds"
-                    )
-                await self._recvall(size)  # discard the device's private error text
+                # This is a length-prefixed diagnostic, not a path or metadata
+                # object. A device may send a long private reason. Drain it in
+                # bounded chunks without decoding, retaining, or reporting it.
+                while size:
+                    self.watchdog.raise_if_aborted()
+                    payload = await self._recvall(min(size, RECEIVE_CHUNK_BYTES))
+                    size -= len(payload)
+                    await asyncio.sleep(0)
                 if keep and path.name != "backup_manifest.db":
                     raise UnsupportedSchema(
                         "Selected backup file was not transferred completely"
@@ -227,9 +273,10 @@ class StreamedDeviceLink(DeviceLink):
         await self.status_response(0)
 
     async def get_free_disk_space(self, _message) -> None:
-        # Real writable free space, not optimistic APFS purgeable capacity.
+        # DeviceLink preflights the complete logical stream, while only selected
+        # files consume disk. Real writes remain guarded by workspace.check_bound.
         await self.status_response(
-            0, status_dict=self.workspace.available_transfer_bytes()
+            0, status_dict=self.workspace.advertised_stream_capacity_bytes()
         )
 
     async def create_directory(self, message) -> None:

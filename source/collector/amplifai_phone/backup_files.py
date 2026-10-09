@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .backup_watchdog import RECEIVE_CHUNK_BYTES
-from .metadata import UnsupportedSchema
+from .metadata import SelectedPayloadIntegrityError
 from .workspace import MIN_FREE_BYTES, SessionWorkspace, WorkspaceError
 
 
@@ -70,7 +70,9 @@ def copy_backup_file(
         # the entire app-owned ancestor path before reaching this seam.
         source_handle = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         if not stat.S_ISREG(os.fstat(source_handle).st_mode):
-            raise UnsupportedSchema("Selected payload is not a regular file")
+            raise SelectedPayloadIntegrityError(
+                "Selected payload is not a regular file", code="selected_payload_file_type"
+            )
         reader = os.fdopen(source_handle, "rb")
         source_handle = None
         with reader:
@@ -95,8 +97,9 @@ def copy_backup_file(
                         if unpadder is not None:
                             tail = unpadder.update(tail) + unpadder.finalize()
                     except ValueError:
-                        raise UnsupportedSchema(
-                            "Encrypted selected payload was incomplete or invalid"
+                        raise SelectedPayloadIntegrityError(
+                            "Encrypted selected payload was incomplete or invalid",
+                            code="selected_payload_crypto",
                         ) from None
                     write(writer, tail)
         return count

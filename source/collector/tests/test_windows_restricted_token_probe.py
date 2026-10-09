@@ -177,7 +177,7 @@ class RestrictedProbeTest(unittest.TestCase):
             self.assertEqual(probe.main(), 1)
         self.assertEqual(json.loads(output_stream.getvalue()), {
             "kind": "reduced-token-storage", "ready": False,
-            "native_stage": 15, "win32_code": 183, "requested_access": 0,
+            "native_stage": 15, "win32_code": 183, "requested_access": 0x80,
             "api_code": 1, "ancestor_index": 0,
             "old_fixture_owner_matches_user": None,
             "failed_is_fixture_parent": False, "failed_ancestor_index": 0,

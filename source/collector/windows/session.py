@@ -1,13 +1,16 @@
-"""In-memory Windows presentation for the existing, engine-authorized protocol."""
+"""Windows presentation state for the engine-authorized paged protocol."""
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import uuid
 from typing import TextIO
 
 DISCLOSURE_VERSION = "native-local-collection-v1"
-MAX_CONTACTS = 25_000
+CONTACT_PAGE_SIZE = 200
+REVIEW_PAGE_SIZE = 1_000
+MAX_CONTACT_QUERY_LENGTH = 120
 WEBSITE_ORIGIN = "https://amplifai-database-engine.vercel.app"
 BRIDGE_PORT = 48751
 
@@ -32,6 +35,13 @@ class Session:
         self.needs_inspection = True
         self.residue: list[dict] = []
         self.contacts: list[dict] = []
+        self.total_contacts = 0
+        self.contact_query = ""
+        self.contact_cursor = 0
+        self.next_contact_cursor: int | None = None
+        self.previous_contact_cursors: list[int] = []
+        self.pending_contact: tuple[str, int] | None = None
+        self.selected_ids: set[int] = set()
         self.selection: tuple[int, ...] = ()
         self.reviewed = False
         self.review_counts = (0, 0, 0)
@@ -43,6 +53,11 @@ class Session:
         self.approval: str | None = None
         self._polling = self._pairing = self._finishing = False
         self._pending_review: tuple[int, ...] | None = None
+        self._pending_review_id = ""
+        self._pending_review_sha = ""
+        self._review_next_cursor = 0
+        self._review_expected_ack = 0
+        self._retired_review_ids: set[str] = set()
         self._pairing_invalidated = False
         self._retired_handoff_id = ""
         self._capture_received = False
@@ -59,11 +74,17 @@ class Session:
 
     @property
     def can_review(self) -> bool:
-        return self.can_select and self._pending_review is None and not self._pairing and not self._polling and not self._retired_handoff_id
+        return (self.can_select and self._pending_review is None and self.pending_contact is None
+                and not self._pairing and not self._polling and not self.handoff_id
+                and not self._retired_handoff_id)
 
     @property
     def can_pair(self) -> bool:
-        return self.can_review and self.reviewed
+        return (self.running and self.mode == "connect" and self.phase == "reviewing"
+                and self.reviewed and bool(self.selection) and not self.saved_acknowledged
+                and not self._stopping and not self._finishing and not self._pairing
+                and not self._polling and self._pending_review is None
+                and self.pending_contact is None and not self._retired_handoff_id)
 
     def approve(self, checked: bool) -> None:
         self.approval = str(uuid.uuid4()) if checked and self.inspected and not self.needs_inspection and not self.residue and not self.running else None
@@ -75,6 +96,13 @@ class Session:
             raise ProtocolError("Fresh collection agreement and clean inspection required")
         if mode == "connect":
             self.contacts = []
+            self.total_contacts = 0
+            self.contact_query = ""
+            self.contact_cursor = 0
+            self.next_contact_cursor = None
+            self.previous_contact_cursors = []
+            self.pending_contact = None
+            self.selected_ids.clear()
             self.selection = ()
             self.reviewed = self.saved_acknowledged = False
             self.handoff_id = self.pair_code = ""
@@ -83,6 +111,9 @@ class Session:
         self._completed = self._stopping = self._failed = False
         self._polling = self._pairing = self._finishing = self._pairing_invalidated = False
         self._pending_review = None
+        self._pending_review_id = self._pending_review_sha = ""
+        self._review_next_cursor = self._review_expected_ack = 0
+        self._retired_review_ids.clear()
         self._retired_handoff_id = self._failure_status = ""
         self.mode = mode
         self.running = True
@@ -93,18 +124,70 @@ class Session:
         self.status = "Connecting to the iPhone. Handle device Trust prompts yourself." if mode == "connect" else "Checking owned temporary data…"
 
     def review(self, ids: list[int]) -> dict:
-        available = {item["id"] for item in self.contacts}
-        if not self.can_review or not isinstance(ids, list) or not 0 < len(ids) <= MAX_CONTACTS or any(type(item) is not int or item not in available for item in ids) or len(set(ids)) != len(ids):
+        if (not self.can_review or not isinstance(ids, list) or not 0 < len(ids) <= self.total_contacts
+                or len(set(ids)) != len(ids) or any(type(item) is not int for item in ids)
+                or set(ids) != self.selected_ids):
             raise ProtocolError("Select available contacts before reviewing")
-        self.selection = tuple(ids)
+        self.selection = tuple(sorted(ids))
         self._pending_review = self.selection
+        self._pending_review_id = str(uuid.uuid4())
+        self._pending_review_sha = hashlib.sha256("".join(f"{item}\n" for item in self.selection).encode("ascii")).hexdigest()
+        self._review_next_cursor = self._review_expected_ack = 0
         self.reviewed = self.saved_acknowledged = False
         self.handoff_id = self.pair_code = ""
         self.phase = "selecting"
         self.status = "Reviewing only the selected contacts and matching metadata…"
-        return {"action": "review", "ids": ids}
+        return self._next_review_page()
 
-    def invalidate_selection(self) -> dict | None:
+    def _next_review_page(self) -> dict:
+        if self._pending_review is None or self._review_next_cursor >= len(self._pending_review):
+            raise ProtocolError("No selection page is pending")
+        cursor = self._review_next_cursor
+        end = min(cursor + REVIEW_PAGE_SIZE, len(self._pending_review))
+        self._review_next_cursor = self._review_expected_ack = end
+        return {"action": "review-page", "reviewId": self._pending_review_id,
+                "cursor": cursor, "total": len(self._pending_review),
+                "ids": list(self._pending_review[cursor:end])}
+
+    def update_visible_selection(self, ids: list[int]) -> dict | None:
+        visible = {item["id"] for item in self.contacts}
+        if (not self.can_select or self.pending_contact is not None or not isinstance(ids, list)
+                or any(type(item) is not int for item in ids) or len(set(ids)) != len(ids)
+                or not set(ids) <= visible):
+            raise ProtocolError("Invalid contact-page selection")
+        updated = self.selected_ids - visible | set(ids)
+        if updated == self.selected_ids:
+            return None
+        self.selected_ids = updated
+        return self.invalidate_selection(clear_selected=False)
+
+    def request_contacts(self, query: str, cursor: int = 0) -> dict:
+        if (not self.can_select or self._pending_review is not None or self._pairing
+                or not isinstance(query, str) or len(query) > MAX_CONTACT_QUERY_LENGTH
+                or type(cursor) is not int or not 0 <= cursor <= self.total_contacts):
+            raise ProtocolError("Invalid contact page request")
+        self.pending_contact = (query, cursor)
+        return {"action": "contacts", "query": query, "cursor": cursor}
+
+    def search_contacts(self, query: str) -> dict:
+        command = self.request_contacts(query, 0)
+        if query != self.contact_query:
+            self.previous_contact_cursors = []
+        return command
+
+    def next_contacts(self) -> dict:
+        if self.pending_contact is not None or self.next_contact_cursor is None:
+            raise ProtocolError("No next contact page")
+        self.previous_contact_cursors.append(self.contact_cursor)
+        return self.request_contacts(self.contact_query, self.next_contact_cursor)
+
+    def previous_contacts(self) -> dict:
+        if self.pending_contact is not None or not self.previous_contact_cursors:
+            raise ProtocolError("No previous contact page")
+        cursor = self.previous_contact_cursors.pop()
+        return self.request_contacts(self.contact_query, cursor)
+
+    def invalidate_selection(self, *, clear_selected: bool = True) -> dict | None:
         if not self.can_select:
             return None
         revoke = bool(self.handoff_id) or (self._pairing and not self._pairing_invalidated)
@@ -112,7 +195,14 @@ class Session:
             self._retired_handoff_id = self.handoff_id
         if self._pairing:
             self._pairing_invalidated = True
+        if clear_selected:
+            self.selected_ids.clear()
+        if self._pending_review_id:
+            self._retired_review_ids.add(self._pending_review_id)
         self.selection = ()
+        self._pending_review = None
+        self._pending_review_id = self._pending_review_sha = ""
+        self._review_next_cursor = self._review_expected_ack = 0
         self.reviewed = self.saved_acknowledged = False
         self.handoff_id = self.pair_code = ""
         self._polling = False
@@ -127,7 +217,7 @@ class Session:
         self._pairing_invalidated = False
         self.handoff_id = self.pair_code = ""
         self.saved_acknowledged = False
-        self.status = "Preparing an exact-origin, five-minute browser handoff…"
+        self.status = "Preparing an exact-origin, five-minute initial browser pairing…"
         return {"action": "pair"}
 
     def poll(self) -> dict | None:
@@ -137,7 +227,10 @@ class Session:
         return {"action": "handoff-status", "handoffId": self.handoff_id}
 
     def finish(self) -> dict:
-        if not self.saved_acknowledged or not self.can_pair or not self.handoff_id:
+        if (not self.running or self.mode != "connect" or self.phase != "reviewing"
+                or not self.reviewed or not self.saved_acknowledged or not self.handoff_id
+                or self._stopping or self._finishing or self._pairing or self._polling
+                or self._pending_review is not None):
             raise ProtocolError("A matching verified account-save acknowledgment is required")
         self._finishing = True
         self.phase = "finishing"
@@ -159,7 +252,7 @@ class Session:
         self.needs_inspection = True
         self.phase = "cancelling"
         self.status = "Stop requested. Capture may continue until the helper checks stdin. Cleanup is not yet confirmed."
-        return {"action": "disconnect"} if self.mode == "connect" and self.contacts else None
+        return {"action": "disconnect"} if self.mode == "connect" and self._capture_received else None
 
     def cooperative_failure(self) -> None:
         self.request_stop()
@@ -174,14 +267,50 @@ class Session:
         self._failure_status = "Windows force stop requested; cleanup is unconfirmed. Check temporary data after the owned helper exits."
         self.status = self._failure_status
 
-    def handle(self, event: dict) -> None:
+    def _accept_contact_page(self, event: dict, *, first: bool) -> None:
+        contacts = event.get("contacts")
+        total = count(event.get("totalContacts"))
+        cursor = event.get("cursor")
+        query = event.get("query")
+        next_cursor = event.get("nextCursor")
+        if (not isinstance(contacts, list) or len(contacts) > CONTACT_PAGE_SIZE
+                or type(cursor) is not int or cursor < 0 or cursor > total
+                or not isinstance(query, str) or len(query) > MAX_CONTACT_QUERY_LENGTH
+                or next_cursor is not None and (type(next_cursor) is not int
+                                                or not cursor < next_cursor < total)
+                or first and (cursor != 0 or query != "" or total < len(contacts)
+                              or len(contacts) < min(CONTACT_PAGE_SIZE, total)
+                              or (next_cursor is None) != (total <= CONTACT_PAGE_SIZE))
+                or not first and (self.pending_contact != (query, cursor)
+                                  or total != self.total_contacts)):
+            raise ProtocolError("Invalid contact page")
+        seen: set[int] = set()
+        for item in contacts:
+            if (not isinstance(item, dict) or type(item.get("id")) is not int
+                    or item["id"] in seen or not isinstance(item.get("name"), str)):
+                raise ProtocolError("Invalid contact preview")
+            count(item.get("phoneCount"))
+            ends = item.get("phoneEnds")
+            if (not isinstance(ends, list) or len(ends) > item["phoneCount"]
+                    or any(not isinstance(end, str) or not re.fullmatch(r"[0-9]{1,4}", end)
+                           for end in ends)):
+                raise ProtocolError("Invalid contact preview")
+            seen.add(item["id"])
+        self.contacts = contacts
+        self.total_contacts = total
+        self.contact_query = query
+        self.contact_cursor = cursor
+        self.next_contact_cursor = next_cursor
+        self.pending_contact = None
+
+    def handle(self, event: dict) -> dict | None:
         if not self.running or not isinstance(event, dict):
             raise ProtocolError("Unexpected helper event")
         kind = event.get("kind")
         if not isinstance(kind, str):
             raise ProtocolError("Invalid helper event kind")
         if self._stopping and kind != "error":
-            return
+            return None
         if kind == "progress":
             value = event.get("value")
             if type(value) not in {float, int} or not 0 <= value <= 100:
@@ -201,33 +330,48 @@ class Session:
             elif state not in {"disconnected", "cancelled", "pairing_revoked"}:
                 raise ProtocolError("Unknown helper state")
         elif kind == "capture":
-            contacts = event.get("contacts")
-            if self.mode != "connect" or self._capture_received or not isinstance(contacts, list) or len(contacts) > MAX_CONTACTS:
+            if self.mode != "connect" or self._capture_received:
                 raise ProtocolError("Invalid contact preview")
-            seen = set()
-            for item in contacts:
-                if not isinstance(item, dict) or type(item.get("id")) is not int or item["id"] in seen or not isinstance(item.get("name"), str) or len(item["name"]) > 1024:
-                    raise ProtocolError("Invalid contact preview")
-                count(item.get("phoneCount"))
-                ends = item.get("phoneEnds")
-                if not isinstance(ends, list) or any(not isinstance(end, str) or not re.fullmatch(r"[0-9]{1,4}", end) for end in ends):
-                    raise ProtocolError("Invalid contact preview")
-                seen.add(item["id"])
-            self.contacts = contacts
+            self._accept_contact_page(event, first=True)
+            count(event.get("availableCalls"))
+            count(event.get("availableMessages"))
+            missing = event.get("missing")
+            if not isinstance(missing, list) or any(item not in {"contacts", "calls", "messages"} for item in missing):
+                raise ProtocolError("Invalid source availability")
             self._capture_received = True
             self.phase = "selecting"
             self.status = "Select contacts, then review matching call and message context. No account data has been saved."
+        elif kind == "contacts":
+            if self.mode != "connect" or not self._capture_received:
+                raise ProtocolError("Unexpected contact page")
+            # A later search may have superseded an in-flight response; never
+            # let it move the visible cursor or alter reviewed selection.
+            if self.pending_contact != (event.get("query"), event.get("cursor")):
+                return None
+            self._accept_contact_page(event, first=False)
+        elif kind == "review-page":
+            if isinstance(event.get("reviewId"), str) and event["reviewId"] in self._retired_review_ids:
+                return None
+            if (self._pending_review is None or event.get("reviewId") != self._pending_review_id
+                    or type(event.get("nextCursor")) is not int
+                    or event["nextCursor"] != self._review_expected_ack):
+                raise ProtocolError("Selection page acknowledgment does not match")
+            if self._review_expected_ack < len(self._pending_review):
+                return self._next_review_page()
         elif kind == "review":
+            if isinstance(event.get("reviewId"), str) and event["reviewId"] in self._retired_review_ids:
+                return None
             counts = tuple(count(event.get(field)) for field in ("selected_contacts", "matched_calls", "matched_messages"))
             pending = self._pending_review
-            if pending is None or counts[0] != len(pending):
+            if (pending is None or counts[0] != len(pending)
+                    or self._review_expected_ack != len(pending)
+                    or event.get("reviewId") != self._pending_review_id
+                    or event.get("selection_sha256") != self._pending_review_sha):
                 raise ProtocolError("Review does not match selection")
             missing = event.get("missing_sources")
             if not isinstance(missing, list) or any(not isinstance(item, str) or item not in {"contacts", "calls", "messages"} for item in missing):
                 raise ProtocolError("Invalid source availability")
             self._pending_review = None
-            if pending != self.selection:
-                return  # Expected late response, never a current selection grant.
             self.review_counts = counts
             self.missing = missing
             self.reviewed = True
@@ -246,18 +390,18 @@ class Session:
             self._pairing = False
             if self._pairing_invalidated:
                 self._pairing_invalidated = False
-                return  # Revoke was queued behind this obsolete pair command.
+                return None  # Revoke was queued behind this obsolete pair command.
             if not self.reviewed:
                 raise ProtocolError("Pairing does not match reviewed selection")
             self.handoff_id, self.pair_code = binding, code
             self.status = "Enter this one-use code on the approved website. Received is not saved."
         elif kind == "handoff":
             state = event.get("state")
-            if not isinstance(state, str) or state not in {"saved", "received", "expired", "waiting"}:
+            if not isinstance(state, str) or state not in {"saved", "saved_pending_browser_receipt", "received", "expired", "waiting"}:
                 raise ProtocolError("Invalid handoff state")
             if self._retired_handoff_id and event.get("handoffId") == self._retired_handoff_id:
                 self._retired_handoff_id = ""
-                return  # Expected stale acknowledgment cannot finish this selection.
+                return None  # Expected stale acknowledgment cannot finish this selection.
             if not self._polling or event.get("handoffId") != self.handoff_id:
                 raise ProtocolError("Handoff acknowledgment does not match")
             self._polling = False
@@ -266,7 +410,10 @@ class Session:
                 self.status = "Matching account save acknowledged. Waiting for safe helper completion."
             elif state == "received":
                 self.status = "Browser received the preview, not a saved account receipt. Keep this review open."
+            elif state == "saved_pending_browser_receipt":
+                self.status = "Account parts are saved; waiting for the browser's verified final receipt. Keep this review open."
             elif state == "expired":
+                self.handoff_id = self.pair_code = ""
                 self.status = "Pairing expired. Your local review remains; create a fresh pairing."
         elif kind == "residue":
             items = event.get("sessions")
@@ -299,6 +446,7 @@ class Session:
             self.status = self._failure_status
         else:
             raise ProtocolError("Unknown helper event")
+        return None
 
     def exited(self, code: int) -> None:
         if type(code) is not int:

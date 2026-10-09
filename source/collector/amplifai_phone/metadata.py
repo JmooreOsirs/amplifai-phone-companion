@@ -10,11 +10,15 @@ from __future__ import annotations
 import math
 import re
 import sqlite3
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+import tempfile
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from .record_store import RecordCollection, RecordStore
+from .workspace import WorkspaceError
 
 COCOA_EPOCH = 978307200
 RETAINED_HISTORY_START = datetime(2001, 1, 1, tzinfo=UTC)
@@ -28,12 +32,72 @@ class UnsupportedSchema(ValueError):
     """A device database shape is not one we can safely interpret."""
 
 
+class BackupControlInvalid(UnsupportedSchema):
+    """Backup manifest or required control metadata is unusable."""
+
+
+class ContactsSchemaUnsupported(UnsupportedSchema):
+    """The required contact database cannot be interpreted safely."""
+
+
+class SelectedPayloadMissing(UnsupportedSchema):
+    """A manifest-listed selected file was not retained by DeviceLink."""
+
+
+class SelectedPayloadIntegrityError(UnsupportedSchema):
+    """A retained selected file cannot be trusted for parsing."""
+
+    CODES = frozenset({
+        "selected_payload_invalid",  # Older callers retain their safe fallback.
+        "selected_payload_size",
+        "selected_payload_identity",
+        "selected_payload_file_type",
+        "selected_payload_length",
+        "selected_payload_crypto",
+        "selected_contacts_integrity",
+    })
+
+    def __init__(self, message: str, *, code: str = "selected_payload_invalid") -> None:
+        if code not in self.CODES:
+            raise ValueError("Unknown selected-payload diagnostic code")
+        super().__init__(message)
+        self.code = code
+
+
 class SourceCapacityLimit(ValueError):
     """A bounded metadata/control frontier, not an unsupported phone schema."""
+
+    code = "source_capacity_limit"
 
 
 class SourceReadCapacityLimit(SourceCapacityLimit):
     """A per-source reader bound, distinct from backup/session safety bounds."""
+
+    code = "source_read_capacity_limit"
+
+
+class ContactsCapacityLimit(SourceReadCapacityLimit):
+    """The required contacts source exceeded its bounded in-memory reader."""
+
+    code = "contacts_capacity_limit"
+
+
+class BackupControlFrameLimit(SourceCapacityLimit):
+    """A DeviceLink control frame exceeded its finite parsing bound."""
+
+    code = "backup_control_frame_limit"
+
+
+class BackupControlMetadataLimit(SourceCapacityLimit):
+    """An on-disk backup control plist exceeded its finite parsing bound."""
+
+    code = "backup_control_metadata_limit"
+
+
+class BackupControlPathLimit(SourceCapacityLimit):
+    """A DeviceLink path exceeded the supported path safety bound."""
+
+    code = "backup_control_path_limit"
 
 
 @dataclass(frozen=True)
@@ -58,7 +122,7 @@ class Interaction:
 @dataclass(frozen=True)
 class SourceResult:
     rows_seen: int
-    records: tuple[Contact | Interaction, ...]
+    records: Sequence[Contact | Interaction]
     excluded: int
 
 
@@ -114,72 +178,133 @@ def _cocoa_datetime(value: object) -> datetime | None:
         return None
 
 
+def _scratch_execute(
+    connection: sqlite3.Connection, statement: str, parameters: tuple = ()
+) -> sqlite3.Cursor:
+    try:
+        return connection.execute(statement, parameters)
+    except sqlite3.Error as error:
+        raise WorkspaceError(
+            "Private metadata scratch is unavailable",
+            code="workspace_unavailable",
+        ) from error
+
+
+@contextmanager
+def _private_index(path: Path, prefix: str) -> Iterator[sqlite3.Connection]:
+    try:
+        scratch = tempfile.TemporaryDirectory(prefix=prefix, dir=path.parent)
+    except OSError as error:
+        raise WorkspaceError(
+            "Private metadata scratch is unavailable", code="workspace_unavailable"
+        ) from error
+    with scratch as index_dir:
+        try:
+            index_connection = sqlite3.connect(Path(index_dir) / "values.sqlite3")
+        except sqlite3.Error as error:
+            raise WorkspaceError(
+                "Private metadata scratch is unavailable", code="workspace_unavailable"
+            ) from error
+        with closing(index_connection) as index_db:
+            _scratch_execute(index_db, "PRAGMA journal_mode=OFF")
+            _scratch_execute(index_db, "PRAGMA synchronous=OFF")
+            _scratch_execute(index_db, "PRAGMA cache_size=-2048")
+            yield index_db
+
+
 def read_contacts(
-    path: Path, check_callback: Callable[[], None] | None = None
+    path: Path, check_callback: Callable[[], None] | None = None,
+    store: RecordStore | None = None,
 ) -> SourceResult:
     with _open_readonly(path) as db:
         _require_columns(db, "ABPerson", {"ROWID", "First", "Last"})
         _require_columns(db, "ABMultiValue", {"record_id", "property", "value"})
-        rows = db.execute(
-            "SELECT ROWID, First, Last FROM ABPerson ORDER BY ROWID LIMIT ?",
-            (MAX_ROWS_PER_SOURCE + 1,),
-        )
-        values: dict[int, dict[str, set[str]]] = {}
-        for index, row in enumerate(
-            db.execute(
-                "SELECT record_id, property, value FROM ABMultiValue WHERE property IN (3, 4) AND value IS NOT NULL"
+        # The selected database is already inside the app-owned private parsing
+        # directory. Keep only normalized metadata in a short-lived disk index;
+        # a large ABMultiValue table must not become an unbounded Python map.
+        with _private_index(path, "amplifai-contact-index-") as index_db:
+            _scratch_execute(
+                index_db,
+                "CREATE TABLE value (record_id INTEGER NOT NULL, property INTEGER NOT NULL, "
+                "normalized TEXT NOT NULL, PRIMARY KEY (record_id, property, normalized)) WITHOUT ROWID",
             )
-        ):
-            if index >= MAX_ROWS_PER_SOURCE:
-                raise SourceReadCapacityLimit("Contact value row limit exceeded")
-            if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
-                check_callback()
-            owner = values.setdefault(
-                row["record_id"], {"phones": set(), "emails": set()}
-            )
-            if row["property"] == 3:
-                phone = normalize_phone(row["value"])
-                if phone:
-                    owner["phones"].add(phone)
-            elif row["property"] == 4 and isinstance(row["value"], str):
-                email = row["value"].strip().lower()
+            for index, row in enumerate(
+                db.execute(
+                    "SELECT record_id, property, value FROM ABMultiValue "
+                    "WHERE property IN (3, 4) AND value IS NOT NULL"
+                )
+            ):
+                if store is None and index >= MAX_ROWS_PER_SOURCE:
+                    raise ContactsCapacityLimit("Contact value row limit exceeded")
+                if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
+                    check_callback()
+                owner = row["record_id"]
                 if (
-                    3 <= len(email) <= 254
-                    and "@" in email
-                    and not any(c.isspace() for c in email)
+                    isinstance(owner, float)
+                    and math.isfinite(owner)
+                    and owner.is_integer()
                 ):
-                    owner["emails"].add(email)
-        contacts = []
-        row_count = 0
-        for row_count, row in enumerate(rows, 1):
-            if row_count > MAX_ROWS_PER_SOURCE:
-                raise SourceReadCapacityLimit("Contact row limit exceeded")
-            if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
-                check_callback()
-            fields = values.get(row["ROWID"], {"phones": set(), "emails": set()})
-            if len(fields["phones"]) > 20 or len(fields["emails"]) > 20:
-                raise SourceReadCapacityLimit(
-                    "Contact has more phone or email values than the handoff contract supports"
-                )
-            name = " ".join(
-                part.strip()
-                for part in (row["First"], row["Last"])
-                if isinstance(part, str) and part.strip()
-            )
-            if name or fields["phones"] or fields["emails"]:
-                contacts.append(
-                    Contact(
-                        row["ROWID"],
-                        name[:240],
-                        tuple(sorted(fields["phones"])),
-                        tuple(sorted(fields["emails"])),
+                    owner = int(owner)
+                if not isinstance(owner, int):
+                    continue
+                normalized = None
+                if row["property"] == 3:
+                    normalized = normalize_phone(row["value"])
+                elif row["property"] == 4 and isinstance(row["value"], str):
+                    email = row["value"].strip().lower()
+                    if (
+                        3 <= len(email) <= 254
+                        and "@" in email
+                        and not any(c.isspace() for c in email)
+                    ):
+                        normalized = email
+                if normalized is not None:
+                    _scratch_execute(
+                        index_db,
+                        "INSERT OR IGNORE INTO value VALUES (?, ?, ?)",
+                        (owner, row["property"], normalized),
                     )
+            contacts = []
+            row_count = 0
+            rows = db.execute("SELECT ROWID, First, Last FROM ABPerson ORDER BY ROWID")
+            for row_count, row in enumerate(rows, 1):
+                if store is None and row_count > MAX_ROWS_PER_SOURCE:
+                    raise ContactsCapacityLimit("Contact row limit exceeded")
+                if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
+                    check_callback()
+                phones = []
+                emails = []
+                try:
+                    for property_id, normalized in _scratch_execute(
+                        index_db,
+                        "SELECT property, normalized FROM value WHERE record_id = ? "
+                        "ORDER BY property, normalized",
+                        (row["ROWID"],),
+                    ):
+                        (phones if property_id == 3 else emails).append(normalized)
+                except sqlite3.Error as error:
+                    raise WorkspaceError(
+                        "Private contact metadata scratch is unavailable",
+                        code="workspace_unavailable",
+                    ) from error
+                name = " ".join(
+                    part.strip()
+                    for part in (row["First"], row["Last"])
+                    if isinstance(part, str) and part.strip()
                 )
-        return SourceResult(row_count, tuple(contacts), row_count - len(contacts))
+                if name or phones or emails:
+                    contact = Contact(row["ROWID"], name, tuple(phones), tuple(emails))
+                    if store is None:
+                        contacts.append(contact)
+                    else:
+                        store.add("contacts", contact)
+            records = tuple(contacts) if store is None else store.collection("contacts")
+            return SourceResult(row_count, records, row_count - len(records))
 
 
 def read_calls(
-    path: Path, since: datetime, check_callback: Callable[[], None] | None = None
+    path: Path, since: datetime, check_callback: Callable[[], None] | None = None,
+    store: RecordStore | None = None,
 ) -> SourceResult:
     with _open_readonly(path) as db:
         _require_columns(
@@ -189,13 +314,12 @@ def read_calls(
         )
         rows = db.execute(
             "SELECT ROWID, ZDATE, ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED "
-            "FROM ZCALLRECORD ORDER BY ROWID LIMIT ?",
-            (MAX_ROWS_PER_SOURCE + 1,),
+            "FROM ZCALLRECORD ORDER BY ROWID"
         )
         calls = []
         row_count = 0
         for row_count, row in enumerate(rows, 1):
-            if row_count > MAX_ROWS_PER_SOURCE:
+            if store is None and row_count > MAX_ROWS_PER_SOURCE:
                 raise SourceReadCapacityLimit("Call row limit exceeded")
             if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
                 check_callback()
@@ -217,8 +341,7 @@ def read_calls(
                 if isinstance(duration, (int, float)) and math.isfinite(duration)
                 else None
             )
-            calls.append(
-                Interaction(
+            call = Interaction(
                     row["ROWID"],
                     "call",
                     "call",
@@ -227,12 +350,17 @@ def read_calls(
                     (phone,),
                     duration_seconds,
                 )
-            )
-        return SourceResult(row_count, tuple(calls), row_count - len(calls))
+            if store is None:
+                calls.append(call)
+            else:
+                store.add("calls", call)
+        records = tuple(calls) if store is None else store.collection("calls")
+        return SourceResult(row_count, records, row_count - len(records))
 
 
 def read_messages(
-    path: Path, since: datetime, check_callback: Callable[[], None] | None = None
+    path: Path, since: datetime, check_callback: Callable[[], None] | None = None,
+    store: RecordStore | None = None,
 ) -> SourceResult:
     with _open_readonly(path) as db:
         _require_columns(db, "message", {"date", "service", "is_from_me", "handle_id"})
@@ -249,95 +377,134 @@ def read_messages(
         rows = db.execute(
             "SELECT message.ROWID AS source_id, message.date, message.service, message.is_from_me, "
             "handle.id AS sender FROM message LEFT JOIN handle ON message.handle_id = handle.ROWID "
-            "ORDER BY message.ROWID LIMIT ?",
-            (MAX_ROWS_PER_SOURCE + 1,),
+            "ORDER BY message.ROWID",
         )
-        chat_phones: dict[int, set[str]] = {}
-        message_chats: dict[int, set[int]] = {}
-        if has_chat:
-            for index, row in enumerate(
-                db.execute(
-                    "SELECT chj.chat_id, handle.id FROM chat_handle_join AS chj "
-                    "JOIN handle ON chj.handle_id = handle.ROWID"
+        # Preserve the independent source-row bounds before any join expansion.
+        # Only normalized phone metadata and opaque source IDs enter this short-lived
+        # private index; message bodies and attachments never enter it.
+        index_context = (
+            _private_index(path, "amplifai-message-index-")
+            if has_chat
+            else nullcontext(None)
+        )
+        with index_context as index_db:
+            if index_db is not None:
+                _scratch_execute(
+                    index_db,
+                    "CREATE TABLE chat_phone (chat_id BLOB, phone TEXT NOT NULL)",
                 )
-            ):
-                if index >= MAX_ROWS_PER_SOURCE:
-                    raise SourceReadCapacityLimit("Message participant row limit exceeded")
-                if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
-                    check_callback()
-                phone = normalize_phone(row["id"])
-                if phone:
-                    phones = chat_phones.setdefault(row["chat_id"], set())
-                    if len(phones) <= 50:
-                        phones.add(phone)
-            for index, row in enumerate(
-                db.execute("SELECT message_id, chat_id FROM chat_message_join")
-            ):
-                if index >= MAX_ROWS_PER_SOURCE:
-                    raise SourceReadCapacityLimit("Message chat row limit exceeded")
-                if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
-                    check_callback()
-                if row["chat_id"] in chat_phones:
-                    message_chats.setdefault(row["message_id"], set()).add(row["chat_id"])
-        messages = []
-        row_count = 0
-        for row_count, row in enumerate(rows, 1):
-            if row_count > MAX_ROWS_PER_SOURCE:
-                raise SourceReadCapacityLimit("Message row limit exceeded")
-            if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
-                check_callback()
-            when = _cocoa_datetime(row["date"])
-            participants = {
-                phone
-                for chat_id in message_chats.get(row["source_id"], ())
-                for phone in chat_phones.get(chat_id, ())
-            }
-            sender = normalize_phone(row["sender"])
-            if sender:
-                participants.add(sender)
-            if (
-                when is None
-                or when < since
-                or not participants
-                or len(participants) > 50
-            ):
-                continue
-            service = str(row["service"] or "").lower()
-            transport = (
-                "imessage"
-                if "imessage" in service
-                else "sms"
-                if service == "sms"
-                else "mms"
-                if service == "mms"
-                else "unknown"
-            )
-            direction = (
-                "outgoing"
-                if row["is_from_me"] == 1
-                else "incoming"
-                if row["is_from_me"] == 0
-                else "unknown"
-            )
-            messages.append(
-                Interaction(
-                    row["source_id"],
-                    "message",
-                    transport,
-                    when.isoformat(),
-                    direction,
-                    tuple(sorted(participants)),
-                    None,
+                _scratch_execute(
+                    index_db,
+                    "CREATE UNIQUE INDEX chat_phone_key ON chat_phone (chat_id, phone)",
                 )
-            )
-        return SourceResult(row_count, tuple(messages), row_count - len(messages))
+                _scratch_execute(
+                    index_db,
+                    "CREATE TABLE message_chat (message_id BLOB, chat_id BLOB)",
+                )
+                _scratch_execute(
+                    index_db,
+                    "CREATE UNIQUE INDEX message_chat_key ON message_chat (message_id, chat_id)",
+                )
+                for index, row in enumerate(
+                    db.execute(
+                        "SELECT chj.chat_id, handle.id FROM chat_handle_join AS chj "
+                        "JOIN handle ON chj.handle_id = handle.ROWID"
+                    )
+                ):
+                    if store is None and index >= MAX_ROWS_PER_SOURCE:
+                        raise SourceReadCapacityLimit(
+                            "Message participant row limit exceeded"
+                        )
+                    if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
+                        check_callback()
+                    phone = normalize_phone(row["id"])
+                    if phone:
+                        _scratch_execute(
+                            index_db,
+                            "INSERT OR IGNORE INTO chat_phone VALUES (?, ?)",
+                            (row["chat_id"], phone),
+                        )
+                for index, row in enumerate(
+                    db.execute("SELECT message_id, chat_id FROM chat_message_join")
+                ):
+                    if store is None and index >= MAX_ROWS_PER_SOURCE:
+                        raise SourceReadCapacityLimit("Message chat row limit exceeded")
+                    if check_callback is not None and index % ROW_CHECK_INTERVAL == 0:
+                        check_callback()
+                    _scratch_execute(
+                        index_db,
+                        "INSERT OR IGNORE INTO message_chat VALUES (?, ?)",
+                        (row["message_id"], row["chat_id"]),
+                    )
+            messages = []
+            row_count = 0
+            for row_count, row in enumerate(rows, 1):
+                if store is None and row_count > MAX_ROWS_PER_SOURCE:
+                    raise SourceReadCapacityLimit("Message row limit exceeded")
+                if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
+                    check_callback()
+                when = _cocoa_datetime(row["date"])
+                if when is None or when < since:
+                    continue
+                sender = normalize_phone(row["sender"])
+                participants = {sender} if sender else set()
+                if index_db is not None:
+                    try:
+                        for (phone,) in _scratch_execute(
+                            index_db,
+                            "SELECT phone.phone FROM message_chat AS link "
+                            "JOIN chat_phone AS phone ON phone.chat_id IS link.chat_id "
+                            "WHERE link.message_id IS ?",
+                            (row["source_id"],),
+                        ):
+                            participants.add(phone)
+                    except sqlite3.Error as error:
+                        raise WorkspaceError(
+                            "Private metadata scratch is unavailable",
+                            code="workspace_unavailable",
+                        ) from error
+                if not participants:
+                    continue
+                service = str(row["service"] or "").lower()
+                transport = (
+                    "imessage"
+                    if "imessage" in service
+                    else "sms"
+                    if service == "sms"
+                    else "mms"
+                    if service == "mms"
+                    else "unknown"
+                )
+                direction = (
+                    "outgoing"
+                    if row["is_from_me"] == 1
+                    else "incoming"
+                    if row["is_from_me"] == 0
+                    else "unknown"
+                )
+                message = Interaction(
+                        row["source_id"],
+                        "message",
+                        transport,
+                        when.isoformat(),
+                        direction,
+                        tuple(sorted(participants)),
+                        None,
+                    )
+                if store is None:
+                    messages.append(message)
+                else:
+                    store.add("messages", message)
+            records = tuple(messages) if store is None else store.collection("messages")
+            return SourceResult(row_count, records, row_count - len(records))
 
 
 def select_people(contacts: SourceResult, contact_ids: set[int]) -> tuple[Contact, ...]:
     """Return owner-selected contacts; interaction filtering is a separate explicit step."""
+    records = contacts.records.selected_contacts(contact_ids) if isinstance(contacts.records, RecordCollection) else contacts.records
     chosen = tuple(
         item
-        for item in contacts.records
+        for item in records
         if isinstance(item, Contact) and item.source_id in contact_ids
     )
     if len(chosen) != len(contact_ids) or len(chosen) > MAX_SELECTED_CONTACTS:
@@ -348,10 +515,18 @@ def select_people(contacts: SourceResult, contact_ids: set[int]) -> tuple[Contac
 def interactions_for_contacts(
     chosen: tuple[Contact, ...], sources: tuple[SourceResult, SourceResult]
 ) -> tuple[Interaction, ...]:
+    return tuple(iter_interactions_for_contacts(chosen, sources))
+
+
+def iter_interactions_for_contacts(
+    chosen: tuple[Contact, ...], sources: tuple[SourceResult, SourceResult]
+) -> Iterator[Interaction]:
     phones = {phone for contact in chosen for phone in contact.phones}
-    return tuple(
-        item
-        for source in sources
-        for item in source.records
-        if isinstance(item, Interaction) and any(p in phones for p in item.participants)
-    )
+    for source in sources:
+        if isinstance(source.records, RecordCollection):
+            yield from source.records.matched_interactions(phones)
+        else:
+            yield from (
+                item for item in source.records
+                if isinstance(item, Interaction) and any(p in phones for p in item.participants)
+            )
