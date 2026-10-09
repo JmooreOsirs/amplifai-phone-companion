@@ -132,15 +132,24 @@ def main() -> None:
     scan.exited(0)
     scan.approve(True)
     scan.begin("connect")
-    scan.handle({"kind": "capture", "contacts": [{"id": 1, "name": "Synthetic contact",
-                 "phoneCount": 1, "phoneEnds": ["0000"]}], "query": "", "cursor": 0,
-                 "nextCursor": 1, "totalContacts": 2, "availableCalls": 0,
+    scan.handle({"kind": "capture", "contacts": [
+                 {"id": index, "name": f"Synthetic contact {index}",
+                  "phoneCount": 1, "phoneEnds": ["0000"]} for index in (1, 2)],
+                 "query": "", "cursor": 0, "nextCursor": None,
+                 "totalContacts": 2, "availableCalls": 0,
                  "availableMessages": 0, "missing": []})
     scan.update_visible_selection([1])
-    scan.select_all_contacts()
+    pending_page = scan.select_all_contacts()
     view.state = scan
     view.refresh()
     view.cancel_select_all_button.invoke()
+    if not scan._select_all_cancel or scan.selected_ids != {1}:
+        raise RuntimeError("Stop check did not keep the previous selection while a page was in flight")
+    scan.handle({"kind": "contacts", "contacts": [
+                 {"id": index, "name": f"Synthetic contact {index}",
+                  "phoneCount": 1, "phoneEnds": ["0000"]} for index in (1, 2)],
+                 "query": "", "cursor": pending_page["cursor"], "nextCursor": None,
+                 "totalContacts": 2, "scanId": pending_page["scanId"]})
     if scan.selecting_all or scan.selected_ids != {1}:
         raise RuntimeError("Stop check changed an uncommitted all-page selection")
     if scan.saved_acknowledged:
