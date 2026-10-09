@@ -2,7 +2,7 @@ name: Windows x64 disposable companion qualification
 
 on:
   push:
-    branches: [codex/windows-x64-candidate-oct8]
+    branches: [codex/windows-x64-candidate-oct8, codex/windows-wix-diagnostic-oct9]
 
 permissions:
   contents: write
@@ -12,7 +12,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  wix_diagnostic:
+    if: github.ref_name == 'codex/windows-wix-diagnostic-oct9'
+    runs-on: windows-2025
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: ''
+      - name: Diagnose only synthetic WiX authoring and large component count
+        shell: pwsh
+        run: |
+          $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
+          $candle = Join-Path $wixBin 'candle.exe'
+          $light = Join-Path $wixBin 'light.exe'
+          python source/script/diagnose_windows_wix.py --candle $candle --light $light
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   windows:
+    if: github.ref_name != 'codex/windows-wix-diagnostic-oct9'
     # Standard PUBLIC-repository runner minutes are free. No cache/artifact storage.
     runs-on: windows-2025
     timeout-minutes: 40
