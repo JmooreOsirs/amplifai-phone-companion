@@ -1,6 +1,7 @@
 package ai.satoris.amplifai.phone;
 
 import android.app.Instrumentation;
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -23,6 +24,7 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.regex.Matcher;
@@ -75,6 +77,19 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
                 finish(0, result);
                 return;
             }
+            if ("bulk_selection".equals(testArguments.getString("scenario"))) {
+                verifyBulkSelection();
+                verifyBulkCancelButton();
+                result.putString("result", "1,205 exact SQLite contact IDs across thirteen keyset pages; local review, incomplete scan refusal and visible Cancel preserving prior selection passed");
+                finish(0, result);
+                return;
+            }
+            if ("account_connect".equals(testArguments.getString("scenario"))) {
+                verifyAccountConnect();
+                result.putString("result", "Android socket v3 discovery, bound claim, explicit destination approval, one-use release and guarded source read passed with synthetic server authority");
+                finish(0, result);
+                return;
+            }
             verifyHandoff();
             verifyPagedHandoff();
             verifyOptionalRollback();
@@ -86,6 +101,123 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
             result.putString("error", failure.getClass().getSimpleName() + ": " + failure.getMessage());
             finish(-1, result);
         }
+    }
+
+    private void verifyBulkSelection() {
+        try (SanitizedStore source = new SanitizedStore(getTargetContext())) {
+            source.begin("contacts");
+            for (long id = 1; id <= 1_205; id++)
+                source.contact(id, "Synthetic " + id, "+1555" + String.format(java.util.Locale.ROOT, "%07d", id));
+            source.commit("contacts", 1_205, 0);
+            Set<Long> selected = ContactBulkSelector.scan(source.contactCount(""), 100,
+                    source::contactIdsAfter, () -> false);
+            if (selected.size() != 1_205 || !selected.contains(1L) || !selected.contains(1_205L) ||
+                    source.review(selected).selectedContacts != 1_205)
+                throw new AssertionError("Full SQLite selection or review count changed");
+            try {
+                ContactBulkSelector.scan(1_206, 100, source::contactIdsAfter, () -> false);
+                throw new AssertionError("Missing final contact must fail");
+            } catch (IllegalStateException expected) {
+                // No caller selection was changed.
+            }
+            try {
+                ContactBulkSelector.scan(1_205, 100, source::contactIdsAfter, () -> true);
+                throw new AssertionError("Cancelled scan must fail");
+            } catch (java.util.concurrent.CancellationException expected) {
+                // No caller selection was changed.
+            }
+        }
+    }
+
+    private void verifyBulkCancelButton() throws Exception {
+        Activity activity = startActivitySync(new Intent(getTargetContext(), MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            Field selectedField = MainActivity.class.getDeclaredField("selectedIds");
+            Field activeField = MainActivity.class.getDeclaredField("bulkSelectionActive");
+            Field generationField = MainActivity.class.getDeclaredField("bulkSelectionGeneration");
+            Field cancelField = MainActivity.class.getDeclaredField("cancelSelectAll");
+            selectedField.setAccessible(true);
+            activeField.setAccessible(true);
+            generationField.setAccessible(true);
+            cancelField.setAccessible(true);
+            @SuppressWarnings("unchecked") Set<Long> selected = (Set<Long>) selectedField.get(activity);
+            Button cancelButton = (Button) cancelField.get(activity);
+            if (cancelButton == null) throw new AssertionError("Bulk cancel control was not rendered");
+            runOnMainSync(() -> {
+                selected.add(5L);
+                activeFieldSet(activeField, activity, true);
+                cancelButton.setVisibility(View.VISIBLE);
+                cancelButton.performClick();
+            });
+            if (!selected.equals(Set.of(5L)) || activeField.getBoolean(activity) ||
+                    cancelButton.getVisibility() != View.GONE || generationField.getInt(activity) < 1)
+                throw new AssertionError("Visible bulk Cancel changed the prior selection or left a scan active");
+        } finally {
+            runOnMainSync(activity::finish);
+        }
+    }
+
+    private void verifyAccountConnect() throws Exception {
+        try (SanitizedStore source = new SanitizedStore(getTargetContext())) {
+            source.begin("contacts");
+            source.contact(1L, "Synthetic person", "+15551234567");
+            source.commit("contacts", 1, 0);
+            source.review(Set.of(1L));
+            try (PagedTransfer transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L))) {
+                String intent = "12345678-1234-4234-8234-123456789abc";
+                String capability = "A".repeat(43);
+                String releaseCode = "B".repeat(43);
+                AtomicBoolean claimed = new AtomicBoolean();
+                AtomicBoolean consumed = new AtomicBoolean();
+                LocalBridge.AccountProof proof = new LocalBridge.AccountProof() {
+                    @Override public LocalBridge.Destination claim(String id, String cap, String handoff, String digest) {
+                        if (!intent.equals(id) || !capability.equals(cap) || !transfer.manifestSha256().equals(digest)) return null;
+                        claimed.set(true);
+                        return new LocalBridge.Destination(id, "synthetic@example.test", "Synthetic course");
+                    }
+                    @Override public boolean consume(String id, String cap, String code, String handoff, String digest) {
+                        boolean matching = intent.equals(id) && capability.equals(cap) && releaseCode.equals(code) &&
+                                transfer.manifestSha256().equals(digest);
+                        if (matching) consumed.set(true);
+                        return matching;
+                    }
+                };
+                try (LocalBridge bridge = new LocalBridge(transfer, ORIGIN, 0, System::nanoTime,
+                        ignored -> {}, () -> {}, ignored -> {}, proof, () -> {})) {
+                    bridge.start();
+                    String discovery = request(bridge.port(), "GET", "/v3/discover", "", "");
+                    require(discovery.startsWith("HTTP/1.1 200") && !discovery.contains("synthetic@example.test"),
+                            "v3 discovery leaked destination or failed on Android");
+                    JSONObject published = new JSONObject(discovery.substring(discovery.indexOf("\r\n\r\n") + 4));
+                    String binding = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                            "\",\"handoffId\":\"" + published.getString("handoffId") +
+                            "\",\"payloadSha256\":\"" + published.getString("payloadSha256") + "\"}";
+                    require(request(bridge.port(), "POST", "/v3/connect", "Content-Type: application/json\r\n",
+                            binding).contains("\"pending\":true"), "v3 claim failed on Android");
+                    require(claimed.get() && !consumed.get() && bridge.pendingDestination() != null,
+                            "v3 claim skipped native destination approval");
+                    String release = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                            "\",\"releaseCode\":\"" + releaseCode + "\"}";
+                    require(request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n",
+                            release).startsWith("HTTP/1.1 403"), "unapproved Android v3 release succeeded");
+                    require(bridge.decideDestination(intent, true), "native destination approval failed");
+                    String approved = request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n", release);
+                    require(approved.startsWith("HTTP/1.1 200") && consumed.get(), "server-consumed Android v3 release failed");
+                    JSONObject pairing = new JSONObject(approved.substring(approved.indexOf("\r\n\r\n") + 4));
+                    require(request(bridge.port(), "GET", "/v2/source/contacts?cursor=0",
+                            "Authorization: Bearer " + pairing.getString("token") + "\r\n", "").startsWith("HTTP/1.1 200"),
+                            "approved Android v3 did not expose the reviewed page");
+                    require(request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n",
+                            release).startsWith("HTTP/1.1 403"), "v3 token release replayed");
+                }
+            }
+        }
+    }
+
+    private static void activeFieldSet(Field field, Object target, boolean value) {
+        try { field.setBoolean(target, value); }
+        catch (IllegalAccessException failure) { throw new AssertionError(failure); }
     }
 
     private void verifyUpdaterArchive() throws Exception {

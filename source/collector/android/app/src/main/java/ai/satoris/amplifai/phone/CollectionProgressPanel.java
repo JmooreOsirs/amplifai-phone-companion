@@ -109,12 +109,15 @@ final class CollectionProgressPanel {
         parent.addView(row);
         for (int index = 0; index < SOURCES.length; index++) {
             LinearLayout card = column();
-            card.setPadding(dp(9), dp(10), dp(8), dp(10));
+            card.setPadding(dp(6), dp(10), dp(6), dp(10));
             card.setBackground(outline(PANEL, 8));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
             if (index > 0) params.leftMargin = dp(7);
             row.addView(card, params);
-            card.addView(label(SOURCES[index].toUpperCase(Locale.ROOT), 10, MUTED, true));
+            TextView sourceName = label(SOURCES[index].toUpperCase(Locale.ROOT), 10, MUTED, true);
+            sourceName.setMaxLines(1);
+            sourceName.setAutoSizeTextTypeUniformWithConfiguration(7, 10, 1, TypedValue.COMPLEX_UNIT_SP);
+            card.addView(sourceName);
             sourceValues[index] = label("—", 27, HEADING, true);
             sourceValues[index].setMaxLines(2);
             sourceValues[index].setAutoSizeTextTypeUniformWithConfiguration(11, 27, 1, TypedValue.COMPLEX_UNIT_SP);

@@ -1,7 +1,7 @@
-# AMPLIFai Phone companion source — Mac rc9 and Android rc8
+# AMPLIFai Phone companion source — historical Mac rc9 and Android rc9
 
 The Android source under `source/collector/android` corresponds to the signed
-`2026.10.08-rc8` website APK. It streams available contacts, calls and SMS
+`2026.10.09-rc9` website APK. It streams available contacts, calls and SMS
 metadata into a private no-backup review store, prepares immutable selected
 pages, and serves them to the same-phone browser after explicit approval.
 Available source and selected record counts, page hashes, one-use pairing,
@@ -10,20 +10,25 @@ v2 protocol. Full names and phone values are preserved when an individual
 record fits its bounded page. The Android app now shows measured phone-entry
 progress, separate retained counts for each source, local selection results,
 and a saved-account state only after the bound saved/readback acknowledgment.
-Its one-read controls are visible above the account and privacy links. rc8
-adds an anonymous, signed launch-time update feed and verifies exact APK bytes,
+Its one-read controls are visible above the account and privacy links. rc9
+adds all-page contact selection with visible cancellation and a server-confirmed,
+explicitly approved account destination without typing a code; manual code
+remains available. Its anonymous, signed launch-time update feed verifies exact APK bytes,
 publisher certificate, package and newer version before asking Android to
 install. Automatic installation is an initially unchecked choice and remains
 conditional on Android eligibility; an OS approval prompt is handled in the
 foreground when required. Collection and unsaved review inhibit replacement.
-Physical installer permissions, same-phone
-browser handoff and authenticated account save remain unverified on an owner
-device. Published Android rc7 remains available as the previous release.
+The temporary review uses app-private SQLite without a separate app-managed
+cipher, and same-phone loopback preview is HTTP rather than end-to-end
+encryption. Separately approved account saving uses HTTPS. Physical installer
+permissions, same-phone browser handoff and authenticated account save remain
+unverified on an owner device. Published Android rc8 remains available as rollback.
 The website APK includes Android's install-package permissions; it is not a
 Google Play submission artifact. Release-signed disposable higher-version
 test APKs are kept out of this public source package.
 
-This package is prepared for the matching `2026.10.08-rc9` Mac app, build
+The Mac source below is the historical `2026.10.08-rc9` source view; newer Mac
+releases provide their own immutable source archives. This package was prepared for the `2026.10.08-rc9` Mac app, build
 `26100809`; publication and binary checksums are separate release steps. The
 filtered receiver drains unselected full-backup bytes, while every retained
 write and parsing copy checks real Mac storage with a further 2 GiB reserve.

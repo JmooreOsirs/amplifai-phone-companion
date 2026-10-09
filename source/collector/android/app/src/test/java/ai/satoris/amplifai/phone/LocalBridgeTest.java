@@ -88,6 +88,98 @@ public final class LocalBridgeTest {
         @Override public void close() { closed = true; }
     }
 
+    @Test public void accountConfirmedConnectRequiresNativeDecisionAndServerConsumeBeforePreview() throws Exception {
+        SyntheticPages pages = new SyntheticPages();
+        AtomicInteger claims = new AtomicInteger();
+        AtomicInteger consumes = new AtomicInteger();
+        AtomicInteger prompted = new AtomicInteger();
+        String intent = "12345678-1234-4234-8234-123456789abc";
+        String capability = "A".repeat(43);
+        String releaseCode = "B".repeat(43);
+        LocalBridge.AccountProof proof = new LocalBridge.AccountProof() {
+            @Override public LocalBridge.Destination claim(String id, String cap, String handoff, String digest) {
+                claims.incrementAndGet();
+                return id.equals(intent) && cap.equals(capability) && digest.equals(pages.manifestSha256())
+                        ? new LocalBridge.Destination(id, "synthetic@example.test", "Synthetic course") : null;
+            }
+            @Override public boolean consume(String id, String cap, String code, String handoff, String digest) {
+                consumes.incrementAndGet();
+                return id.equals(intent) && cap.equals(capability) && code.equals(releaseCode) &&
+                        digest.equals(pages.manifestSha256());
+            }
+        };
+        try (LocalBridge bridge = new LocalBridge(pages, ORIGIN, 0, System::nanoTime, reason -> {},
+                () -> {}, ignored -> {}, proof, prompted::incrementAndGet)) {
+            bridge.start();
+            String discovery = send(bridge.port(), ORIGIN, "GET", "/v3/discover", "", "");
+            assertTrue(discovery.startsWith("HTTP/1.1 200"));
+            assertFalse(discovery.contains("synthetic@example.test"));
+            Matcher handoff = Pattern.compile("\\\"handoffId\\\":\\\"([0-9a-f-]{36})\\\"").matcher(discovery);
+            assertTrue(handoff.find());
+            String binding = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                    "\",\"handoffId\":\"" + handoff.group(1) + "\",\"payloadSha256\":\"" + pages.manifestSha256() + "\"}";
+            String json = "Content-Type: application/json\r\n";
+            assertTrue(sendWithHost(bridge.port(), "localhost:" + bridge.port(), ORIGIN, "POST", "/v3/connect", json, binding).startsWith("HTTP/1.1 403"));
+            assertTrue(send(bridge.port(), "https://other.example", "POST", "/v3/connect", json, binding).startsWith("HTTP/1.1 403"));
+            assertEquals(0, claims.get());
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/connect", json,
+                    binding.replace(pages.manifestSha256(), "0".repeat(64))).startsWith("HTTP/1.1 409"));
+            assertEquals(0, claims.get());
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/connect", json, binding).contains("\"pending\":true"));
+            assertEquals(1, claims.get()); assertEquals(1, prompted.get());
+            assertEquals("synthetic@example.test", bridge.pendingDestination().email());
+            String auth = "Authorization: Bearer " + capability + "\r\n";
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/status", auth, "").contains("\"pending\""));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/status", "Authorization: Bearer " + "C".repeat(43) + "\r\n", "").startsWith("HTTP/1.1 403"));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v1/pair", json, "{\"code\":\"" + bridge.code() + "\"}").startsWith("HTTP/1.1 409"));
+            String release = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                    "\",\"releaseCode\":\"" + releaseCode + "\"}";
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/release", json, release).startsWith("HTTP/1.1 403"));
+            assertEquals(0, consumes.get());
+            assertTrue(bridge.decideDestination(intent, true));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/status", auth, "").contains("\"approved\""));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/release", json,
+                    release.replace(releaseCode, "D".repeat(43))).startsWith("HTTP/1.1 409"));
+            assertEquals(1, consumes.get());
+            String paired = send(bridge.port(), ORIGIN, "POST", "/v3/release", json, release);
+            assertTrue(paired.startsWith("HTTP/1.1 200"));
+            assertTrue(paired.contains("\"format\":\"paged-records-v2\""));
+            assertTrue(paired.contains("\"payloadSha256\":\"" + pages.manifestSha256() + "\""));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/release", json, release).startsWith("HTTP/1.1 403"));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/discover", "", "").startsWith("HTTP/1.1 410"));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v2/source/contacts?cursor=0", "", "").startsWith("HTTP/1.1 403"));
+        }
+    }
+
+    @Test public void deniedOrExpiredAccountDestinationCannotReleasePreview() throws Exception {
+        SyntheticPages pages = new SyntheticPages();
+        AtomicLong clock = new AtomicLong();
+        String intent = "12345678-1234-4234-8234-123456789abc";
+        String cap = "A".repeat(43);
+        LocalBridge.AccountProof proof = new LocalBridge.AccountProof() {
+            @Override public LocalBridge.Destination claim(String id, String capability, String handoff, String digest) {
+                return new LocalBridge.Destination(id, "synthetic@example.test", "Synthetic course");
+            }
+            @Override public boolean consume(String id, String capability, String release, String handoff, String digest) {
+                throw new AssertionError("Denied connection must never be consumed");
+            }
+        };
+        try (LocalBridge bridge = new LocalBridge(pages, ORIGIN, 0, clock::get, reason -> {},
+                () -> {}, ignored -> {}, proof, () -> {})) {
+            bridge.start();
+            String binding = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + cap +
+                    "\",\"handoffId\":\"" + Pattern.compile("[0-9a-f-]{36}").matcher(send(bridge.port(), ORIGIN, "GET", "/v3/discover", "", "")).results().findFirst().orElseThrow().group() +
+                    "\",\"payloadSha256\":\"" + pages.manifestSha256() + "\"}";
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/connect", "Content-Type: application/json\r\n", binding).startsWith("HTTP/1.1 200"));
+            assertTrue(bridge.decideDestination(intent, false));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/status", "Authorization: Bearer " + cap + "\r\n", "").contains("\"denied\""));
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/release", "Content-Type: application/json\r\n",
+                    "{\"intentId\":\"" + intent + "\",\"capability\":\"" + cap + "\",\"releaseCode\":\"" + "B".repeat(43) + "\"}").startsWith("HTTP/1.1 403"));
+            clock.set(TimeUnit.MINUTES.toNanos(6));
+            assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/status", "Authorization: Bearer " + cap + "\r\n", "").startsWith("HTTP/1.1 410"));
+        }
+    }
+
     @Test public void androidPagedTransferExceedsLegacyCountAndSurvivesSlowReceiveSaveAndLostAcks() throws Exception {
         AtomicLong clock = new AtomicLong();
         AtomicInteger received = new AtomicInteger();

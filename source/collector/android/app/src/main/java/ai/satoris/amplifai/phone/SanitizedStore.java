@@ -159,6 +159,16 @@ final class SanitizedStore implements AutoCloseable {
         return page;
     }
 
+    List<Long> contactIdsAfter(long previousId, int size) {
+        if (size < 1) throw new IllegalArgumentException("invalid_page_size");
+        List<Long> ids = new ArrayList<>();
+        try (Cursor rows = db.rawQuery("SELECT id FROM contact WHERE id>? ORDER BY id LIMIT ?",
+                new String[]{String.valueOf(previousId), String.valueOf(size)})) {
+            while (rows.moveToNext()) ids.add(rows.getLong(0));
+        }
+        return ids;
+    }
+
     private static String like(String term) {
         return "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
     }

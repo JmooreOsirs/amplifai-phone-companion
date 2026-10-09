@@ -1,6 +1,6 @@
 # AMPLIFai Phone — Android
 
-`2026.10.08-rc8` (`26100808`) streams each permission-gated source into a
+`2026.10.09-rc9` (`26100909`) streams each permission-gated source into a
 short-lived, app-private SQLite review store, then prepares immutable selected
 pages for the same-phone browser. The browser validates page hashes, source
 counts and the manifest before a separately approved, per-account save. The
@@ -12,19 +12,23 @@ Elapsed time and last measured movement appear while an operation is active;
 an exact count is displayed immediately, with modest optional motion rather
 than interpolated records or a fabricated time-remaining estimate. A report
 button appears only after the bound saved/readback acknowledgment and opens
-the existing signed-in account page. Published rc7 remains the previous
-distribution. Physical-device permission,
+the existing signed-in account page. rc9 also verifies all stable contact IDs
+before an atomic all-page selection, with visible Cancel and Clear actions.
+It supports an account-confirmed connection: the app shows the destination
+returned by the authenticated server, and the owner approves it before the
+one-use reviewed preview can transfer. The temporary code remains a fallback.
+Published rc8 remains the previous distribution. Physical-device permission,
 browser and authenticated account-save acceptance are still unverified.
 
 Support-code wire format is `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
 For this Android release, `build` is the exact dotted version name
-`2026.10.08-rc8`, bytes are `0|0` before pairing, and status is `-`. The
+`2026.10.09-rc9`, bytes are `0|0` before pairing, and status is `-`. The
 numeric Mac build values remain distinct and backward-compatible; the website
 derives platform only from an explicit allowlist of exact build values.
 
-Install rc8 as an in-place update, without uninstalling or clearing app data.
-rc7 and earlier cannot check for updates themselves, so this replacement is a
-one-time normal Android installation. The rc7 release remains an immutable
+Install rc9 as an in-place update, without uninstalling or clearing app data.
+rc8 can discover a signed update at launch, subject to its owner and OS
+install permissions; an ordinary signed APK install remains available. rc8 remains an immutable
 rollback artifact; Android does not install an older version over a newer one
 without a separate deliberate reinstall path.
 Updates retain the application
@@ -60,10 +64,15 @@ pairing/browser delivery, and an account save awaiting the matching readback
 acknowledgment. Pending installation blocks new local work. Cancelling an
 install prompt or verification leaves phone review available.
 
-This self-updater is for the **website APK only**. Google's Play policy does
-not permit `REQUEST_INSTALL_PACKAGES` for this kind of self-update; any future
-Play-distributed variant must remove that permission and use Google's own
-update mechanism. A Google Play listing draft is not an approved Play release.
+This self-updater is for the **website APK only**. The separate `play` build
+flavor contains no signed website feed, APK downloader, PackageInstaller code,
+update certificate asset, installer receiver/activity, or package-install
+permissions. Its update status says Google Play manages updates. The Play
+flavor retains contacts, call history and SMS history collection, review and
+browser handoff; it is a source/build candidate, not an approved Play release.
+Google's policy does not permit `REQUEST_INSTALL_PACKAGES` for this kind of
+self-update, and the separate SMS/call-log policy and reviewer-login gates
+remain unresolved.
 See [official PackageInstaller user-action rules](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setRequireUserAction(int))
 and [Google Play install-permission policy](https://support.google.com/googleplay/android-developer/answer/12085295).
 
@@ -71,11 +80,11 @@ and [Google Play install-permission policy](https://support.google.com/googlepla
 
 Use the signed APK's normal Android download/install flow. No developer mode, USB debugging, root, default SMS/dialer takeover, or security bypass is part of this product. If the installer or a restricted permission blocks progress, report that limitation; do not disable device protections.
 
-1. Choose **Read contacts**, **Read call history**, and/or **Read SMS metadata** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
-2. Select contacts, then **Review selected metadata**. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
+1. Choose **Read contacts**, **Read call history**, and/or **Read SMS history** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
+2. Select contacts, then **Review selected metadata**. **Select all contacts across every page** verifies every stable local contact ID before changing the selection; **Clear all selected contacts** affects the local selection only. Search and visible 100-row pages do not limit an all-page selection. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
 3. Choose **Approve same-phone browser handoff**. On Android 13+, allow notifications and press Approve again. Disabled app/channel notifications block handoff because its visible Cancel control is required.
-4. Use **Open AMPLIFai account in browser** on this same phone. Enter the **One-use pairing code** within five minutes. Each progressing page fetch, valid keepalive and completion extends the active browser session, bounded by inactivity and the visible Cancel action. Review each available source and approve its account save separately.
-5. After delivery, browser-only users can **Cancel browser handoff**. Signed-in users separately save or decline each source, then use **Confirm saved sources and finish**. The browser verifies durable account readback before the matching saved assertion; the companion only reports a confirmed save after the final bound receipt. Cancelling cannot retract already saved account data.
+4. Use **Open AMPLIFai account in browser** on this same phone. For a current signed-in account, choose **Connect reviewed Android app**, check the account and course displayed by the app from server proof, and approve that destination. The browser then receives the reviewed preview without typing a code. The app's **One-use pairing code** is a five-minute fallback if discovery is unavailable. Each progressing page fetch, valid keepalive and completion extends the active browser session, bounded by inactivity and the visible Cancel action. Review each available source and approve its account save separately.
+5. After delivery, browser-only users can **Cancel browser handoff**. Signed-in users separately save or decline each source, then use **Finalize reviewed sources**. The browser verifies durable account readback before the matching saved assertion; the companion only reports a confirmed save after the final bound receipt. Cancelling cannot retract already saved account data.
 
 For a blocked permission or pre-pair handoff, **Copy safe support code** gives
 the owner an optional code to submit through AMPLIFai contact. It contains only
@@ -108,10 +117,19 @@ Use the installed Android SDK/JBR and existing Gradle dependencies. No signing v
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
 ANDROID_HOME='/Users/jeffmoore/Library/Android/sdk' \
 ./gradlew --offline --no-daemon --no-configuration-cache \
-  :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+  :app:testWebsiteDebugUnitTest :app:testPlayDebugUnitTest \
+  :app:lintWebsiteRelease :app:lintPlayRelease \
+  :app:assembleWebsiteRelease :app:bundlePlayRelease
 ```
 
-Run from `collector/android`. The current Android plugin exposes debug JVM tests, not a `testReleaseUnitTest` task; the same production sources are additionally compiled and linted by the release build.
+Run from `collector/android`. The current Android plugin exposes debug JVM
+tests, not a `testReleaseUnitTest` task; both production variants are compiled
+and linted by their release builds. `websiteRelease` retains the existing
+application ID, version and controlled signing path. `playRelease` has the
+same app identity and source consent/ACK behavior but is kept out of the
+website APK download and update feed. Its local AAB is a qualification artifact;
+Play upload signing, policy declarations and reviewer access must be resolved
+before any submission. Do not publish either unsigned local output.
 
 This module contains only Java sources and explicitly sets `android.enableKotlin`
 to false in its build configuration. AGP otherwise injects the Kotlin standard
@@ -129,7 +147,9 @@ The authorized release operator supplies all four environment variables privatel
 - `AMPLIFAI_ANDROID_STORE_PASSWORD`
 - `AMPLIFAI_ANDROID_KEY_PASSWORD`
 
-Partial configuration is rejected. This Android project disables the configuration cache and rejects an explicit `--configuration-cache` before reading any signing values: even failed configuration can otherwise be cached. Use `--no-daemon --no-configuration-cache`; never echo credentials, include passwords in command arguments, or use a build scan. With no variables the release remains **unsigned** for local validation; never publish `app-release-unsigned.apk` as an installable download. With the complete approved configuration, verify `app/build/outputs/apk/release/app-release.apk` using the installed `apksigner`, confirm version/application ID/non-debuggable manifest and signer fingerprint, then record its SHA-256 and exact published URL in the canonical release ledger. Signing/publication are operator-owned, not implied by this README.
+Partial configuration is rejected. This Android project disables the configuration cache and rejects an explicit `--configuration-cache` before reading any signing values: even failed configuration can otherwise be cached. Use `--no-daemon --no-configuration-cache`; never echo credentials, include passwords in command arguments, or use a build scan. With no variables the release remains **unsigned** for local validation; never publish `app-website-release-unsigned.apk` as an installable download. The existing controlled Keychain wrapper's `build` action now builds only `websiteRelease`, preserving its prior signing scope. Verify `app/build/outputs/apk/website/release/app-website-release.apk` with `apksigner`, its version/application ID/non-debuggable manifest and pinned signer before website publication.
+
+For a **local Play candidate only**, `swift script/android_release_signing.swift build-play` signs `app/build/outputs/bundle/playRelease/app-play-release.aab` with the same existing Android rc8 release identity, without printing or exporting its password. Verify the AAB's JAR signature and SHA-256, then compare its certificate fingerprint with the expected upload certificate recorded in Google Play **before** any Console upload. Google Play may distribute APKs under a different app-signing key; compatibility with website installs must be decided from the Play app-signing certificate, not inferred from this local AAB. The current Play listing, reviewer access and restricted SMS/call-log policy are separate gates. Signing/publication are operator-owned, not implied by this README.
 
 After verifying the exact APK, the existing Keychain-held release identity can
 sign the update feed without a password in shell arguments:
@@ -137,7 +157,7 @@ sign the update feed without a password in shell arguments:
 ```sh
 swift script/android_release_signing.swift sign-feed \
   /absolute/path/to/verified.apk \
-  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.08-rc8/AMPLIFai-Phone-Android-2026.10.08-rc8.apk \
+  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.09-rc9/AMPLIFai-Phone-Android-2026.10.09-rc9.apk \
   /absolute/path/to/android-update-v1.txt
 ```
 

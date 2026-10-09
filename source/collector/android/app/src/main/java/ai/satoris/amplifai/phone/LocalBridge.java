@@ -32,6 +32,12 @@ public final class LocalBridge implements AutoCloseable {
         String pageJson(String category, int cursor);
         @Override void close();
     }
+    interface AccountProof {
+        Destination claim(String intentId, String capability, String handoffId, String payloadSha256);
+        boolean consume(String intentId, String capability, String releaseCode,
+                        String handoffId, String payloadSha256);
+    }
+    record Destination(String intentId, String email, String course) {}
     public static final int PORT = 48751;
     public static final String ACCOUNT_ORIGIN = "https://amplifai-database-engine.vercel.app";
     private static final int MAX_HEADER_BYTES = 8192;
@@ -49,6 +55,15 @@ public final class LocalBridge implements AutoCloseable {
             "\\s*\\{\\s*\"handoffId\"\\s*:\\s*\"([0-9a-f-]{36})\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*,\\s*\"received\"\\s*:\\s*true\\s*\\}\\s*");
     private static final Pattern DECLINE = Pattern.compile(
             "\\s*\\{\\s*\"handoffId\"\\s*:\\s*\"([0-9a-f-]{36})\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*,\\s*\"category\"\\s*:\\s*\"(contacts|calls|messages)\"\\s*\\}\\s*");
+    private static final String UUID_PATTERN = "([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})";
+    private static final String CAPABILITY_PATTERN = "([A-Za-z0-9_-]{43})";
+    private static final Pattern CONNECT = Pattern.compile("\\s*\\{\\s*\"intentId\"\\s*:\\s*\"" + UUID_PATTERN +
+            "\"\\s*,\\s*\"capability\"\\s*:\\s*\"" + CAPABILITY_PATTERN +
+            "\"\\s*,\\s*\"handoffId\"\\s*:\\s*\"" + UUID_PATTERN +
+            "\"\\s*,\\s*\"payloadSha256\"\\s*:\\s*\"([0-9a-f]{64})\"\\s*\\}\\s*");
+    private static final Pattern RELEASE = Pattern.compile("\\s*\\{\\s*\"intentId\"\\s*:\\s*\"" + UUID_PATTERN +
+            "\"\\s*,\\s*\"capability\"\\s*:\\s*\"" + CAPABILITY_PATTERN +
+            "\"\\s*,\\s*\"releaseCode\"\\s*:\\s*\"" + CAPABILITY_PATTERN + "\"\\s*\\}\\s*");
 
     private final ServerSocket listener;
     private final byte[] payload;
@@ -62,6 +77,8 @@ public final class LocalBridge implements AutoCloseable {
     private final Consumer<EndReason> onClosed;
     private final Runnable onReceived;
     private final Consumer<long[]> onPageProgress;
+    private final AccountProof accountProof;
+    private final Runnable onDestinationPending;
     private final String handoffId;
     private final String payloadSha256;
     private volatile boolean closed;
@@ -71,6 +88,11 @@ public final class LocalBridge implements AutoCloseable {
     private int nextCursor;
     private boolean used;
     private boolean savedAcknowledged;
+    private String destinationIntentId;
+    private String destinationCapability;
+    private String destinationEmail;
+    private String destinationCourse;
+    private volatile String destinationState;
     private final int[] sourceCursors = new int[3];
     private final String[] sourceDispositions = new String[]{"unresolved", "unresolved", "unresolved"};
 
@@ -95,6 +117,8 @@ public final class LocalBridge implements AutoCloseable {
         this.onClosed = onClosed;
         this.onReceived = onReceived;
         this.onPageProgress = ignored -> {};
+        accountProof = null;
+        onDestinationPending = () -> {};
         handoffId = UUID.randomUUID().toString();
         payloadSha256 = sha256Hex(payload);
         listener = new ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"));
@@ -113,6 +137,12 @@ public final class LocalBridge implements AutoCloseable {
 
     LocalBridge(PagedSource reviewed, String allowedOrigin, int port, LongSupplier clock,
                 Consumer<EndReason> onClosed, Runnable onReceived, Consumer<long[]> onPageProgress) throws IOException {
+        this(reviewed, allowedOrigin, port, clock, onClosed, onReceived, onPageProgress, null, () -> {});
+    }
+
+    LocalBridge(PagedSource reviewed, String allowedOrigin, int port, LongSupplier clock,
+                Consumer<EndReason> onClosed, Runnable onReceived, Consumer<long[]> onPageProgress,
+                AccountProof accountProof, Runnable onDestinationPending) throws IOException {
         transfer = reviewed;
         payload = new byte[0];
         origin = allowedOrigin;
@@ -120,6 +150,8 @@ public final class LocalBridge implements AutoCloseable {
         this.onClosed = onClosed;
         this.onReceived = onReceived;
         this.onPageProgress = onPageProgress;
+        this.accountProof = accountProof;
+        this.onDestinationPending = onDestinationPending;
         handoffId = UUID.randomUUID().toString();
         payloadSha256 = reviewed.manifestSha256();
         listener = new ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"));
@@ -138,6 +170,18 @@ public final class LocalBridge implements AutoCloseable {
     public int port() { return port; }
     long remainingMillis() { return Math.max(0L, TimeUnit.NANOSECONDS.toMillis(expiresAt - clock.getAsLong())); }
     public void start() { thread.start(); }
+
+    synchronized Destination pendingDestination() {
+        return "pending".equals(destinationState)
+                ? new Destination(destinationIntentId, destinationEmail, destinationCourse) : null;
+    }
+
+    synchronized boolean decideDestination(String intentId, boolean approved) {
+        if (closed || clock.getAsLong() >= expiresAt || !"pending".equals(destinationState) ||
+                !constantTimeEquals(destinationIntentId, intentId)) return false;
+        destinationState = approved ? "approved" : "denied";
+        return true;
+    }
 
     private void serve() {
         try {
@@ -183,7 +227,15 @@ public final class LocalBridge implements AutoCloseable {
             reply(output, 410, true, empty()); return;
         }
         if (request.method.equals("OPTIONS")) { preflight(output, request); return; }
-        if (request.method.equals("POST") && request.path.equals("/v1/pair")) {
+        if (accountProof != null && transfer != null && request.method.equals("GET") && request.path.equals("/v3/discover")) {
+            discover(output, request);
+        } else if (accountProof != null && transfer != null && request.method.equals("POST") && request.path.equals("/v3/connect")) {
+            connectAccount(output, request, socket.getInputStream());
+        } else if (accountProof != null && transfer != null && request.method.equals("GET") && request.path.equals("/v3/status")) {
+            destinationStatus(output, request);
+        } else if (accountProof != null && transfer != null && request.method.equals("POST") && request.path.equals("/v3/release")) {
+            releaseAccount(output, request, socket.getInputStream());
+        } else if (request.method.equals("POST") && request.path.equals("/v1/pair")) {
             pair(output, request, socket.getInputStream());
         } else if (request.method.equals("GET") && request.path.matches("/v1/metadata(?:\\?cursor=(0|[1-9][0-9]{0,2}))?")) {
             metadata(output, request);
@@ -205,9 +257,14 @@ public final class LocalBridge implements AutoCloseable {
     }
 
     private void preflight(OutputStream output, Request request) throws IOException {
-        String expected = request.path.matches("/v1/metadata(?:\\?cursor=(0|[1-9][0-9]{0,2}))?|/v2/source/(contacts|calls|messages)\\?cursor=(0|[1-9][0-9]{0,9})") ? "GET" : "POST";
+        if (request.path.startsWith("/v3/") && (accountProof == null || transfer == null)) {
+            reply(output, 403, true, empty()); return;
+        }
+        String expected = request.path.matches("/v1/metadata(?:\\?cursor=(0|[1-9][0-9]{0,2}))?|/v2/source/(contacts|calls|messages)\\?cursor=(0|[1-9][0-9]{0,9})|/v3/(discover|status)") ? "GET" : "POST";
         if ((!request.path.equals("/v1/pair") && !request.path.equals("/v1/complete") &&
                 !request.path.equals("/v1/acknowledge-save") &&
+                !(accountProof != null && transfer != null &&
+                        (request.path.equals("/v3/connect") || request.path.equals("/v3/release"))) &&
                 !(transfer != null && (request.path.equals("/v1/confirm-ack-received") ||
                         request.path.equals("/v2/keepalive") || request.path.equals("/v2/decline"))) && !expected.equals("GET")) ||
                 !expected.equals(request.headers.get("access-control-request-method"))) {
@@ -222,7 +279,86 @@ public final class LocalBridge implements AutoCloseable {
         output.write(headers.getBytes(StandardCharsets.US_ASCII));
     }
 
+    private void discover(OutputStream output, Request request) throws IOException {
+        if (contentLength(request) != 0) { reply(output, 400, true, empty()); return; }
+        if (token != null || destinationState != null) { reply(output, 410, true, empty()); return; }
+        long remaining = Math.max(1L, TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong()));
+        String body = "{\"format\":\"account-connect-v1\",\"handoffId\":\"" + handoffId +
+                "\",\"payloadSha256\":\"" + payloadSha256 + "\",\"expiresInSeconds\":" + remaining + "}";
+        reply(output, 200, true, body.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void connectAccount(OutputStream output, Request request, InputStream input) throws IOException {
+        String body = command(request, input);
+        Matcher match = body == null ? null : CONNECT.matcher(body);
+        if (match == null || !match.matches()) { reply(output, 400, true, empty()); return; }
+        if (destinationState != null || token != null || !constantTimeEquals(handoffId, match.group(3)) ||
+                !constantTimeEquals(payloadSha256, match.group(4))) {
+            reply(output, 409, true, empty()); return;
+        }
+        Destination destination = accountProof.claim(match.group(1), match.group(2), handoffId, payloadSha256);
+        if (closed || clock.getAsLong() >= expiresAt) { reply(output, 410, true, empty()); return; }
+        if (destination == null || !constantTimeEquals(match.group(1), destination.intentId()) ||
+                !validDestination(destination.email(), 254) || !validDestination(destination.course(), 160) ||
+                !destination.email().contains("@")) { reply(output, 409, true, empty()); return; }
+        destinationIntentId = match.group(1);
+        destinationCapability = match.group(2);
+        destinationEmail = destination.email();
+        destinationCourse = destination.course();
+        destinationState = "pending";
+        onDestinationPending.run();
+        reply(output, 200, true, "{\"pending\":true}".getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void destinationStatus(OutputStream output, Request request) throws IOException {
+        if (destinationState == null || !constantTimeEquals("Bearer " + destinationCapability,
+                request.headers.get("authorization"))) { reply(output, 403, true, empty()); return; }
+        reply(output, 200, true, ("{\"state\":\"" + destinationState + "\"}").getBytes(StandardCharsets.US_ASCII));
+    }
+
+    private void releaseAccount(OutputStream output, Request request, InputStream input) throws IOException {
+        String body = command(request, input);
+        Matcher match = body == null ? null : RELEASE.matcher(body);
+        if (match == null || !match.matches()) { reply(output, 400, true, empty()); return; }
+        if (!"approved".equals(destinationState) || token != null ||
+                !constantTimeEquals(destinationIntentId, match.group(1)) ||
+                !constantTimeEquals(destinationCapability, match.group(2))) {
+            reply(output, 403, true, empty()); return;
+        }
+        if (!accountProof.consume(match.group(1), match.group(2), match.group(3), handoffId, payloadSha256)) {
+            reply(output, 409, true, empty()); return;
+        }
+        if (closed || clock.getAsLong() >= expiresAt) { reply(output, 410, true, empty()); return; }
+        issueToken();
+        destinationState = "released";
+        reply(output, 200, true, pairResponse().getBytes(StandardCharsets.US_ASCII));
+        renew();
+    }
+
+    private static boolean validDestination(String text, int maxLength) {
+        if (text == null || text.isBlank() || text.length() > maxLength) return false;
+        for (int index = 0; index < text.length(); index++) if (Character.isISOControl(text.charAt(index))) return false;
+        return true;
+    }
+
+    private void issueToken() {
+        byte[] random = new byte[32];
+        RANDOM.nextBytes(random);
+        token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random);
+    }
+
+    private String pairResponse() {
+        long remaining = Math.max(1L, TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong()));
+        String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + remaining +
+                ",\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + payloadSha256 + "\"";
+        if (transfer == null) return result + "}";
+        StringBuilder paged = new StringBuilder(result).append(",\"confirmReceiptRequired\":true,\"format\":\"paged-records-v2\",\"manifestJson\":");
+        NativePayload.quote(paged, transfer.manifestJson());
+        return paged.append('}').toString();
+    }
+
     private void pair(OutputStream output, Request request, InputStream input) throws IOException {
+        if (destinationState != null) { reply(output, 409, true, empty()); return; }
         if (!"application/json".equals(request.headers.get("content-type")) ||
                 request.headers.containsKey("transfer-encoding")) {
             reply(output, 415, true, empty()); return;
@@ -253,19 +389,9 @@ public final class LocalBridge implements AutoCloseable {
         if (attempts >= MAX_ATTEMPTS) {
             reply(output, 403, true, empty()); return;
         }
-        byte[] random = new byte[32];
-        RANDOM.nextBytes(random);
-        token = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(random);
-        long remaining = Math.max(1L, TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong()));
-        String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + remaining +
-                ",\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + payloadSha256 + "\"";
-        if (transfer != null) {
-            StringBuilder paged = new StringBuilder(result).append(",\"confirmReceiptRequired\":true,\"format\":\"paged-records-v2\",\"manifestJson\":");
-            NativePayload.quote(paged, transfer.manifestJson());
-            result = paged.append('}').toString();
-            renew();
-        } else result += "}";
-        reply(output, 200, true, result.getBytes(StandardCharsets.US_ASCII));
+        issueToken();
+        reply(output, 200, true, pairResponse().getBytes(StandardCharsets.US_ASCII));
+        if (transfer != null) renew();
     }
 
     private void metadata(OutputStream output, Request request) throws IOException {
@@ -547,6 +673,10 @@ public final class LocalBridge implements AutoCloseable {
                 try { activeSocket.close(); } catch (IOException ignored) { /* Already closed. */ }
             }
             token = null;
+            destinationState = null;
+            destinationCapability = null;
+            destinationEmail = null;
+            destinationCourse = null;
             Arrays.fill(payload, (byte) 0);
             try { if (transfer != null) transfer.close(); }
             catch (RuntimeException ignored) { /* Release the listener and report closure even if scratch cleanup fails. */ }

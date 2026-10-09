@@ -22,7 +22,7 @@ public final class AndroidUpdateFeedTest {
     }
 
     private static byte[] certificate() throws Exception {
-        return Files.readAllBytes(Path.of("src/main/assets/android_update_publisher.der"));
+        return Files.readAllBytes(Path.of("src/website/assets/android_update_publisher.der"));
     }
 
     private static void rejected(byte[] feed, byte[] certificate) {

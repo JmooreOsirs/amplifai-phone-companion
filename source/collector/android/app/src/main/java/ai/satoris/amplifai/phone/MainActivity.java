@@ -22,6 +22,7 @@ import android.database.sqlite.SQLiteException;
 import android.database.sqlite.SQLiteFullException;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -35,6 +36,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -56,6 +58,11 @@ public final class MainActivity extends Activity {
     private TextView pageIndicator;
     private Button previousPage;
     private Button nextPage;
+    private Button selectAllContacts;
+    private Button clearSelectedContacts;
+    private Button cancelSelectAll;
+    private volatile int bulkSelectionGeneration;
+    private boolean bulkSelectionActive;
     private boolean preparingTransfer;
     private int reviewGeneration;
     private Instant snapshotCollectedAt = Instant.now();
@@ -85,6 +92,8 @@ public final class MainActivity extends Activity {
     private boolean callsAvailable;
     private boolean messagesAvailable;
     private boolean reviewed;
+    private AlertDialog destinationDialog;
+    private String destinationIntentShown;
     private int handoffReviewGeneration = -1;
     private boolean savedAckForCurrentReview;
     private int approvedSource;
@@ -156,6 +165,11 @@ public final class MainActivity extends Activity {
         readCalls.setOnClickListener(view -> readSource(CALLS_REQUEST));
         Button readMessages = button("Read SMS history", body);
         readMessages.setOnClickListener(view -> readSource(SMS_REQUEST));
+        Button protection = button("How Android review is protected", body);
+        protection.setOnClickListener(view -> new AlertDialog.Builder(this)
+                .setTitle("Phone review and account security")
+                .setMessage("Temporary review stays in this app's private storage on your phone. The app does not make an encrypted phone backup or add its own encryption to that temporary storage. The preview travels only between this phone's app and browser through a one-use local connection; it is not end-to-end encrypted. Saving selected metadata to your account uses a secure web connection and requires a separate approval. Message text and attachments are never read.")
+                .setPositiveButton("Close", null).show());
         cancel = button("Cancel current read", body);
         cancel.setEnabled(false);
         cancel.setOnClickListener(view -> { if (cancellation != null) cancellation.cancel(); });
@@ -197,6 +211,18 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(Editable s) {}
         });
         body.addView(search);
+        selectAllContacts = button("Select all contacts across every page", body);
+        selectAllContacts.setOnClickListener(view -> selectEveryContact());
+        cancelSelectAll = button("Cancel all-contact selection", body);
+        cancelSelectAll.setVisibility(View.GONE);
+        cancelSelectAll.setOnClickListener(view -> {
+            if (!bulkSelectionActive) return;
+            cancelBulkSelection();
+            status.setText("All-contact selection cancelled. Your previous contact choices are unchanged.");
+            updater.onSafetyChanged();
+        });
+        clearSelectedContacts = button("Clear all selected contacts", body);
+        clearSelectedContacts.setOnClickListener(view -> clearContactSelection());
         choices = new LinearLayout(this);
         choices.setOrientation(LinearLayout.VERTICAL);
         body.addView(choices);
@@ -266,7 +292,8 @@ public final class MainActivity extends Activity {
 
     private void readSource(int source) {
         if (updater.blocksCollection()) { status.setText("Finish or cancel the Android update before reading a source."); return; }
-        if (!started || permissionPendingSource != 0 || cancellation != null || collectionDisclosure != null || preparingTransfer || store == null) {
+        if (!started || permissionPendingSource != 0 || cancellation != null || collectionDisclosure != null ||
+                preparingTransfer || bulkSelectionActive || store == null) {
             status.setText("Finish the current approval or read before starting another source.");
             return;
         }
@@ -518,8 +545,12 @@ public final class MainActivity extends Activity {
             if (pageIndicator != null) pageIndicator.setText("");
             if (previousPage != null) previousPage.setEnabled(false);
             if (nextPage != null) nextPage.setEnabled(false);
+            if (selectAllContacts != null) selectAllContacts.setEnabled(false);
+            if (clearSelectedContacts != null) clearSelectedContacts.setEnabled(!bulkSelectionActive && !selectedIds.isEmpty());
             return;
         }
+        selectAllContacts.setEnabled(!bulkSelectionActive);
+        clearSelectedContacts.setEnabled(!bulkSelectionActive && !selectedIds.isEmpty());
         String query = search.getText().toString().trim();
         int requestedOffset = pageOffset;
         pageIndicator.setText("Loading this contact page…");
@@ -561,21 +592,98 @@ public final class MainActivity extends Activity {
                     status.setText("Finish or cancel the Android update before changing this local review.");
                     return;
                 }
+                cancelBulkSelection();
                 noteReviewDataChanged();
                 if (choice.isChecked()) selectedIds.add(contact.sourceId); else selectedIds.remove(contact.sourceId);
+                showSelectionPageCount(total);
+                clearSelectedContacts.setEnabled(!selectedIds.isEmpty());
             });
             choices.addView(choice);
         }
-        if (pageIndicator != null) pageIndicator.setText(total == 0 ? "No contacts match this search." :
-                "Contacts " + (pageOffset + 1) + "–" + Math.min(total, (long) pageOffset + 100) + " of " + total +
-                        "; " + selectedIds.size() + " selected across pages.");
+        showSelectionPageCount(total);
         if (previousPage != null) previousPage.setEnabled(pageOffset > 0);
         if (nextPage != null) nextPage.setEnabled((long) pageOffset + 100 < total);
     }
 
+    private void showSelectionPageCount(long total) {
+        if (pageIndicator == null) return;
+        pageIndicator.setText(total == 0 ? "No contacts match this search. " + selectedIds.size() +
+                " selected across all pages." : "Contacts " + (pageOffset + 1) + "–" +
+                Math.min(total, (long) pageOffset + 100) + " of " + total +
+                "; " + selectedIds.size() + " selected across all pages.");
+    }
+
+    private void cancelBulkSelection() {
+        bulkSelectionGeneration++;
+        bulkSelectionActive = false;
+        if (selectAllContacts != null) selectAllContacts.setEnabled(contactsAvailable && store != null);
+        if (clearSelectedContacts != null) clearSelectedContacts.setEnabled(!selectedIds.isEmpty());
+        if (cancelSelectAll != null) cancelSelectAll.setVisibility(View.GONE);
+    }
+
+    private void selectEveryContact() {
+        if (updater.blocksCollection() || !started || !contactsAvailable || store == null ||
+                cancellation != null || preparingTransfer || bulkSelectionActive ||
+                (handoff != null && handoff.snapshot().active())) {
+            status.setText("Finish the current read, handoff or update before selecting all contacts.");
+            return;
+        }
+        bulkSelectionActive = true;
+        int generation = ++bulkSelectionGeneration;
+        selectAllContacts.setEnabled(false);
+        cancelSelectAll.setVisibility(View.VISIBLE);
+        clearSelectedContacts.setEnabled(false);
+        status.setText("Checking every contact ID locally. Your current selection stays unchanged until the full scan finishes.");
+        updater.onSafetyChanged();
+        executor.execute(() -> {
+            try {
+                long expected = store.contactCount("");
+                Set<Long> complete = ContactBulkSelector.scan(expected, 100, store::contactIdsAfter,
+                        () -> generation != bulkSelectionGeneration);
+                runOnUiThread(() -> {
+                    if (isDestroyed() || !started || !bulkSelectionActive || generation != bulkSelectionGeneration) return;
+                    bulkSelectionActive = false;
+                    cancelSelectAll.setVisibility(View.GONE);
+                    noteReviewDataChanged();
+                    selectedIds.clear();
+                    selectedIds.addAll(complete);
+                    status.setText("Selected " + CollectionProgressPanel.counted(complete.size(), "contact", "contacts") +
+                            " across every page. Review the selected metadata before browser handoff.");
+                    renderChoices();
+                });
+            } catch (CancellationException ignored) {
+                // A later manual edit or lifecycle change owns the visible selection.
+            } catch (RuntimeException failed) {
+                runOnUiThread(() -> {
+                    if (isDestroyed() || generation != bulkSelectionGeneration) return;
+                    bulkSelectionActive = false;
+                    cancelSelectAll.setVisibility(View.GONE);
+                    selectAllContacts.setEnabled(contactsAvailable && store != null);
+                    clearSelectedContacts.setEnabled(!selectedIds.isEmpty());
+                    failure("storage", "invalid", "Could not verify every contact ID. Your previous selection is unchanged; try again.");
+                    updater.onSafetyChanged();
+                });
+            }
+        });
+    }
+
+    private void clearContactSelection() {
+        if (updater.blocksCollection() || !started || cancellation != null || preparingTransfer ||
+                (handoff != null && handoff.snapshot().active())) {
+            status.setText("Finish the current read, handoff or update before clearing selection.");
+            return;
+        }
+        cancelBulkSelection();
+        if (selectedIds.isEmpty()) return;
+        noteReviewDataChanged();
+        selectedIds.clear();
+        status.setText("All contact choices cleared. No phone source or saved account data was deleted.");
+        renderChoices();
+    }
+
     private void reviewSelected() {
         if (updater.blocksCollection()) { review.setText("Finish or cancel the Android update before reviewing contacts."); return; }
-        if (cancellation != null || preparingTransfer || !contactsAvailable || store == null) { review.setText("Finish reading contacts before review."); return; }
+        if (cancellation != null || preparingTransfer || bulkSelectionActive || !contactsAvailable || store == null) { review.setText("Finish reading and verifying contacts before review."); return; }
         if (selectedIds.isEmpty()) { review.setText("Select at least one contact to review."); return; }
         int generation = ++reviewGeneration;
         Set<Long> ids = new HashSet<>(selectedIds);
@@ -625,7 +733,7 @@ public final class MainActivity extends Activity {
         boolean localSourceHeld = contactsAvailable || callsAvailable || messagesAvailable ||
                 reviewed || !selectedIds.isEmpty();
         return UpdateSafety.canInstall(new UpdateSafety.State(started, collectionDisclosure != null || approvedSource != 0,
-                permissionPendingSource != 0 || activePermissionRequestCode != 0, cancellation != null,
+                permissionPendingSource != 0 || activePermissionRequestCode != 0, cancellation != null || bulkSelectionActive,
                 preparingTransfer, activeHandoff, localSourceHeld, savedAckForCurrentReview));
     }
 
@@ -674,7 +782,7 @@ public final class MainActivity extends Activity {
 
     private void startHandoff() {
         if (updater.blocksCollection()) { status.setText("Finish or cancel the Android update before pairing."); return; }
-        if (!started || handoff == null || !reviewed || selectedIds.isEmpty() || !contactsAvailable || cancellation != null || preparingTransfer || store == null) {
+        if (!started || handoff == null || !reviewed || selectedIds.isEmpty() || !contactsAvailable || cancellation != null || preparingTransfer || bulkSelectionActive || store == null) {
             status.setText("Read contacts, select them, and review the current selection first.");
             return;
         }
@@ -749,8 +857,15 @@ public final class MainActivity extends Activity {
         if (value.state().equals("ready")) {
             clearSupportCode();
             review.setText("One-use pairing code: " + value.code() +
-                    ". Expires within 5 minutes of approval. Open AMPLIFai on this same Android phone, enter the code, review each source and separately approve each save. Cancel is available in the notification.");
-            status.setText("Local handoff ready on this phone only. No cloud save has occurred.");
+                    ". Keep this app open, then tap Connect on the signed-in website on this same phone. Confirm the exact account and course here. This code remains a manual fallback and expires within 5 minutes. Account Save requires separate approval.");
+            status.setText("Reviewed handoff ready on this phone. Nothing has been saved to an account.");
+        } else if (value.state().equals("destination")) {
+            status.setText("Confirm the signed-in destination shown in this app before transferring the preview.");
+            showPendingDestination();
+        } else if (value.state().equals("destination_approved")) {
+            status.setText("Destination approved. Return to this phone's browser to finish receiving the preview; Save is separate.");
+        } else if (value.state().equals("destination_denied")) {
+            status.setText("Destination denied. Local review remains here; cancel this handoff before starting a new one.");
         } else if (value.state().equals("transferring")) {
             status.setText("Browser requested " + value.pagesProvided() + " / " +
                     value.pagesTotal() + " local batches. Validation and account save are separate steps.");
@@ -778,6 +893,28 @@ public final class MainActivity extends Activity {
                     : "The previous pairing code is no longer available. Any sources already saved in your account remain there; check the account before retrying.");
             updater.onSafetyChanged();
         }
+    }
+
+    private void showPendingDestination() {
+        if (!started || handoff == null) return;
+        LocalBridge.Destination destination = handoff.pendingDestination();
+        if (destination == null || destination.intentId().equals(destinationIntentShown)) return;
+        destinationIntentShown = destination.intentId();
+        destinationDialog = new AlertDialog.Builder(this)
+                .setTitle("Confirm signed-in account")
+                .setMessage("Send this reviewed preview to:\n" + destination.email() +
+                        "\nCourse: " + destination.course() +
+                        "\n\nConnecting transfers the preview only. You approve each account Save separately in the browser.")
+                .setNegativeButton("Deny", (dialog, which) -> {
+                    if (handoff != null) handoff.decideDestination(destination.intentId(), false);
+                })
+                .setPositiveButton("Approve connection", (dialog, which) -> {
+                    if (handoff != null && !handoff.decideDestination(destination.intentId(), true))
+                        status.setText("This account confirmation expired. Keep the review open and start a fresh handoff.");
+                })
+                .create();
+        destinationDialog.setOnDismissListener(dialog -> { destinationDialog = null; destinationIntentShown = null; });
+        destinationDialog.show();
     }
 
     @Override protected void onStart() {
@@ -812,6 +949,8 @@ public final class MainActivity extends Activity {
 
     @Override protected void onStop() {
         started = false;
+        if (destinationDialog != null) destinationDialog.dismiss();
+        cancelBulkSelection();
         updater.onStop();
         progressPanel.pause();
         if (permissionPendingSource != 0) status.setText("Permission prompt interrupted. Review and approve this source again before reading.");

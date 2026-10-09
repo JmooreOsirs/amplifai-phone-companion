@@ -42,7 +42,8 @@ public final class HandoffService extends Service {
 
     public record Snapshot(String state, String code, long pagesProvided, long pagesTotal) {
         public boolean active() { return state.equals("starting") || state.equals("ready") ||
-                state.equals("transferring") || state.equals("received"); }
+                state.equals("destination") || state.equals("destination_approved") ||
+                state.equals("destination_denied") || state.equals("transferring") || state.equals("received"); }
     }
 
     public final class LocalBinder extends Binder {
@@ -52,6 +53,13 @@ public final class HandoffService extends Service {
         }
         public Snapshot snapshot() { return snapshot; }
         public boolean notificationsAvailable() { return HandoffService.this.notificationsAvailable(); }
+        public LocalBridge.Destination pendingDestination() { return bridge == null ? null : bridge.pendingDestination(); }
+        public boolean decideDestination(String intentId, boolean approved) {
+            if (bridge == null || !bridge.decideDestination(intentId, approved)) return false;
+            publish(approved ? "destination_approved" : "destination_denied", null);
+            getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
+            return true;
+        }
         public void approve(byte[] payload) { prepare(payload); }
         public void approve(PagedTransfer transfer) { prepare(transfer); }
         public void cancel() { finish(LocalBridge.EndReason.CANCELLED); }
@@ -158,6 +166,10 @@ public final class HandoffService extends Service {
                         pagesTotal = pageProgress[1];
                         publish("transferring", null);
                         getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
+                    }), new AccountConnectProof(), () -> handler.post(() -> {
+                        if (!activeSession.equals(sessionId) || bridge == null || bridge.pendingDestination() == null) return;
+                        publish("destination", null);
+                        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, notification());
                     }))
                     : new LocalBridge(pendingPayload, LocalBridge.ACCOUNT_ORIGIN, LocalBridge.PORT,
                     SystemClock::elapsedRealtimeNanos, reason -> handler.post(() -> {
@@ -190,6 +202,8 @@ public final class HandoffService extends Service {
                 .setContentTitle(getString(R.string.handoff_notification_title))
                 .setContentText(snapshot.state().equals("transferring")
                         ? "Pages offered to browser: " + snapshot.pagesProvided() + " / " + snapshot.pagesTotal()
+                        : snapshot.state().equals("destination")
+                        ? "Open the app to confirm the signed-in account and course."
                         : getString(snapshot.state().equals("received")
                         ? R.string.handoff_notification_received_text : R.string.handoff_notification_text))
                 .setContentIntent(open)
