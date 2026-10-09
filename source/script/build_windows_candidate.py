@@ -159,8 +159,10 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
     lock = _source_file(source, LOCK)
     _source_file(source, ENTRY)
     source_digest = gui_digest(source)
-    if _sha256(logo) != EXPECTED_LOGO_SHA256 or _sha256(lock) != EXPECTED_LOCK_SHA256:
-        raise ValueError("logo or locked Windows requirements changed; review source before building")
+    if _sha256(logo) != EXPECTED_LOGO_SHA256:
+        raise ValueError("Original logo bytes differ from the fixed package input")
+    if _sha256(lock) != EXPECTED_LOCK_SHA256:
+        raise ValueError("Windows requirements bytes differ from the hash-pinned package input")
     output.mkdir()
     for window in (False, True):
         part = "wrapper" if window else "helper"
@@ -190,6 +192,9 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
         )
         parse_helper_packet(packet, mode)
     records = file_records(package)
+    inventory_sha256 = hashlib.sha256(
+        json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     receipt = {
         "status": "disposable-windows-candidate-not-a-release",
         "gui_source_sha256": source_digest,
@@ -198,6 +203,7 @@ def build_candidate(*, source: Path, python: Path, output: Path) -> dict:
         "logo_sha256": EXPECTED_LOGO_SHA256,
         "package_files": len(records),
         "package_bytes": sum(int(record["bytes"]) for record in records),
+        "package_inventory_sha256": inventory_sha256,
         "files": records,
     }
     (output / "candidate-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")

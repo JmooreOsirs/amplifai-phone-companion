@@ -1,9 +1,10 @@
 {
   "status": "source-candidate-only",
-  "baseRelease": "af4719d",
+  "baseRelease": "macos-2026.10.08-rc9 + android-2026.10.08-rc6 shared engine",
   "windowEntrypoint": "collector/windows/app.py",
   "pythonModules": ["collector/windows/session.py", "collector/windows/helper_process.py"],
-  "runtime": "Windows CPython with bundled Tcl/Tk; qualify against the engine's selected Python runtime",
+  "runtime": "Windows x64 CPython 3.12 with bundled Tcl/Tk; frozen helper and window runtimes are separate",
+  "reviewProtocol": "200-contact searchable preview pages, cross-page selected IDs, 1000-ID review pages with exact UUID and SHA-256 selection binding; browser v2 immutable source pages and verified saved ACK remain in the shared engine",
   "newPythonDependencies": [],
   "existingPackagingPin": "collector/portable-requirements.in: pyinstaller==6.22.3",
   "wrapperOnedir": "dist/AmplifaiPhone/{AmplifaiPhone.exe,_internal/}; external resources/ staged beside the wrapper executable, not inside wrapper _internal/",
