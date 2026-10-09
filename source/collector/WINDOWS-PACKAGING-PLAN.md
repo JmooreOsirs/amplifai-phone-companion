@@ -15,6 +15,10 @@ Public source branch `codex/windows-x64-candidate-oct8` first reproduced Win32 5
 
 The Windows wrapper uses 200-contact preview pages, cross-page selected IDs, 1,000-ID review commands with complete-set UUID/hash binding, and the shared immutable v2 transfer/save-ACK contract. Mac rc12 all-page selection and code-free native destination confirmation are not in this Tk wrapper; the website keeps manual-code recovery if `/v3/discover` is absent. Its README and PACKAGE-INPUTS.json state the source behavior and remaining limits.
 
+## Private rc12-compatible installer candidate
+
+Source `47776e1bf149` passed standard Windows2025 run 37975221058: 9 builder, 5 MSI authoring, 38 wrapper, 23 protected-storage, and 276 engine tests; frozen GUI clean-open/close; WiX 3.14.1.8722 link; exact installed-file verification and uninstall under the runner user. The unsigned 40,989,564-byte MSI SHA-256 is `71d0c59fd3649f20b98a640b5e70ae61c2430c57ef249d0e6840f1e90a9820ac`, retained in draft `windows-rc12-private-47776e1bf149`. Frozen package inventory SHA-256 is `697f86d1f62617ce25525feb21d8361346f0ce07bda6488cbdfa02e8114efac5` across 7,289 files / 104,079,534 bytes. The first three rc12-compatible full jobs failed in fixture teardown, frozen-worker path portability, and WiX per-user authoring respectively. A focused tiny/7,289-file WiX link closed the authoring defect before this final full run. This is a private unsupported candidate, not a signed or normal-user/phone/account qualification.
+
 ## Distribution gates
 
 Before enabling a Windows download, preserve exact package/source/runtime/notice inventory and qualify a per-user non-admin installer, code signature and SmartScreen path, Tcl/Tk and Apple driver access/redistribution, rendered keyboard/focus/high-DPI behavior, ordinary-user protected storage, physical iPhone Trust/password/permissions, cleanup/cancel recovery, and authenticated account save/readback/reload. A controlled runner install under its own account is narrower than normal non-admin customer qualification. Keep the Windows website option unavailable while any gate remains.
