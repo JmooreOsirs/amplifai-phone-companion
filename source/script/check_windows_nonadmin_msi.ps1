@@ -25,6 +25,19 @@ $firstFailureNativeCode = $null
 $stage = 'load-profiled-process-helper'
 $accountRemoved = $false
 $stagedMsi = $null
+$controlStagedMsi = $null
+$controlMsiHash = $null
+$controlMsiBytes = $null
+$controlInstalled = $null
+$controlInstallLog = $null
+$controlUninstallLog = $null
+$controlInstallExit = $null
+$controlUninstallExit = $null
+$controlInventoryVerified = $false
+$controlPackageRemoved = $null
+$productStagedRemoved = $null
+$controlStagedRemoved = $null
+$privateLogsRemoved = $null
 $tokenFile = Join-Path $env:RUNNER_TEMP 'amplifai-nonadmin-token-private.json'
 $installLog = $null
 $uninstallLog = $null
@@ -55,13 +68,24 @@ function Get-BoundedMsiPolicyReasons([string]$path) {
   $reasons = [System.Collections.Generic.HashSet[string]]::new()
   foreach ($line in $text) {
     if ($line -match '(?i)installation is forbidden by system policy') { [void]$reasons.Add('system-policy-forbidden') }
-    if ($line -match '(?i)disablemsi|windows installer (?:has been|is) disabled') { [void]$reasons.Add('windows-installer-disabled-policy') }
-    if ($line -match '(?i)disableuserinstalls|per.user install.*(?:disabled|blocked|not allowed)') { [void]$reasons.Add('per-user-installs-disabled-policy') }
-    if ($line -match '(?i)software restriction polic') { [void]$reasons.Add('software-restriction-policy') }
+    if ($line -match '(?i)disablemsi') { [void]$reasons.Add('disablemsi-name-mentioned-value-unverified') }
+    if ($line -match '(?i)disableuserinstalls') { [void]$reasons.Add('disableuserinstalls-name-mentioned-value-unverified') }
+    if ($line -match '(?i)software restriction polic') { [void]$reasons.Add('software-restriction-policy-mentioned-outcome-unverified') }
     if ($line -match '(?i)applocker') { [void]$reasons.Add('applocker-policy') }
     if ($line -match '(?i)digital signature policy|signature.*(?:reject|blocked)') { [void]$reasons.Add('signature-policy') }
   }
   return @($reasons | Sort-Object | Select-Object -First 8)
+}
+function Get-BoundedMsiLogPolicyValues([string]$path) {
+  $values = [ordered]@{ disableMsi = $null; disableUserInstalls = $null; softwareRestrictionOutcome = $null }
+  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return $values }
+  foreach ($line in (Get-Content $path -Tail 400)) {
+    if ($line -match '(?i)\bDisableMSI\b\s*(?:=|:|(?:policy\s+)?value(?:\s+is)?)\s*([012])\b') { $values.disableMsi = [int]$Matches[1] }
+    if ($line -match '(?i)\bDisableUserInstalls\b\s*(?:=|:|(?:policy\s+)?value(?:\s+is)?)\s*([01])\b') { $values.disableUserInstalls = [int]$Matches[1] }
+    if ($line -match '(?i)SOFTWARE RESTRICTION POLICY.*\b(?:disallowed|not allowed|forbidden)\b') { $values.softwareRestrictionOutcome = 'disallowed' }
+    elseif ($line -match '(?i)SOFTWARE RESTRICTION POLICY.*\b(?:unrestricted|allowed|permitted)\b') { $values.softwareRestrictionOutcome = 'allowed' }
+  }
+  return $values
 }
 function Get-InstallerPolicy([string]$path) {
   $policy = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
@@ -78,12 +102,30 @@ function Get-ExactMsiProperties([string]$path) {
   foreach ($property in @('ALLUSERS', 'MSIINSTALLPERUSER', 'ProductVersion')) {
     $sql = "SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = '$property'"
     $view = $database.OpenView($sql)
-    $view.Execute()
+    [void]$view.Execute()
     $record = $view.Fetch()
     $properties[$property] = if ($record) { $record.StringData(1) } else { $null }
-    $view.Close()
+    [void]$view.Close()
   }
   return $properties
+}
+function Remove-ExactDisposableFile([string]$path) {
+  if (-not $path) { return $null }
+  for ($attempt = 0; $attempt -lt 5; $attempt++) {
+    try { Remove-Item -LiteralPath $path -Force -ErrorAction Stop }
+    catch { }
+    if (-not (Test-Path -LiteralPath $path)) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  if ($user -and (Get-Command Invoke-ProfiledProcess -ErrorAction SilentlyContinue)) {
+    $cleanupScript = (Resolve-Path 'source/script/windows_nonadmin_cleanup.ps1').Path
+    $arguments = "-NoLogo -NoProfile -NonInteractive -File `"$cleanupScript`" -Path `"$path`""
+    try {
+      $cleanupExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command pwsh.exe).Source -Arguments $arguments -WorkingDirectory (Get-Location).Path
+      if ($cleanupExit -eq 0 -and -not (Test-Path -LiteralPath $path)) { return $true }
+    } catch { }
+  }
+  return $false
 }
 $childErrorReason = $null
 $cleanupFailureReason = $null
@@ -150,6 +192,31 @@ try {
     throw 'Machine policy blocks this non-elevated per-user install; do not repeat the MSI attempt'
   }
 
+  $stage = 'build-disposable-policy-control-msi'
+  $controlOutput = Join-Path $env:RUNNER_TEMP 'AmplifaiDisposablePolicyControl'
+  $control = & (Resolve-Path 'source/script/windows_msi_policy_control.ps1').Path -OutputDirectory $controlOutput
+  $controlMsiHash = $control.sha256
+  $controlMsiBytes = $control.bytes
+  $controlStagedMsi = Join-Path $token.tokenKnownLocalAppData 'AmplifaiPolicyControl.msi'
+  if (Test-Path -LiteralPath $controlStagedMsi) { throw 'Disposable control MSI staging path is not clean' }
+  Copy-Item -LiteralPath $control.path -Destination $controlStagedMsi -ErrorAction Stop
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $controlStagedMsi).Hash.ToLowerInvariant() -ne $controlMsiHash) { throw 'Disposable control MSI staging copy differs' }
+  $controlInstalled = Join-Path $token.tokenKnownLocalAppData 'AMPLIFaiPolicyControl'
+  $controlInstallLog = Join-Path $token.tokenKnownLocalAppData 'amplifai-control-install.log'
+  $controlUninstallLog = Join-Path $token.tokenKnownLocalAppData 'amplifai-control-uninstall.log'
+  if (Test-Path -LiteralPath $controlInstalled) { throw 'Disposable control install path is not clean' }
+  $stage = 'install-disposable-policy-control-msi'
+  $controlInstallExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/i `"$controlStagedMsi`" /qn /norestart /L*V `"$controlInstallLog`"" -WorkingDirectory (Get-Location).Path
+  if ($controlInstallExit -ne 0) { throw "Disposable per-user policy control MSI install failed: $controlInstallExit" }
+  $controlFile = Join-Path $controlInstalled 'control.txt'
+  $controlInventoryVerified = (Test-Path -LiteralPath $controlFile) -and (Get-Content -Raw -LiteralPath $controlFile).Trim() -eq 'synthetic per-user MSI policy control'
+  if (-not $controlInventoryVerified) { throw 'Disposable policy control install inventory is incomplete' }
+  $stage = 'uninstall-disposable-policy-control-msi'
+  $controlUninstallExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/x `"$controlStagedMsi`" /qn /norestart /L*V `"$controlUninstallLog`"" -WorkingDirectory (Get-Location).Path
+  if ($controlUninstallExit -ne 0) { throw "Disposable per-user policy control MSI uninstall failed: $controlUninstallExit" }
+  $controlPackageRemoved = -not (Test-Path -LiteralPath $controlInstalled)
+  if (-not $controlPackageRemoved) { throw 'Disposable policy control package file remains after uninstall' }
+
   $stage = 'install-private-msi'
   $installExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/i `"$stagedMsi`" /qn /norestart /L*V `"$installLog`"" -WorkingDirectory (Get-Location).Path
   if ($installExit -ne 0) { throw "Standard-user MSI install failed: $installExit" }
@@ -178,16 +245,30 @@ try {
       if ($cleanupExit -eq 0) { $packageRemoved = -not (Test-Path $installed) }
     } catch { $cleanupFailureReason = 'profiled-uninstall-retry-failed' }
   }
+  if ($user -and $controlStagedMsi -and $controlInstalled -and (Test-Path $controlInstalled) -and -not $controlPackageRemoved -and (Get-Command Invoke-ProfiledProcess -ErrorAction SilentlyContinue)) {
+    try {
+      $controlCleanupExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/x `"$controlStagedMsi`" /qn /norestart /L*V `"$controlUninstallLog`"" -WorkingDirectory (Get-Location).Path
+      if ($controlCleanupExit -eq 0) { $controlPackageRemoved = -not (Test-Path -LiteralPath $controlInstalled) }
+    } catch { $cleanupFailureReason = 'control-profiled-uninstall-retry-failed' }
+  }
   $installCodes = @(Get-BoundedMsiCodes $installLog)
   $uninstallCodes = @(Get-BoundedMsiCodes $uninstallLog)
   $installFailureActions = @(Get-BoundedMsiFailureActions $installLog)
   $uninstallFailureActions = @(Get-BoundedMsiFailureActions $uninstallLog)
   $installPolicyReasons = @(Get-BoundedMsiPolicyReasons $installLog)
   $uninstallPolicyReasons = @(Get-BoundedMsiPolicyReasons $uninstallLog)
-  if ($stagedMsi) { Remove-Item -LiteralPath $stagedMsi -Force -ErrorAction SilentlyContinue }
-  if ($stagedMsi -and (Test-Path -LiteralPath $stagedMsi) -and -not $firstFailure) { $firstFailure = 'remove-disposable-msi-copy' }
-  foreach ($log in @($installLog, $uninstallLog)) {
-    if ($log) { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
+  $controlInstallCodes = @(Get-BoundedMsiCodes $controlInstallLog)
+  $controlUninstallCodes = @(Get-BoundedMsiCodes $controlUninstallLog)
+  $controlInstallPolicyReasons = @(Get-BoundedMsiPolicyReasons $controlInstallLog)
+  $installLogPolicyValues = Get-BoundedMsiLogPolicyValues $installLog
+  $controlInstallLogPolicyValues = Get-BoundedMsiLogPolicyValues $controlInstallLog
+  $productStagedRemoved = Remove-ExactDisposableFile $stagedMsi
+  $controlStagedRemoved = Remove-ExactDisposableFile $controlStagedMsi
+  $logRemoved = @($installLog, $uninstallLog, $controlInstallLog, $controlUninstallLog) | Where-Object { $_ } | ForEach-Object { Remove-ExactDisposableFile $_ }
+  $privateLogsRemoved = @($logRemoved | Where-Object { $_ -eq $false }).Count -eq 0
+  if ($productStagedRemoved -eq $false -or $controlStagedRemoved -eq $false -or -not $privateLogsRemoved) {
+    $cleanupFailureReason = 'disposable-profile-file-cleanup-incomplete'
+    if (-not $firstFailure) { $firstFailure = 'remove-disposable-test-files' }
   }
   if ($user) {
     Remove-LocalUser -Name $name -ErrorAction SilentlyContinue
@@ -213,13 +294,27 @@ try {
     installLogFailureActions = $installFailureActions
     uninstallLogFailureActions = $uninstallFailureActions
     installLogPolicyReasons = $installPolicyReasons
+    installLogPolicyValues = $installLogPolicyValues
     uninstallLogPolicyReasons = $uninstallPolicyReasons
+    controlMsiSha256 = $controlMsiHash
+    controlMsiBytes = $controlMsiBytes
+    controlMsiScope = 'perUser-limited-synthetic'
+    controlInstallExitCode = $controlInstallExit
+    controlUninstallExitCode = $controlUninstallExit
+    controlInstalledInventoryVerified = $controlInventoryVerified
+    controlUninstallPackageResidueAbsent = $controlPackageRemoved
+    controlInstallLogErrorCodes = $controlInstallCodes
+    controlUninstallLogErrorCodes = $controlUninstallCodes
+    controlInstallLogPolicyReasons = $controlInstallPolicyReasons
+    controlInstallLogPolicyValues = $controlInstallLogPolicyValues
     osProductType = $osProductType
     machineInstallerPolicy = $machineInstallerPolicy
     userInstallerPolicy = $userInstallerPolicy
     exactMsiProperties = $msiProperties
     exactMsiPropertyReadReason = $msiPropertyReadReason
-    stagedMsiCopyRemoved = if ($stagedMsi) { -not (Test-Path -LiteralPath $stagedMsi) } else { $null }
+    stagedMsiCopyRemoved = $productStagedRemoved
+    controlMsiCopyRemoved = $controlStagedRemoved
+    disposablePrivateLogsRemoved = $privateLogsRemoved
     installedPathClass = 'disposable-local-user-LocalAppData'
     ownerPhoneOrAccountUsed = $false
     firstFailureStage = $firstFailure
