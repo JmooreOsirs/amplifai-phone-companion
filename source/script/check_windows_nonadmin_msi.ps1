@@ -28,6 +28,11 @@ $stagedMsi = $null
 $tokenFile = Join-Path $env:RUNNER_TEMP 'amplifai-nonadmin-token-private.json'
 $installLog = $null
 $uninstallLog = $null
+$osProductType = $null
+$machineInstallerPolicy = $null
+$userInstallerPolicy = $null
+$msiProperties = $null
+$msiPropertyReadReason = $null
 function Get-BoundedMsiCodes([string]$path) {
   if (-not $path -or -not (Test-Path -LiteralPath $path)) { return @() }
   $codes = [System.Collections.Generic.HashSet[string]]::new()
@@ -43,6 +48,42 @@ function Get-BoundedMsiFailureActions([string]$path) {
     if ($line -match '(?i)Action ended .*?:\s*([A-Za-z][A-Za-z0-9_.-]{0,79})\. Return value 3') { [void]$actions.Add($Matches[1]) }
   }
   return @($actions | Sort-Object | Select-Object -First 8)
+}
+function Get-BoundedMsiPolicyReasons([string]$path) {
+  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return @() }
+  $text = Get-Content $path -Tail 400
+  $reasons = [System.Collections.Generic.HashSet[string]]::new()
+  foreach ($line in $text) {
+    if ($line -match '(?i)installation is forbidden by system policy') { [void]$reasons.Add('system-policy-forbidden') }
+    if ($line -match '(?i)disablemsi|windows installer (?:has been|is) disabled') { [void]$reasons.Add('windows-installer-disabled-policy') }
+    if ($line -match '(?i)disableuserinstalls|per.user install.*(?:disabled|blocked|not allowed)') { [void]$reasons.Add('per-user-installs-disabled-policy') }
+    if ($line -match '(?i)software restriction polic') { [void]$reasons.Add('software-restriction-policy') }
+    if ($line -match '(?i)applocker') { [void]$reasons.Add('applocker-policy') }
+    if ($line -match '(?i)digital signature policy|signature.*(?:reject|blocked)') { [void]$reasons.Add('signature-policy') }
+  }
+  return @($reasons | Sort-Object | Select-Object -First 8)
+}
+function Get-InstallerPolicy([string]$path) {
+  $policy = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+  return [ordered]@{
+    disableMsi = if ($null -ne $policy.DisableMSI) { [int]$policy.DisableMSI } else { $null }
+    disableUserInstalls = if ($null -ne $policy.DisableUserInstalls) { [int]$policy.DisableUserInstalls } else { $null }
+    alwaysInstallElevated = if ($null -ne $policy.AlwaysInstallElevated) { [int]$policy.AlwaysInstallElevated } else { $null }
+  }
+}
+function Get-ExactMsiProperties([string]$path) {
+  $installer = New-Object -ComObject WindowsInstaller.Installer
+  $database = $installer.OpenDatabase($path, 0)
+  $properties = [ordered]@{}
+  foreach ($property in @('ALLUSERS', 'MSIINSTALLPERUSER', 'ProductVersion')) {
+    $sql = "SELECT ``Value`` FROM ``Property`` WHERE ``Property`` = '$property'"
+    $view = $database.OpenView($sql)
+    $view.Execute()
+    $record = $view.Fetch()
+    $properties[$property] = if ($record) { $record.StringData(1) } else { $null }
+    $view.Close()
+  }
+  return $properties
 }
 $childErrorReason = $null
 $cleanupFailureReason = $null
@@ -73,6 +114,7 @@ try {
   $token = Get-Content -Raw $tokenFile | ConvertFrom-Json
   if ($token.sid -ne $user.SID.Value -or $token.enabledAdministratorRole -ne $false) { throw 'Child process token is not the disposable standard user' }
   $tokenVerified = $true
+  $userInstallerPolicy = $token.userInstallerPolicy
   $profileRecord = Get-CimInstance Win32_UserProfile -Filter "SID='$($user.SID.Value)'"
   if (-not $profileRecord -or -not $profileRecord.LocalPath) { throw 'Disposable user has no Windows profile record' }
   $profile = $profileRecord.LocalPath
@@ -99,6 +141,14 @@ try {
   if ((Get-FileHash -Algorithm SHA256 -LiteralPath $stagedMsi).Hash.ToLowerInvariant() -ne $expectedMsiHash) { throw 'Disposable MSI staging copy differs' }
   $installLog = Join-Path $token.tokenKnownLocalAppData 'amplifai-nonadmin-install.log'
   $uninstallLog = Join-Path $token.tokenKnownLocalAppData 'amplifai-nonadmin-uninstall.log'
+  $osProductType = [int](Get-CimInstance Win32_OperatingSystem).ProductType
+  $machineInstallerPolicy = Get-InstallerPolicy 'HKLM:\Software\Policies\Microsoft\Windows\Installer'
+  try { $msiProperties = Get-ExactMsiProperties $stagedMsi }
+  catch { $msiPropertyReadReason = 'installer-com-property-read-unavailable' }
+  $stage = 'classify-runner-installer-policy'
+  if ($machineInstallerPolicy.disableMsi -in @(1, 2) -or $machineInstallerPolicy.disableUserInstalls -eq 1) {
+    throw 'Machine policy blocks this non-elevated per-user install; do not repeat the MSI attempt'
+  }
 
   $stage = 'install-private-msi'
   $installExit = Invoke-ProfiledProcess -Username $name -Password $password -FilePath (Get-Command msiexec.exe).Source -Arguments "/i `"$stagedMsi`" /qn /norestart /L*V `"$installLog`"" -WorkingDirectory (Get-Location).Path
@@ -132,6 +182,8 @@ try {
   $uninstallCodes = @(Get-BoundedMsiCodes $uninstallLog)
   $installFailureActions = @(Get-BoundedMsiFailureActions $installLog)
   $uninstallFailureActions = @(Get-BoundedMsiFailureActions $uninstallLog)
+  $installPolicyReasons = @(Get-BoundedMsiPolicyReasons $installLog)
+  $uninstallPolicyReasons = @(Get-BoundedMsiPolicyReasons $uninstallLog)
   if ($stagedMsi) { Remove-Item -LiteralPath $stagedMsi -Force -ErrorAction SilentlyContinue }
   if ($stagedMsi -and (Test-Path -LiteralPath $stagedMsi) -and -not $firstFailure) { $firstFailure = 'remove-disposable-msi-copy' }
   foreach ($log in @($installLog, $uninstallLog)) {
@@ -160,6 +212,13 @@ try {
     uninstallLogErrorCodes = $uninstallCodes
     installLogFailureActions = $installFailureActions
     uninstallLogFailureActions = $uninstallFailureActions
+    installLogPolicyReasons = $installPolicyReasons
+    uninstallLogPolicyReasons = $uninstallPolicyReasons
+    osProductType = $osProductType
+    machineInstallerPolicy = $machineInstallerPolicy
+    userInstallerPolicy = $userInstallerPolicy
+    exactMsiProperties = $msiProperties
+    exactMsiPropertyReadReason = $msiPropertyReadReason
     stagedMsiCopyRemoved = if ($stagedMsi) { -not (Test-Path -LiteralPath $stagedMsi) } else { $null }
     installedPathClass = 'disposable-local-user-LocalAppData'
     ownerPhoneOrAccountUsed = $false
