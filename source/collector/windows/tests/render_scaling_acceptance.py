@@ -12,7 +12,10 @@ from unittest.mock import patch
 from PIL import ImageGrab
 
 import app
+from build_windows_candidate import gui_digest
 from render_candidate import selected_review
+
+EXPECTED_RC14_WINDOWS_GUI_SHA256 = "5a85246880d336c672719685dcc697ab4a76aac610d1f916392bc92e28c08ad6"
 
 
 def main() -> None:
@@ -20,6 +23,9 @@ def main() -> None:
         raise SystemExit("This check requires a Windows desktop")
     output = Path(sys.argv[1])
     logo = Path(sys.argv[2])
+    source_gui_sha256 = gui_digest(Path("source"))
+    if source_gui_sha256 != EXPECTED_RC14_WINDOWS_GUI_SHA256:
+        raise RuntimeError("Synthetic Windows GUI source differs from retained rc14 MSI receipt")
     output.mkdir(parents=True, exist_ok=False)
     root = tk.Tk()
     root.tk.call("tk", "scaling", 1.75)
@@ -43,6 +49,7 @@ def main() -> None:
         "status": "synthetic-tk-scaling-only-not-physical-dpi-or-screen-reader-proof",
         "actualViewport": [width, height],
         "tkScaling": root.tk.call("tk", "scaling"),
+        "retainedRc14GuiSourceSha256": source_gui_sha256,
         "consentActionsWithinCanvas": True,
         "screenshotSha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "screenshotBytes": path.stat().st_size,

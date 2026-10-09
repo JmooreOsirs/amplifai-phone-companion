@@ -5,7 +5,9 @@ on:
     branches: [codex/windows-rc14-focused-acceptance]
 
 permissions:
-  contents: read
+  # GitHub's draft-release API hides private draft assets from read-only Actions tokens.
+  # This token is confined to this run; no release mutation occurs in this workflow.
+  contents: write
 
 jobs:
   focused:
