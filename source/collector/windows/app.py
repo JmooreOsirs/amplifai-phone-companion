@@ -37,6 +37,8 @@ class PhoneWindow:
         self.helper = HelperProcess([str(helper)], self.events.put)
         self.checked = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value=self.state.status)
+        self.transfer_status = tk.StringVar(value=self.state.transfer_status)
+        self.coverage_status = tk.StringVar(value=self.state.coverage_status)
         self.pair_code = tk.StringVar(value="No browser pairing has been created.")
         self.contact_query = tk.StringVar(value="")
         self.contact_page = tk.StringVar(value="No contacts loaded.")
@@ -113,6 +115,7 @@ class PhoneWindow:
         ttk.Label(outer, textvariable=self.status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
         self.progress = ttk.Progressbar(outer, maximum=100)
         self.progress.pack(fill="x", pady=(0, 12))
+        ttk.Label(outer, textvariable=self.transfer_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
         password_row = ttk.Frame(outer)
         password_row.pack(fill="x", pady=(0, 12))
         self.password = ttk.Entry(password_row, show="•", width=30)
@@ -120,6 +123,7 @@ class PhoneWindow:
         self.password_button = ttk.Button(password_row, text="Send backup password privately", command=self.send_password)
         self.password_button.pack(side="left")
         self.label(outer, "Select contacts below. Nothing is selected by default; unavailable history is not zero activity.")
+        ttk.Label(outer, textvariable=self.coverage_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
         paging = ttk.Frame(outer)
         paging.pack(fill="x", pady=(0, 8))
         self.search_entry = ttk.Entry(paging, textvariable=self.contact_query, width=28)
@@ -357,6 +361,8 @@ class PhoneWindow:
         state = self.state
         self.window.title(window_title(state))
         self.status.set(state.status)
+        self.transfer_status.set(state.transfer_status)
+        self.coverage_status.set(state.coverage_status)
         self.approve.configure(state="normal" if self.checked.get() and state.inspected and not state.residue and not state.running else "disabled")
         self.connect.configure(state="normal" if state.can_connect else "disabled")
         self.agreement.configure(state="disabled" if state.running else "normal")
@@ -413,7 +419,8 @@ class PhoneWindow:
                         self.send(self.state.decide_destination(approved))
                     if event.get("kind") == "review" and self.state.reviewed:
                         selected, calls, messages = self.state.review_counts
-                        self.state.status += f" {selected} contacts · {calls} matching calls · {messages} matching messages. Unavailable: {', '.join(self.state.missing) or 'none reported; coverage remains partial'}."
+                        self.state.status += (f" {selected} selected contacts · {calls} matching calls · "
+                                              f"{messages} matching messages. Check source coverage below before account Save.")
                     if event.get("kind") == "handoff" and self.state.saved_acknowledged:
                         self.send(self.state.finish())
                     if event.get("kind") == "error":

@@ -1,6 +1,6 @@
 # Windows companion packaging status
 
-This is a private Windows candidate. No signed binary or supported Windows download has been published. Mac rc12 and Android rc8 remain the live packages. The exact source, runner, unsigned MSI and inventory receipts belong in the canonical PROJECT_PLAN.md ledger.
+This is a private Windows candidate. No signed binary or supported Windows download has been published. Mac rc15 and Android rc8 remain live. Exact source, runner, unsigned MSI and inventory receipts belong in the canonical PROJECT_PLAN.md ledger.
 
 ## Fixed package contract
 
@@ -13,7 +13,7 @@ This is a private Windows candidate. No signed binary or supported Windows downl
 
 Public source branch `codex/windows-x64-candidate-oct8` first reproduced Win32 5 at ancestor index 6 of a Python-created temporary fixture. A same-token fixture created with the application's explicit user owner and protected DACL passed the real reduced-token probe while retaining all ancestor pins, root READ_CONTROL and attribute readback, no-share-delete handles, and reparse rejection. Restored production ancestor access is FILE_READ_ATTRIBUTES (0x80). Run 37863879590 on Windows Server 2025 / CPython 3.12.10 passed 38 wrapper tests, 23 storage checks with the reduced-token probe, and all 201 current engine tests. Its exact lock/logo bytes passed, the distinct helper and Tk runtimes froze, frozen helper runtime-check/inspect passed, and the GUI opened, reached clean-inspection readiness, then closed normally. Disposable inventory: 7,286 files / 102,032,826 bytes / SHA-256 `2deaa6a138cb85d67e724970e70724df5806ff0ef9686a50d4836e4bc9486c23`. No binary was retained or published. The runner is not a real phone or authenticated account-save test.
 
-The Windows wrapper uses 200-contact preview pages, cross-page selected IDs, 1,000-ID review commands with complete-set UUID/hash binding, and the shared immutable v2 transfer/save-ACK contract. Mac rc12 all-page selection and code-free native destination confirmation are not in this Tk wrapper; the website keeps manual-code recovery if `/v3/discover` is absent. Its README and PACKAGE-INPUTS.json state the source behavior and remaining limits.
+The original rc12 Windows wrapper used 200-contact preview pages, cross-page selected IDs, 1,000-ID review commands with complete-set UUID/hash binding, and the shared immutable v2 transfer/save-ACK contract. The changed rc13 private source also has atomic all-page selection, server-confirmed destination approval for code-free Connect, and manual-code recovery. Its README and PACKAGE-INPUTS.json state the current source behavior and limits.
 
 ## Private rc12-compatible installer candidate
 

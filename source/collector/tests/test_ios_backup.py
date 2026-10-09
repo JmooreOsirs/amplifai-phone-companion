@@ -124,13 +124,15 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 patch("amplifai_phone.ios_backup.read_messages") as read_messages,
             ):
                 capture = _parse_entries(
-                    object(), Path(temporary), datetime(2026, 10, 8, tzinfo=UTC),
+                    SimpleNamespace(is_encrypted=False), Path(temporary), datetime(2026, 10, 8, tzinfo=UTC),
                     RETAINED_HISTORY_START,
                 )
         self.assertEqual(capture.contacts, contacts)
         self.assertEqual(capture.calls, calls)
         self.assertEqual(capture.messages, SourceResult(0, (), 0))
         self.assertEqual(capture.missing_sources, ("messages",))
+        self.assertEqual(capture.unavailable_reasons, (("messages", "selected_payload_missing"),))
+        self.assertIs(capture.backup_encrypted, False)
         read_messages.assert_not_called()
 
     def test_optional_payload_length_mismatch_is_unavailable_without_losing_contacts(self) -> None:
@@ -149,8 +151,9 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 get_entry_by_domain_and_path=lambda *_: entry,
                 is_encrypted=False,
             )
-            with self.assertRaises(SelectedPayloadIntegrityError) as raised:
-                _extract_database(backup, DATABASES["messages"], directory / "messages")
+            with patch("amplifai_phone.backup_files.MIN_FREE_BYTES", 0):
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _extract_database(backup, DATABASES["messages"], directory / "messages")
             self.assertEqual(raised.exception.code, "selected_payload_length")
 
         with tempfile.TemporaryDirectory(prefix="amplifai-invalid-optional-") as temporary:
@@ -176,6 +179,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             self.assertEqual(capture.contacts, contacts)
             self.assertEqual(capture.messages, SourceResult(0, (), 0))
             self.assertEqual(capture.missing_sources, ("messages",))
+            self.assertEqual(capture.unavailable_reasons, (("messages", "selected_payload_length"),))
             read_messages.assert_not_called()
 
     def test_invalid_required_contacts_payload_keeps_capture_failed(self) -> None:
@@ -216,7 +220,55 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         self.assertEqual(capture.contacts, contacts)
         self.assertEqual(capture.calls, SourceResult(0, (), 0))
         self.assertEqual(capture.missing_sources, ("calls",))
+        self.assertEqual(capture.unavailable_reasons, (("calls", "selected_payload_crypto"),))
         read_calls.assert_not_called()
+
+    def test_optional_payload_diagnostics_are_fixed_codes_without_private_errors(self) -> None:
+        contacts = SourceResult(1, (Contact(1, "Synthetic", (), ()),), 0)
+        expected = (
+            "selected_payload_invalid", "selected_payload_size", "selected_payload_identity",
+            "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto",
+        )
+        with tempfile.TemporaryDirectory(prefix="amplifai-optional-reasons-") as temporary:
+            for code in expected:
+                with self.subTest(code=code):
+                    def extract(_backup: object, path: str, *_args: object) -> bool:
+                        if path == DATABASES["calls"]:
+                            raise SelectedPayloadIntegrityError("private path and content", code=code)
+                        return True
+
+                    with (
+                        patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                        patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                        patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                        patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+                    ):
+                        capture = _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+                    self.assertEqual(capture.unavailable_reasons, (("calls", code),))
+                    self.assertNotIn("private", repr(capture))
+                    read_calls.assert_not_called()
+
+            for error, reason in (
+                (SelectedPayloadMissing("private manifest-listed path"), "selected_payload_missing"),
+                (SelectedPayloadIntegrityError("private contact-only code", code="selected_contacts_integrity"),
+                 "source_integrity"),
+            ):
+                with self.subTest(reason=reason):
+                    def extract(_backup: object, path: str, *_args: object) -> bool:
+                        if path == DATABASES["calls"]:
+                            raise error
+                        return True
+
+                    with (
+                        patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                        patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                        patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                        patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+                    ):
+                        capture = _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+                    self.assertEqual(capture.unavailable_reasons, (("calls", reason),))
+                    self.assertNotIn("private", repr(capture))
+                    read_calls.assert_not_called()
 
     def test_invalid_required_contacts_sqlite_has_distinct_safe_reason(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-corrupt-contacts-") as temporary:
@@ -288,6 +340,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                     RETAINED_HISTORY_START,
                 )
         self.assertEqual(capture.missing_sources, ("calls",))
+        self.assertEqual(capture.unavailable_reasons, (("calls", "source_capacity"),))
         self.assertEqual(capture.contacts, contacts)
 
     def test_failed_optional_reader_cannot_retain_partial_selected_rows(self) -> None:
@@ -320,6 +373,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 selected = store.append_selection("review", 0, [1], 1)
                 self.assertIsNotNone(selected)
                 self.assertEqual(capture.missing_sources, ("calls",))
+                self.assertEqual(capture.unavailable_reasons, (("calls", "source_invalid"),))
                 self.assertEqual(review_snapshot(capture, selected)["matched_calls"], 0)
                 self.assertEqual(store.counts["calls"], 0)
                 self.assertEqual(len(tuple(selected.rows("calls"))), 0)
@@ -359,6 +413,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             ):
                 capture = _parse_entries(object(), extracted, datetime.now(UTC), RETAINED_HISTORY_START)
         self.assertEqual(capture.missing_sources, ("messages",))
+        self.assertEqual(capture.unavailable_reasons, (("messages", "unsupported_schema"),))
         self.assertEqual(capture.contacts, contacts)
         self.assertEqual(capture.messages, SourceResult(0, (), 0))
 

@@ -69,7 +69,7 @@ class GuiGuardsTests(unittest.TestCase):
                      "search_entry", "search_button", "previous_button", "next_button", "select_all_button",
                      "cancel_select_all_button", "clear_all_button", "pair_button", "password_button",
                      "inspect", "clear", "stop_button", "force_button", "progress", "copy_code_button",
-                     "status", "pair_code", "destination_status"):
+                     "status", "transfer_status", "coverage_status", "pair_code", "destination_status"):
             setattr(window, name, Mock())
         window.checked = Mock()
         window.checked.get.return_value = False

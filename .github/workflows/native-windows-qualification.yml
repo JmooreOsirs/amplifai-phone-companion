@@ -51,17 +51,16 @@ jobs:
         run: |
           python -m unittest discover -s source/collector/windows/tests -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify native storage before building
+      - name: Qualify changed optional-source reason mapping
         shell: pwsh
         run: |
-          python -m unittest test_windows_storage test_windows_restricted_token_probe -v
+          python -m unittest test_ios_backup.ManifestFixtureIsolationTest.test_optional_payload_diagnostics_are_fixed_codes_without_private_errors test_ios_backup.ManifestFixtureIsolationTest.test_optional_missing_payload_preserves_valid_sources_and_marks_it_missing -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python source/collector/tests/windows_restricted_token_probe.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify complete current engine without a phone
+      - name: Render actual Windows Tk synthetic review and exercise controls
         shell: pwsh
         run: |
-          python -m unittest discover -s source/collector/tests -v
+          $render = Join-Path $env:RUNNER_TEMP 'AmplifaiTkRender'
+          python source/collector/windows/tests/render_candidate.py --output $render --logo source/public/brand/amplifai-by-nexus-original.png
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Freeze distinct runtimes and inspect exact package
         shell: pwsh
@@ -124,7 +123,7 @@ jobs:
         run: |
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $msi = Join-Path $installer 'AmplifaiPhone-rc12-unsigned.msi'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc13-unsigned.msi'
           $receipt = Join-Path $candidate 'candidate-receipt.json'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           if (Test-Path $installed) { throw 'Per-user install path is not clean' }
@@ -144,13 +143,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'windows-rc12-private-' + $env:GITHUB_SHA.Substring(0, 12)
+          $tag = 'windows-rc13-private-' + $env:GITHUB_SHA.Substring(0, 12)
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $msi = Join-Path $installer 'AmplifaiPhone-rc12-unsigned.msi'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc13-unsigned.msi'
           $msiReceipt = Join-Path $installer 'msi-receipt.json'
           $frozenReceipt = Join-Path $candidate 'candidate-receipt.json'
-          gh release create $tag "$msi#AmplifaiPhone-rc12-unsigned.msi" "$msiReceipt#msi-receipt.json" "$frozenReceipt#candidate-receipt.json" --draft --target $env:GITHUB_SHA --title 'Windows rc12 private unsigned candidate' --notes 'Private unsupported qualification only. Unsigned per-user MSI; no customer download. Apple USB driver, normal non-admin user, DPI/accessibility, physical iPhone and authenticated account Save/ACK remain unverified.'
+          $render = Join-Path $env:RUNNER_TEMP 'AmplifaiTkRender'
+          $renderFiles = @(Join-Path $render 'render-receipt.json') + @(Get-ChildItem $render -Filter '*.png' | ForEach-Object FullName)
+          gh release create $tag "$msi#AmplifaiPhone-rc13-unsigned.msi" "$msiReceipt#msi-receipt.json" "$frozenReceipt#candidate-receipt.json" @renderFiles --draft --target $env:GITHUB_SHA --title 'Windows rc13 private unsigned candidate' --notes 'Private unsupported qualification only. Unsigned per-user MSI; no customer download. Standard runner Tk renders are synthetic. Existing protected storage/engine suites were reused without rerun; Apple USB driver, normal non-admin user, DPI/accessibility, physical iPhone and authenticated account Save/ACK remain unverified.'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $draft = gh release view $tag --json isDraft --jq '.isDraft'
           if ($LASTEXITCODE -ne 0 -or $draft.Trim() -ne 'true') { throw 'Retained release is not draft' }

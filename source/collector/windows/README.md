@@ -1,6 +1,6 @@
 # Windows companion source candidate
 
-This wrapper presents the rc12-compatible iPhone collector on Windows. It is **not a signed installer or supported download**. Mac rc13 and Android rc8 remain the published packages. The Windows candidate has no Apple driver, ordinary non-admin installation, signed binary, physical-phone, or authenticated hosted-save proof.
+This wrapper presents an rc15-compatible local iPhone collector on Windows. It is **not a signed installer or supported download**. Mac rc15 and Android rc8 remain the published packages. The Windows candidate has no Apple driver, signed binary, physical-phone, or authenticated hosted-save proof. A runner-user install is narrower than a normal non-admin customer install.
 
 ## Local collection and review
 
@@ -11,6 +11,8 @@ The helper uses the shared disk-backed sanitized record store. The window keeps 
 The browser's received state and saved parts awaiting final browser receipt cannot finish the native session. Only the matching bridge's verified saved state permits finish; the helper must then exit successfully and an empty marked-residue inspection must complete. A fresh pairing replaces the old bridge. The five-minute deadline applies to initial admission; an authorized active transfer uses the shared v2 keepalive and durable ACK contract.
 
 This source candidate adds all-page Select all/Clear all and native approval of the server-confirmed account destination before code-free Connect. The helper now supports the fixed-origin `/v3/discover` contract; the temporary one-use code remains an explicit recovery path. The website still blocks Windows setup/download, so these source checks do not establish a customer installer or physical account Save.
+
+The window accepts only the helper's bounded transfer counters; bytes checked, retained, discarded and locally processed are shown as measured counts, never as an invented time remaining or account-save percent. Optional Call/SMS failure reasons are fixed allowlisted codes, with Unavailable distinct from readable zero. The helper preserves the current rc15 selected-payload rejection codes; required Contacts and global failures remain fatal. Finalize and the per-source saved report live in the authenticated website after separate Save decisions, not in this window's capture progress.
 
 Stop closes the helper's input cooperatively. It cannot promise interruption of synchronous capture. A separately confirmed Force stop targets only the owned helper, bypasses cleanup, and requires a new residue inspection. Failed cleanup is reported, never counted as completion or silently deleted.
 
@@ -30,6 +32,6 @@ The wrapper accepts only these contained regular resources, with no linked runti
 
 The disposable public Windows runner uses the source-only codex/windows-x64-candidate-oct8 branch. On run 37862692679, the old Python temporary fixture failed ancestor index 6 because its owner did not match the effective reduced user. A fresh fixture created under the reduced token with the app's protected owner/DACL passed while every ancestor remained pinned; the candidate restored ancestor FILE_READ_ATTRIBUTES (0x80), root READ_CONTROL and attribute readback, no-share-delete, and no-follow reparse checks. Earlier run 37863879590 passed 38 wrapper tests, 23 storage checks with the reduced-token probe, and 201 engine tests, then opened/closed the frozen GUI. The rc12-compatible source at `47776e1bf149` produced a private unsigned MSI on Windows2025 runner 37975221058 with WiX 3.14.1.8722. Its exact 7,289-file / 104,079,534-byte inventory, MSI SHA-256 `71d0c59fd3649f20b98a640b5e70ae61c2430c57ef249d0e6840f1e90a9820ac`, runner-user install/uninstall, and private draft tag `windows-rc12-private-47776e1bf149` are recorded in the canonical project ledger. The draft is not a customer release.
 
-The current wrapper has 38 passing Windows synthetic/headless tests, including 25,001 selected contacts across 200-contact previews and 1,000-ID review commands, stale-response rejection, and final saved-ACK gating. These are protocol checks, not rendered Windows UI or physical iPhone acceptance.
+The closed rc12 wrapper had 38 Windows synthetic/headless tests, including 25,001 selected contacts across 200-contact previews and 1,000-ID review commands, stale-response rejection, and final saved-ACK gating. The current changed candidate additionally needs an actual Windows Tk render and private installer qualification; source tests alone are not physical iPhone acceptance.
 
 Before Windows distribution: qualify Apple driver and a normal non-admin installer/SmartScreen path, sign the exact installer, inspect keyboard and high-DPI rendering, and observe physical iPhone Trust/password/permissions through authenticated account save/reload. A private draft MSI retention is not a customer release. Keep the website Windows download disabled until all required gates close.

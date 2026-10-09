@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import re
 import uuid
 from typing import TextIO
@@ -13,6 +14,13 @@ REVIEW_PAGE_SIZE = 1_000
 MAX_CONTACT_QUERY_LENGTH = 120
 WEBSITE_ORIGIN = "https://amplifai-database-engine.vercel.app"
 BRIDGE_PORT = 48751
+OPTIONAL_SOURCES = frozenset({"calls", "messages"})
+UNAVAILABLE_REASONS = frozenset({
+    "absent", "selected_payload_missing", "selected_payload_invalid",
+    "selected_payload_size", "selected_payload_identity", "selected_payload_file_type",
+    "selected_payload_length", "selected_payload_crypto", "source_integrity",
+    "unsupported_schema", "source_capacity", "source_invalid",
+})
 
 
 class ProtocolError(ValueError):
@@ -23,6 +31,26 @@ def count(value: object) -> int:
     if type(value) is not int or not 0 <= value <= 2**63 - 1:
         raise ProtocolError("Invalid helper count")
     return value
+
+
+def unavailable_detail(source: str, reason: str | None, backup_encrypted: bool | None) -> str:
+    if source == "calls" and reason == "absent" and backup_encrypted is False:
+        return "absent from this unencrypted backup; a future owner-approved encrypted backup may include calls"
+    details = {
+        "absent": "absent from this capture",
+        "selected_payload_missing": "listed in the backup but its file was not received",
+        "selected_payload_size": "invalid backup-reported size",
+        "selected_payload_identity": "invalid backup identity",
+        "selected_payload_file_type": "not a regular backup file",
+        "selected_payload_length": "received length differs from the backup manifest",
+        "selected_payload_crypto": "encrypted source could not be validated",
+        "selected_payload_invalid": "selected source failed integrity validation",
+        "source_integrity": "selected source failed integrity validation",
+        "unsupported_schema": "source format could not be read",
+        "source_capacity": "local processing limit reached",
+        "source_invalid": "not a readable database",
+    }
+    return details.get(reason, "reason not available from this helper")
 
 
 class Session:
@@ -46,6 +74,12 @@ class Session:
         self.reviewed = False
         self.review_counts = (0, 0, 0)
         self.missing: list[str] = []
+        self.unavailable_reasons: dict[str, str] = {}
+        self.backup_encrypted: bool | None = None
+        self.source_counts = (0, 0)
+        self.transfer_status = "No phone data has been received."
+        self.transfer_stage = ""
+        self.transfer_bytes = 0
         self.progress: float | None = None
         self.handoff_id = ""
         self.pair_code = ""
@@ -78,6 +112,17 @@ class Session:
     @property
     def can_connect(self) -> bool:
         return bool(self.approval and self.inspected and not self.needs_inspection and not self.residue and not self.running)
+
+    @property
+    def coverage_status(self) -> str:
+        if not self._capture_received:
+            return "Call and message coverage has not been read."
+        labels = (("calls", "Calls", self.source_counts[0]), ("messages", "Messages", self.source_counts[1]))
+        return " · ".join(
+            f"{label} unavailable: {unavailable_detail(source, self.unavailable_reasons.get(source), self.backup_encrypted)}"
+            if source in self.missing else f"{label}: {observed} readable phone entries"
+            for source, label, observed in labels
+        )
 
     @property
     def can_select(self) -> bool:
@@ -123,6 +168,13 @@ class Session:
             self._clear_select_all()
             self.selection = ()
             self.reviewed = self.saved_acknowledged = False
+            self.missing = []
+            self.unavailable_reasons = {}
+            self.backup_encrypted = None
+            self.source_counts = (0, 0)
+            self.transfer_status = "Waiting for the iPhone. No phone data has been received."
+            self.transfer_stage = ""
+            self.transfer_bytes = 0
             self.handoff_id = self.pair_code = ""
             self._clear_destination()
             self._saved_exit = self._capture_received = False
@@ -437,9 +489,40 @@ class Session:
             return None
         if kind == "progress":
             value = event.get("value")
-            if type(value) not in {float, int} or not 0 <= value <= 100:
+            if type(value) not in {float, int} or not 0 <= value <= 100 or not math.isfinite(value):
                 raise ProtocolError("Invalid progress")
             self.progress = float(value)
+        elif kind == "transfer":
+            stage = event.get("stage")
+            if (self.mode != "connect" or self._capture_received or not isinstance(stage, str)
+                    or stage not in {"backup", "processing"}):
+                raise ProtocolError("Invalid transfer stage")
+            if stage == "backup":
+                fields = {"kind", "stage", "receivedBytes", "retainedBytes", "discardedBytes",
+                          "filesReceived", "elapsedSeconds", "bytesPerSecond"}
+                if set(event) != fields or self.transfer_stage == "processing":
+                    raise ProtocolError("Invalid backup progress")
+                received = count(event["receivedBytes"])
+                retained = count(event["retainedBytes"])
+                discarded = count(event["discardedBytes"])
+                files = count(event["filesReceived"])
+                elapsed, rate = event["elapsedSeconds"], event["bytesPerSecond"]
+                if (retained + discarded != received or received < self.transfer_bytes
+                        or type(elapsed) not in {float, int} or not 0 < elapsed <= 2**63 - 1
+                        or not math.isfinite(elapsed) or type(rate) not in {float, int}
+                        or not 0 <= rate <= 2**63 - 1 or not math.isfinite(rate)):
+                    raise ProtocolError("Invalid backup counters")
+                self.transfer_status = (f"Receiving backup: {received:,} bytes checked across {files:,} files; "
+                                        f"{retained:,} retained locally, {discarded:,} discarded.")
+            else:
+                if set(event) != {"kind", "stage", "processedBytes"}:
+                    raise ProtocolError("Invalid processing progress")
+                processed = count(event["processedBytes"])
+                if self.transfer_stage == "processing" and processed < self.transfer_bytes:
+                    raise ProtocolError("Processing progress went backward")
+                self.transfer_status = f"Reading selected local sources: {processed:,} bytes processed."
+                received = processed
+            self.transfer_stage, self.transfer_bytes = stage, received
         elif kind == "state":
             state = event.get("state")
             if self.mode != "connect" or not isinstance(state, str):
@@ -456,12 +539,26 @@ class Session:
         elif kind == "capture":
             if self.mode != "connect" or self._capture_received:
                 raise ProtocolError("Invalid contact preview")
-            self._accept_contact_page(event, first=True)
-            count(event.get("availableCalls"))
-            count(event.get("availableMessages"))
+            calls = count(event.get("availableCalls"))
+            messages = count(event.get("availableMessages"))
             missing = event.get("missing")
-            if not isinstance(missing, list) or any(item not in {"contacts", "calls", "messages"} for item in missing):
+            if (not isinstance(missing, list) or any(not isinstance(item, str) or item not in OPTIONAL_SOURCES
+                    for item in missing) or len(missing) != len(set(missing))):
                 raise ProtocolError("Invalid source availability")
+            backup_encrypted = event.get("backupEncrypted")
+            if backup_encrypted is not None and type(backup_encrypted) is not bool:
+                raise ProtocolError("Invalid backup encryption state")
+            reasons = event.get("unavailableReasons", {})
+            if (not isinstance(reasons, dict) or any(
+                    source not in OPTIONAL_SOURCES or source not in missing
+                    or not isinstance(reason, str) or reason not in UNAVAILABLE_REASONS
+                    for source, reason in reasons.items())):
+                raise ProtocolError("Invalid source reason")
+            self._accept_contact_page(event, first=True)
+            self.source_counts = (calls, messages)
+            self.missing = missing
+            self.unavailable_reasons = dict(reasons)
+            self.backup_encrypted = backup_encrypted
             self._capture_received = True
             self.phase = "selecting"
             self.status = "Select contacts, then review matching call and message context. No account data has been saved."
@@ -499,7 +596,8 @@ class Session:
                     or event.get("selection_sha256") != self._pending_review_sha):
                 raise ProtocolError("Review does not match selection")
             missing = event.get("missing_sources")
-            if not isinstance(missing, list) or any(not isinstance(item, str) or item not in {"contacts", "calls", "messages"} for item in missing):
+            if (not isinstance(missing, list) or any(not isinstance(item, str) for item in missing)
+                    or len(missing) != len(set(missing)) or set(missing) != set(self.missing)):
                 raise ProtocolError("Invalid source availability")
             self._pending_review = None
             self.review_counts = counts

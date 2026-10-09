@@ -51,6 +51,10 @@ DATABASES = {
     "calls": "Library/CallHistoryDB/CallHistory.storedata",
     "messages": "Library/SMS/sms.db",
 }
+OPTIONAL_PAYLOAD_REASON_CODES = frozenset({
+    "selected_payload_invalid", "selected_payload_size", "selected_payload_identity",
+    "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto",
+})
 
 
 @dataclass(frozen=True)
@@ -334,7 +338,13 @@ def _parse_entries(
             if key == "contacts":
                 raise
             available[key] = False
-            reasons[key] = "absent" if isinstance(error, SelectedPayloadMissing) else "source_integrity"
+            # Keep only fixed diagnostic codes. A manifest-listed missing file
+            # differs from an absent source; neither is a genuine zero-row DB.
+            reasons[key] = (
+                "selected_payload_missing" if isinstance(error, SelectedPayloadMissing)
+                else error.code if error.code in OPTIONAL_PAYLOAD_REASON_CODES
+                else "source_integrity"
+            )
         if bound_callback is not None:
             bound_callback()
         if not available[key]:

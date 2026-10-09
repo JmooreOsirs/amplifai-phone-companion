@@ -55,6 +55,72 @@ def paired():
 
 
 class SessionTests(unittest.TestCase):
+    def test_real_backup_and_processing_transfer_events_remain_truthful(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+        for received in (1_024, 2_048):
+            state.handle({"kind": "transfer", "stage": "backup", "receivedBytes": received,
+                          "retainedBytes": received // 2, "discardedBytes": received // 2,
+                          "filesReceived": 2, "elapsedSeconds": 1.0,
+                          "bytesPerSecond": 1_024.0})
+        self.assertIn("2,048 bytes checked", state.transfer_status)
+        self.assertIn("1,024 retained", state.transfer_status)
+        state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 0})
+        state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 512})
+        self.assertIn("512 bytes processed", state.transfer_status)
+        self.assertFalse(state.saved_acknowledged)
+
+    def test_transfer_rejects_regression_corruption_and_unbounded_values(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+        valid = {"kind": "transfer", "stage": "backup", "receivedBytes": 200,
+                 "retainedBytes": 100, "discardedBytes": 100, "filesReceived": 1,
+                 "elapsedSeconds": 1.0, "bytesPerSecond": 200.0}
+        state.handle(valid)
+        for changed in ({"receivedBytes": 199, "retainedBytes": 99},
+                        {"discardedBytes": 99}, {"bytesPerSecond": float("nan")},
+                        {"receivedBytes": 2**80}, {"extra": "private"}):
+            with self.subTest(changed=changed), self.assertRaises(ProtocolError):
+                state.handle({**valid, **changed})
+        state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 5})
+        with self.assertRaises(ProtocolError):
+            state.handle(valid)
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 4})
+
+    def test_optional_reason_and_encryption_state_are_allowlisted_and_distinct_from_zero(self):
+        state = inspected()
+        state.approve(True)
+        state.begin("connect")
+        page = {"kind": "capture", "contacts": [{"id": 1, "name": "Avery Lindqvist",
+                "phoneCount": 1, "phoneEnds": ["0123"]}], "query": "", "cursor": 0,
+                "nextCursor": None, "totalContacts": 1, "availableCalls": 0,
+                "availableMessages": 0, "missing": ["calls"], "backupEncrypted": False,
+                "unavailableReasons": {"calls": "absent"}}
+        for changed in ({"backupEncrypted": "false"},
+                        {"unavailableReasons": {"messages": "absent"}},
+                        {"unavailableReasons": {"calls": "private filename"}},
+                        {"missing": ["calls", "calls"]}):
+            with self.subTest(changed=changed), self.assertRaises(ProtocolError):
+                state.handle({**page, **changed})
+        state.handle(page)
+        self.assertIn("Calls unavailable", state.coverage_status)
+        self.assertIn("unencrypted backup", state.coverage_status)
+        self.assertIn("Messages: 0 readable", state.coverage_status)
+        state.update_visible_selection([1])
+        command = state.review([1])
+        state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+        with self.assertRaises(ProtocolError):
+            state.handle({"kind": "review", "reviewId": command["reviewId"],
+                          "selected_contacts": 1, "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                          "matched_calls": 0, "matched_messages": 0, "missing_sources": []})
+        state.handle({"kind": "review", "reviewId": command["reviewId"],
+                      "selected_contacts": 1, "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                      "matched_calls": 0, "matched_messages": 0, "missing_sources": ["calls"]})
+        self.assertTrue(state.reviewed)
+
     def test_select_all_commits_only_after_exact_1205_contact_scan_and_review_ack(self):
         state = inspected()
         state.approve(True)
