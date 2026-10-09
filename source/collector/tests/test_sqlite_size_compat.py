@@ -456,7 +456,8 @@ class SizeCompatibilityTests(unittest.TestCase):
 
     def test_frozen_worker_accepts_only_its_parent_owned_private_session(self):
         home=self.root/'fictional-home'
-        root=home/'Library/Application Support/AMPLIFai Phone Candidate/sessions'
+        parent=home/'AppData/Local' if os.name=='nt' else home/'Library/Application Support'
+        root=parent/'AMPLIFai Phone Candidate/sessions'
         root.mkdir(parents=True,mode=0o700)
         (root/'.amplifai-phone-sessions-v1').write_bytes(b'AMPLIFAI_PHONE_SESSIONS_V1\n')
         session=root/('session-'+'a'*32)
@@ -465,14 +466,16 @@ class SizeCompatibilityTests(unittest.TestCase):
         marker.write_text(json.dumps({'version':1,'session':session.name,'pid':os.getppid(),'created_at':0}))
         path=session/'selected-copy'
         path.write_bytes(self.database().read_bytes())
-        with patch.object(compat.sys,'frozen',True,create=True),patch.object(compat.Path,'home',return_value=home):
+        location=patch.dict(os.environ,{'LOCALAPPDATA':str(parent)}) if os.name=='nt' else patch.object(compat.Path,'home',return_value=home)
+        with patch.object(compat.sys,'frozen',True,create=True),location:
             self.assertTrue(compat._frozen_owned_path(path))
             marker.write_text(json.dumps({'version':1,'session':session.name,'pid':os.getppid()+1,'created_at':0}))
             self.assertFalse(compat._frozen_owned_path(path))
 
     def test_frozen_worker_rejects_unconfined_or_public_session(self):
         home=self.root/'fictional-home'
-        root=home/'Library/Application Support/AMPLIFai Phone Candidate/sessions'
+        parent=home/'AppData/Local' if os.name=='nt' else home/'Library/Application Support'
+        root=parent/'AMPLIFai Phone Candidate/sessions'
         root.mkdir(parents=True,mode=0o700)
         (root/'.amplifai-phone-sessions-v1').write_bytes(b'AMPLIFAI_PHONE_SESSIONS_V1\n')
         session=root/('session-'+'b'*32)
@@ -480,9 +483,13 @@ class SizeCompatibilityTests(unittest.TestCase):
         (session/'.amplifai-owned-session.json').write_text(json.dumps({'version':1,'session':session.name,'pid':os.getppid(),'created_at':0}))
         path=session/'selected-copy'
         path.write_bytes(self.database().read_bytes())
-        with patch.object(compat.sys,'frozen',True,create=True),patch.object(compat.Path,'home',return_value=home):
-            with self.assertRaises(ValueError):compat._frozen_owned_path(self.root/'arbitrary-copy')
-            session.chmod(0o755)
+        location=patch.dict(os.environ,{'LOCALAPPDATA':str(parent)}) if os.name=='nt' else patch.object(compat.Path,'home',return_value=home)
+        with patch.object(compat.sys,'frozen',True,create=True),location:
+            self.assertFalse(compat._frozen_owned_path(self.root/'arbitrary-copy'))
+            if os.name=='nt':
+                (session/'.amplifai-owned-session.json').write_text(json.dumps({'version':1,'session':'wrong-session','pid':os.getppid()}))
+            else:
+                session.chmod(0o755)
             self.assertFalse(compat._frozen_owned_path(path))
 
     def test_large_size_does_not_allocate_a_fixture(self):

@@ -237,7 +237,10 @@ def _frozen_owned_path(path):
         return True
     parent = Path(os.environ['LOCALAPPDATA']) if os.name == 'nt' else Path.home()/'Library/Application Support'
     root = parent/'AMPLIFai Phone Candidate/sessions'
-    relative = path.relative_to(root)
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
     if len(relative.parts) < 2 or not re.fullmatch(r'session-[0-9a-f]{32}', relative.parts[0]):
         return False
     root_marker = root/'.amplifai-phone-sessions-v1'
