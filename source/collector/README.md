@@ -1,14 +1,13 @@
 # AMPLIFai phone collectors
 
-The public `/phone` and `/phone/account` setup links offer the signed Android
-`2026.10.08-rc4` APK and the signed, notarized, stapled Apple Silicon/macOS 14+
-`2026.10.08-rc4-ack2` Mac owner-test release. The Mac distribution label is
-ACK2, but its contained About/build metadata still says rc4/26100804. Both
-public assets remain owner/partner tests, not universal physical-device acceptance. Exact
-public source, notices, checksums and release
-receipts are in `PROJECT_PLAN.md`; Android-specific behavior is in
-[`android/README.md`](android/README.md). `/pilot` is a secondary manual-file
-importer, not the normal direct-phone path. No Windows or Intel Mac release exists.
+The public `/phone` and `/phone/account` setup links offer signed Android
+`2026.10.09-rc9` and signed, notarized Mac `2026.10.11-rc19`. Mac rc17 and
+earlier releases remain rollback artifacts. Neither platform has
+universal physical-device and authenticated account acceptance. Exact public
+source, notices, checksums and release receipts are in `PROJECT_PLAN.md`;
+Android-specific behavior is in [`android/README.md`](android/README.md).
+`/pilot` is a secondary manual-file importer, not the normal direct-phone path.
+Windows has a private unsigned rc14 MSI; customer download remains disabled.
 
 October 1 Windows software qualification used a standard public-repository
 Windows Server 2025 x64 VM, Python 3.12.10 and the exact hash-pinned Windows
@@ -24,6 +23,28 @@ The long-backup and saved-ACK repairs are present in the public Mac ACK2
 owner-test package. Normal physical install,
 Trust/permissions, history coverage, browser handoff and consented account save
 remain separate operator acceptance gates.
+
+The public `2026.10.08-rc5` Mac source addresses two observed
+ACK2 failures at backup stage with zero received bytes. It separates logical
+full-backup stream capacity from physical selected-file storage, keeps the real
+2 GiB reserve on every retained write, identifies upstream host-space refusal,
+and no longer labels a failed preflight as zero-byte backup progress. Its
+fresh local collection disclosure covers automatic delivery of a bounded safe
+error code to the AMPLIFai diagnostics endpoint; the app shows whether that
+delivery succeeded. The rc5 public package was independently verified, but
+synthetic coverage does not replace a normal
+owner-operated iPhone retry. A subsequent build `26100804` owner run completed
+the transfer but stopped in processing with `unsupported_schema`; the rc5
+parser is unchanged from that build. The published rc6 candidate narrows safe
+failure categories and isolates a missing optional selected payload. An owner
+retry of rc6 reached 21.73 GB received/616.82 MB retained, then stopped with
+`source_capacity_limit`; that code does not identify which guard fired. The
+local rc7 candidate streams oversized DeviceLink control frames to private
+temporary storage under a finite parsing bound, drains long private device
+error text without retaining it, and reads larger on-disk control plists
+without a second raw copy. Distinct safe capacity codes identify a future
+guard without phone content. This is synthetic repair evidence, not a proven
+fix for that exact owner run or complete-history/device-to-account success.
 
 Build the host-specific macOS app without opening or connecting to a phone:
 
@@ -41,6 +62,9 @@ If USB Trust fails, it stops rather than silently switching to Wi-Fi.
 The app provides local progress/cancel, contact selection, retained-history
 metadata review, disconnect, and explicit inspection/cleanup of app-created
 temporary data remaining after a crash. It does not save or upload the review.
+Post-rc7 source changes page the contact-picker preview and search locally in
+the companion; the published rc7 still uses its original single capture-preview
+event. Source changes need a new matching Mac app/helper package and device test.
 
 For a **local-only arm64 packaging candidate** with an embedded Python runtime
 instead of a runtime `uv` cache dependency:
@@ -129,8 +153,14 @@ Selected input, discarded input, outbound files and parsing copies are streamed
 in 128 KiB chunks. Selected writes reserve their future parsing copy, and every
 write must preserve a further 2 GiB of real free space. There is no fixed 1 GiB
 session or 128 MiB database/manifest limit, nor an unrelated-file-count cap.
-Backup control/plist data retain a 16 MiB memory bound; metadata readers retain
-the explicit 1,000,000-row/source and 25,000-selected-contact safety frontiers.
+Backup control/plist data stream to private temporary storage under separate
+finite parsing bounds; metadata readers retain the explicit 1,000,000-row/source
+and 25,000-selected-contact safety frontiers. Contact-value and message/chat
+join normalization use short-lived private SQLite indexes in the selected
+parsing directory, instead of keeping every joined source row in Python maps.
+Those indexes contain only normalized phone/email metadata and opaque source
+IDs, are checked against the existing workspace bound as they fill, and are
+removed before local review begins. Message bodies are never indexed.
 The 20 distinct phone/email values per contact contract also stops with an
 explicit incomplete-source error instead of silently dropping later values.
 SQLite cursors avoid a second full row list; retained metadata records still

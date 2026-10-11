@@ -28,6 +28,7 @@ LEGAL_FILES = ("COPYRIGHT", "LICENSE", "THIRD-PARTY-NOTICES.txt")
 WORKER_MODES = {
     "contacts-worker": "--internal-contacts-size-validation",
     "messages-worker": "--internal-messages-size-validation",
+    "encrypted-worker": "--internal-encrypted-size-validation",
 }
 REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
@@ -113,7 +114,9 @@ def parse_helper_packet(data: bytes, mode: str) -> dict:
         raise ValueError("frozen helper runtime is not ready")
     if mode == "inspect" and (packet.get("kind") != "residue" or packet.get("sessions") != []):
         raise ValueError("frozen helper has residue or could not inspect it")
-    if mode in WORKER_MODES and packet != {"code": "unsafe"}:
+    if mode == "encrypted-worker" and packet != {"code": "unsafe", "copy_checksum_matches": None}:
+        raise ValueError("internal validation worker did not reject empty input")
+    if mode in {"contacts-worker", "messages-worker"} and packet != {"code": "unsafe"}:
         raise ValueError("internal validation worker did not reject empty input")
     return packet
 

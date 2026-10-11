@@ -168,6 +168,12 @@ def _require_columns(
         )
 
 
+def _checked_row_id(value: object, *, selectable: bool = False) -> int:
+    if type(value) is not int or (selectable and value < 0):
+        raise UnsupportedSchema("Source row identity is unsupported")
+    return value
+
+
 def _cocoa_datetime(value: object) -> datetime | None:
     if not isinstance(value, (int, float)) or value <= 0:
         return None
@@ -267,12 +273,13 @@ def read_contacts(
                     )
             contacts = []
             row_count = 0
-            rows = db.execute("SELECT ROWID, First, Last FROM ABPerson ORDER BY ROWID")
+            rows = db.execute("SELECT ROWID AS source_id, First, Last FROM ABPerson ORDER BY ROWID")
             for row_count, row in enumerate(rows, 1):
                 if store is None and row_count > MAX_ROWS_PER_SOURCE:
                     raise ContactsCapacityLimit("Contact row limit exceeded")
                 if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
                     check_callback()
+                source_id = _checked_row_id(row["source_id"], selectable=True)
                 phones = []
                 emails = []
                 try:
@@ -280,7 +287,7 @@ def read_contacts(
                         index_db,
                         "SELECT property, normalized FROM value WHERE record_id = ? "
                         "ORDER BY property, normalized",
-                        (row["ROWID"],),
+                        (source_id,),
                     ):
                         (phones if property_id == 3 else emails).append(normalized)
                 except sqlite3.Error as error:
@@ -294,7 +301,7 @@ def read_contacts(
                     if isinstance(part, str) and part.strip()
                 )
                 if name or phones or emails:
-                    contact = Contact(row["ROWID"], name, tuple(phones), tuple(emails))
+                    contact = Contact(source_id, name, tuple(phones), tuple(emails))
                     if store is None:
                         contacts.append(contact)
                     else:
@@ -315,7 +322,7 @@ def read_calls(
             {"ZDATE", "ZDURATION", "ZADDRESS", "ZORIGINATED", "ZANSWERED"},
         )
         rows = db.execute(
-            "SELECT ROWID, ZDATE, ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED "
+            "SELECT ROWID AS source_id, ZDATE, ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED "
             "FROM ZCALLRECORD ORDER BY ROWID"
         )
         calls = []
@@ -325,6 +332,7 @@ def read_calls(
                 raise SourceReadCapacityLimit("Call row limit exceeded")
             if check_callback is not None and row_count % ROW_CHECK_INTERVAL == 0:
                 check_callback()
+            source_id = _checked_row_id(row["source_id"])
             when = _cocoa_datetime(row["ZDATE"])
             phone = normalize_phone(row["ZADDRESS"])
             if when is None or when < since or phone is None:
@@ -344,7 +352,7 @@ def read_calls(
                 else None
             )
             call = Interaction(
-                    row["ROWID"],
+                    source_id,
                     "call",
                     "call",
                     when.isoformat(),

@@ -1,19 +1,19 @@
-name: Windows x64 disposable companion qualification
+name: Windows rc15 private extraction candidate
 
 on:
   push:
-    branches: [codex/windows-x64-candidate-oct8]
+    branches: [codex/windows-rc15-extraction-private]
 
 permissions:
   contents: write
 
 concurrency:
-  group: windows-x64-candidate-oct8
+  group: windows-rc15-extraction-private
   cancel-in-progress: false
 
 jobs:
   windows:
-    # Standard PUBLIC-repository runner minutes are free. No cache/artifact storage.
+    # Existing standard runner, no cache or customer artifact publication.
     runs-on: windows-2025
     timeout-minutes: 40
     env:
@@ -46,21 +46,10 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify integrated wrapper and engine wire
+      - name: Qualify changed shared extraction and stable row identity
         shell: pwsh
         run: |
-          python -m unittest discover -s source/collector/windows/tests -v
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify changed optional-source reason mapping
-        shell: pwsh
-        run: |
-          python -m unittest test_ios_backup.ManifestFixtureIsolationTest.test_optional_payload_diagnostics_are_fixed_codes_without_private_errors test_ios_backup.ManifestFixtureIsolationTest.test_optional_missing_payload_preserves_valid_sources_and_marks_it_missing -v
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Render actual Windows Tk synthetic review and exercise controls
-        shell: pwsh
-        run: |
-          $render = Join-Path $env:RUNNER_TEMP 'AmplifaiTkRender'
-          python source/collector/windows/tests/render_candidate.py --output $render --logo source/public/brand/amplifai-by-nexus-original.png
+          python -m unittest test_sqlite_encrypted_size_compat.EncryptedSizeCompatibilityTests.test_ciphertext_digest_admits_exact_three_selected_sources test_sqlite_encrypted_size_compat.EncryptedSizeCompatibilityTests.test_wrong_producer_digest_rejects_required_contacts test_sqlite_encrypted_size_compat.EncryptedSizeCompatibilityTests.test_optional_call_digest_failure_is_unavailable_not_zero_history test_metadata.MetadataTest.test_named_contact_primary_key_preserves_review_identity_and_phone_owner test_metadata.MetadataTest.test_named_call_primary_key_preserves_selected_incoming_outgoing -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Freeze distinct runtimes and inspect exact package
         shell: pwsh
@@ -69,37 +58,15 @@ jobs:
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           python source/script/build_windows_candidate.py --source source --python $python --output $output --legal-root .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Exercise frozen GUI startup and normal close
+      - name: Qualify exact frozen encrypted-main worker and owned cleanup
         shell: pwsh
         run: |
-          $exe = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate\wrapper-dist\AmplifaiPhone\AmplifaiPhone.exe'
-          $process = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
-          try {
-            if (-not $process.WaitForInputIdle(30000)) { throw 'Frozen GUI did not become idle' }
-            $deadline = (Get-Date).AddSeconds(90)
-            do {
-              $process.Refresh()
-              if ($process.HasExited) { throw 'Frozen GUI exited before clean inspection' }
-              if ($process.MainWindowTitle -like 'AMPLIFai Phone*inspection failed') {
-                throw 'Frozen GUI initial inspection failed'
-              }
-              if ($process.MainWindowTitle -like 'AMPLIFai Phone*temporary data remains') {
-                throw 'Frozen GUI found marked temporary data; do not close or collect'
-              }
-              if ($process.MainWindowHandle -ne 0 -and $process.MainWindowTitle -like 'AMPLIFai Phone*ready') { break }
-              Start-Sleep -Milliseconds 500
-            } while ((Get-Date) -lt $deadline)
-            if ($process.MainWindowHandle -eq 0 -or $process.MainWindowTitle -notlike 'AMPLIFai Phone*ready') {
-              throw 'Frozen GUI did not reach clean inspection readiness'
-            }
-            if (-not $process.CloseMainWindow()) { throw 'Frozen GUI close was not accepted' }
-            if (-not $process.WaitForExit(15000)) { throw 'Frozen GUI did not exit after close' }
-            if ($process.ExitCode -ne 0) { throw 'Frozen GUI exited unsuccessfully' }
-            'Frozen GUI window opened and closed; no phone was connected.'
-          } finally {
-            $process.Refresh()
-            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-          }
+          $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          $helper = Join-Path $candidate 'wrapper-dist\AmplifaiPhone\resources\phone-helper\AmplifaiPhoneHelper.exe'
+          $receipt = Join-Path $candidate 'frozen-encrypted-worker-receipt.json'
+          python source/collector/windows/tests/qualify_frozen_encrypted_worker.py --helper $helper | Out-File -FilePath $receipt -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Content $receipt
       - name: Identify WiX 3 and build private per-user MSI
         shell: pwsh
         run: |
@@ -123,7 +90,7 @@ jobs:
         run: |
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $msi = Join-Path $installer 'AmplifaiPhone-rc14-unsigned.msi'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc15-unsigned.msi'
           $receipt = Join-Path $candidate 'candidate-receipt.json'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           if (Test-Path $installed) { throw 'Per-user install path is not clean' }
@@ -143,15 +110,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'windows-rc14-private-' + $env:GITHUB_SHA.Substring(0, 12)
+          $tag = 'windows-rc15-private-' + $env:GITHUB_SHA.Substring(0, 12)
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $msi = Join-Path $installer 'AmplifaiPhone-rc14-unsigned.msi'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc15-unsigned.msi'
           $msiReceipt = Join-Path $installer 'msi-receipt.json'
           $frozenReceipt = Join-Path $candidate 'candidate-receipt.json'
-          $render = Join-Path $env:RUNNER_TEMP 'AmplifaiTkRender'
-          $renderFiles = @(Join-Path $render 'render-receipt.json') + @(Get-ChildItem $render -Filter '*.png' | ForEach-Object FullName)
-          gh release create $tag "$msi#AmplifaiPhone-rc14-unsigned.msi" "$msiReceipt#msi-receipt.json" "$frozenReceipt#candidate-receipt.json" @renderFiles --draft --target $env:GITHUB_SHA --title 'Windows rc14 private unsigned candidate' --notes 'Private unsupported qualification only. Unsigned per-user MSI; no customer download. Standard runner Tk renders are synthetic. Existing protected storage/engine suites were reused without rerun; Apple USB driver, normal non-admin user, DPI/accessibility, physical iPhone and authenticated account Save/ACK remain unverified.'
+          $workerReceipt = Join-Path $candidate 'frozen-encrypted-worker-receipt.json'
+          gh release create $tag "$msi#AmplifaiPhone-rc15-unsigned.msi" "$msiReceipt#msi-receipt.json" "$frozenReceipt#candidate-receipt.json" "$workerReceipt#frozen-encrypted-worker-receipt.json" --draft --target $env:GITHUB_SHA --title 'Windows rc15 private unsigned extraction candidate' --notes 'Private unsupported qualification only. Unsigned per-user MSI; no customer download. Changed synthetic extraction and frozen worker passed on the standard runner; unchanged rc14 Tk/GUI checks are reused. Normal non-admin host, trusted signature, Apple USB driver, physical iPhone and authenticated account Save/ACK remain unverified.'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $draft = gh release view $tag --json isDraft --jq '.isDraft'
           if ($LASTEXITCODE -ne 0 -or $draft.Trim() -ne 'true') { throw 'Retained release is not draft' }

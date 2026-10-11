@@ -28,6 +28,8 @@ def copy_backup_file(
     workspace: SessionWorkspace | None = None,
     bound_callback: Callable[[], None] | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    raw_chunk_callback: Callable[[bytes], None] | None = None,
+    copied_chunk_callback: Callable[[bytes], None] | None = None,
 ) -> int:
     decryptor = unpadder = None
     if keybag is not None:
@@ -61,6 +63,8 @@ def copy_backup_file(
             if stream.write(payload) != len(payload):
                 raise OSError(errno.EIO, "Incomplete parsing copy")
         count += len(payload)
+        if copied_chunk_callback is not None:
+            copied_chunk_callback(payload)
         if progress_callback is not None:
             progress_callback(len(payload))
 
@@ -86,6 +90,8 @@ def copy_backup_file(
                 destination_handle = None
             with writer:
                 while payload := reader.read(RECEIVE_CHUNK_BYTES):
+                    if raw_chunk_callback is not None:
+                        raw_chunk_callback(payload)
                     if decryptor is not None:
                         payload = decryptor.update(payload)
                     if unpadder is not None:

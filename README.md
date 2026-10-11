@@ -5,7 +5,7 @@ installation, populated phone history and authenticated hosted Save/return still
 need owner acceptance. Do not bypass Gatekeeper, Play Protect or device
 permission prompts. Windows and Intel Mac companions are not customer downloads.
 
-- [Mac Apple Silicon/macOS 14+ rc16](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.09-rc16-release): signed, notarized companion with its exact corresponding-source archive; it has not been installed over the owner's open review.
+- [Mac Apple Silicon/macOS 14+ rc19](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.11-rc19-release): signed, notarized companion with its exact corresponding-source archive; it has not been installed over the owner's open review.
 - [Website Android 8+ rc9](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.09-rc9): release-signed APK with all-page contact review, explicit Android source permissions and server-confirmed account destination approval. The one-use code remains a recovery path. Normal installer and synthetic emulator checks do not prove populated physical call/SMS history or authenticated hosted account Save.
 - Start through your [Week 1 account](https://amplifai-database-engine.vercel.app/phone/account), or use the separate [browser-only pilot](https://amplifai-database-engine.vercel.app/phone). The temporary app-generated pairing code is not a phone number or email verification code.
 
@@ -42,8 +42,7 @@ dual-onedir candidate only on Windows x64/CPython 3.12. The branch's bounded
 Windows runner checks private storage, synthetic protocol behavior, actual Tk
 review and consent controls, frozen helper imports/empty residue, GUI startup,
 and per-user WiX install/uninstall. It retains an **unsigned private draft MSI**,
-not a public download. The rc13 draft is preserved as rollback while rc14
-qualifies the narrow consent-row fit. No Windows signature, Apple USB/Trust run,
+not a public download. The rc14 private draft preserves the corrected consent-row fit. This branch prepares a distinct rc15 private candidate with the newer shared extraction modules and frozen encrypted-size worker. No Windows signature, Apple USB/Trust run,
 physical-device transfer or authenticated saved acknowledgment is implied.
 
 ## Mac source package
@@ -60,9 +59,7 @@ under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
 notices. The separate private website/backend source is not part of this package.
 
 This branch also carries historical macOS arm64 companion and frozen-helper
-source; the current signed rc16 archive is in its own release. It includes the source and
-build inputs matched to the selected artifact inventory; it does not claim a
-byte-for-byte reproducible binary build or verified operation on an owner phone.
+source; the current signed rc19 archive is in its own release. The historical third_party manifests in this Windows branch describe their original Mac source package, not a refreshed Windows candidate inventory. The private Windows frozen receipt and source-projection manifest bind the changed rc15 bytes; neither proves a byte-for-byte reproducible binary build or operation on an owner phone.
 
 ## Contents
 

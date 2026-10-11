@@ -5,10 +5,14 @@ import io
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from amplifai_phone.agent import MAX_COMMAND_BYTES, _command, run_admin, run_connect
+from amplifai_phone.agent import (
+    MAX_COMMAND_BYTES, _command, _contact_ids, _payload_diagnostic_event,
+    run_admin, run_connect,
+)
 from amplifai_phone.backup_stream import DeviceBackupRejected
 from amplifai_phone.backup_watchdog import (
     BackupCleanupIncomplete,
@@ -16,7 +20,7 @@ from amplifai_phone.backup_watchdog import (
     BackupStalled,
     BackupTimeLimit,
 )
-from amplifai_phone.ios_backup import IPhoneCapture
+from amplifai_phone.ios_backup import BackupEncryptionPreflightError, IPhoneCapture
 from amplifai_phone.metadata import (
     BackupControlFrameLimit,
     BackupControlInvalid,
@@ -80,6 +84,108 @@ def synthetic_capture() -> IPhoneCapture:
 
 
 class AgentProtocolTest(unittest.TestCase):
+    def test_selected_length_failure_exposes_only_allowlisted_local_aggregates(self) -> None:
+        async def failed(**kwargs: object) -> IPhoneCapture:
+            kwargs["transfer_callback"]({"stage": "processing", "processedBytes": 0})
+            kwargs["payload_diagnostic_callback"]({
+                "source": "contacts", "component": "database", "result": "length_mismatch",
+                "encrypted": True, "manifest_bytes": 8192, "raw_after_bytes": 4112,
+                "copied_plaintext_bytes": 4096, "producer_digest_present": True,
+                "producer_digest_matches": False, "sidecars_absent": True,
+                "privatePath": "/Users/owner/private/AddressBook.sqlitedb",
+                "digest": "private-hash", "messageBody": "private body",
+            })
+            raise SelectedPayloadIntegrityError("private path", code="selected_payload_length")
+
+        output = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), output, failed), 1)
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(events[-2], {
+            "kind": "selected-payload-diagnostic", "source": "contacts",
+            "component": "database", "result": "length_mismatch",
+            "encrypted": True, "producerDigest": "mismatched", "sidecars": "absent",
+            "declaredBytes": 8192, "rawBytes": 4112, "copiedBytes": 4096,
+        })
+        self.assertEqual(events[-1], {
+            "kind": "error", "code": "selected_payload_length", "stage": "processing",
+        })
+        self.assertNotIn("private", output.getvalue())
+        self.assertIsNone(_payload_diagnostic_event({
+            "source": "contacts", "component": "database", "result": "length_mismatch",
+            "encrypted": True, "manifest_bytes": True,
+        }))
+
+    def test_encrypted_owner_choice_reaches_collector_without_private_error(self) -> None:
+        async def preflight(**kwargs: object) -> IPhoneCapture:
+            self.assertIs(kwargs.get("require_encrypted_backup"), True)
+            raise BackupEncryptionPreflightError("backup_encryption_disabled")
+
+        output = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO(), output, preflight, require_encrypted_backup=True), 1)
+        self.assertEqual(json.loads(output.getvalue().splitlines()[-1]),
+                         {"kind": "error", "code": "backup_encryption_disabled", "stage": "connecting"})
+
+    def test_optional_payload_reason_reaches_local_review_without_private_error(self) -> None:
+        capture = replace(synthetic_capture(), calls=SourceResult(0, (), 0),
+                          missing_sources=("calls",), backup_encrypted=False,
+                          unavailable_reasons=(("calls", "selected_payload_length"),))
+
+        async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+            return capture
+
+        sink = io.StringIO()
+        self.assertEqual(run_connect(io.StringIO('{"action":"disconnect"}\n'), sink, fake_collector), 0)
+        events = [json.loads(line) for line in sink.getvalue().splitlines()]
+        local_review = next(event for event in events if event["kind"] == "capture")
+        self.assertEqual(local_review["unavailableReasons"], {"calls": "selected_payload_length"})
+        self.assertEqual(local_review["missing"], ["calls"])
+        self.assertIs(local_review["backupEncrypted"], False)
+        self.assertNotIn("private path", sink.getvalue())
+
+    def test_bounded_contact_inspection_preserves_requested_ids_and_rejects_missing(self) -> None:
+        contacts = (Contact(7, "Acme LLC", (), ()), Contact(9, "Alex 😀", (), ()))
+        request_id = "00000000-0000-4000-8000-000000000007"
+        result = _contact_ids(contacts, [9, 7], request_id)
+        self.assertEqual([row["id"] for row in result["contacts"]], [9, 7])
+        self.assertEqual(result["totalContacts"], 2)
+        self.assertNotIn("phones", str(result))
+        for invalid in ([9, 9], [9, 11], [True], list(range(201))):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                _contact_ids(contacts, invalid, request_id)
+        with self.assertRaises(ValueError):
+            _contact_ids(contacts, [7], "stale")
+
+    def test_suggestion_scan_echo_and_indexed_inspection_use_only_local_preview(self) -> None:
+        async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+            return synthetic_capture()
+
+        scan_id = "00000000-0000-4000-8000-000000000008"
+        request_id = "00000000-0000-4000-8000-000000000009"
+        source = io.StringIO(
+            json.dumps({"action": "contacts", "query": "", "cursor": 0, "scanId": scan_id}) + "\n" +
+            json.dumps({"action": "contact-ids", "ids": [1], "requestId": request_id}) + "\n" +
+            '{"action":"disconnect"}\n'
+        )
+        sink = io.StringIO()
+        self.assertEqual(run_connect(source, sink, fake_collector), 0)
+        events = [json.loads(line) for line in sink.getvalue().splitlines()]
+        self.assertEqual([item["kind"] for item in events],
+                         ["state", "capture", "contacts", "contact-ids", "state"])
+        self.assertEqual(events[2]["scanId"], scan_id)
+        self.assertEqual(events[3]["requestId"], request_id)
+        self.assertEqual([item["id"] for item in events[3]["contacts"]], [1])
+        self.assertNotIn("+15551234567", sink.getvalue())
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = RecordStore(Path(directory) / "review.sqlite")
+            store.add("contacts", Contact(7, "Acme LLC", (), ()))
+            store.add("contacts", Contact(9, "Alex 😀", (), ()))
+            collection = store.collection("contacts")
+            self.assertEqual([item["id"] for item in _contact_ids(collection, [9, 7], request_id)["contacts"]], [9, 7])
+            with self.assertRaises(ValueError):
+                _contact_ids(collection, [7, 11], request_id)
+            store.close()
+
     def test_processing_failures_have_distinct_safe_categories_without_private_details(self) -> None:
         cases = (
             (BackupControlInvalid, "backup_control_invalid"),
@@ -459,7 +565,7 @@ class AgentProtocolTest(unittest.TestCase):
             )
 
         source = io.StringIO(
-            '{"action":"contacts","query":"","cursor":200,"scanId":"00000000-0000-4000-8000-000000000001"}\n'
+            '{"action":"contacts","query":"","cursor":200}\n'
             '{"action":"contacts","query":"","cursor":400}\n'
             '{"action":"contacts","query":"Person 0449","cursor":0}\n'
             '{"action":"review","ids":[449]}\n'
@@ -473,7 +579,6 @@ class AgentProtocolTest(unittest.TestCase):
             [event["kind"] for event in events],
             ["state", "capture", "contacts", "contacts", "contacts", "review", "state"],
         )
-        self.assertEqual(events[2]["scanId"], "00000000-0000-4000-8000-000000000001")
         self.assertEqual(
             (
                 events[1]["totalContacts"],

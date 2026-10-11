@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifai_phone.__main__ import review_snapshot
 from amplifai_phone.ios_backup import (
+    BackupEncryptionPreflightError,
     DATABASES,
     MAX_PLIST_BYTES,
     IPhoneCapture,
@@ -641,6 +642,106 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(service.backup.await_args.kwargs["unback"])
         self.assertFalse(service.backup.await_args.kwargs["patch_manifest"])
         self.assertEqual(parse.call_args.args[1], "synthetic-password")
+        lockdown.get_value.assert_not_called()
+
+    async def test_encrypted_choice_stops_before_backup_when_disabled_or_unknown(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pymobiledevice3.exceptions import LockdownError
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        for reported, code in (
+            (False, "backup_encryption_disabled"),
+            (None, "backup_encryption_unknown"),
+            (0, "backup_encryption_unknown"),
+            (1, "backup_encryption_unknown"),
+            ("true", "backup_encryption_unknown"),
+            (LockdownError("synthetic read refusal", "SYNTHETIC-UDID", "27.0"), "backup_encryption_unknown"),
+        ):
+            with self.subTest(reported=type(reported).__name__, code=code):
+                lockdown = MagicMock()
+                lockdown.udid = "SYNTHETIC-UDID"
+                lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+                lockdown.__aexit__ = AsyncMock(return_value=False)
+                lockdown.get_value = AsyncMock(
+                    side_effect=reported if isinstance(reported, Exception) else None,
+                    return_value=None if isinstance(reported, Exception) else reported,
+                )
+                service = MagicMock()
+                service.__aenter__ = AsyncMock(return_value=service)
+                service.__aexit__ = AsyncMock(return_value=False)
+                service.backup = AsyncMock()
+                transferred: list[dict[str, object]] = []
+                with (
+                    tempfile.TemporaryDirectory(prefix="amplifai-encryption-preflight-") as temporary,
+                    patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+                    patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+                    patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service", return_value=service),
+                ):
+                    with self.assertRaises(BackupEncryptionPreflightError) as failure:
+                        await collect_iphone(
+                            password_provider=lambda: self.fail("No password before backup"),
+                            transfer_callback=transferred.append,
+                            require_encrypted_backup=True,
+                            sessions_root=Path(temporary) / "sessions",
+                        )
+                self.assertEqual(failure.exception.code, code)
+                lockdown.get_value.assert_awaited_once_with("com.apple.mobile.backup", "WillEncrypt")
+                service.backup.assert_not_awaited()
+                self.assertEqual(transferred, [])
+
+    async def test_encrypted_choice_requires_completed_manifest_confirmation(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pyiosbackup.manifest_plist import ManifestPlist
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        for manifest_encrypted in (True, False):
+            with self.subTest(manifest_encrypted=manifest_encrypted):
+                lockdown = MagicMock()
+                lockdown.udid = "SYNTHETIC-UDID"
+                lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+                lockdown.__aexit__ = AsyncMock(return_value=False)
+                lockdown.get_value = AsyncMock(return_value=True)
+                service = MagicMock()
+                service.__aenter__ = AsyncMock(return_value=service)
+                service.__aexit__ = AsyncMock(return_value=False)
+                service.backup = AsyncMock(side_effect=fake_snapshot_backup_control_files)
+                service.service._ensure_started = AsyncMock(return_value=(asyncio.StreamReader(), MagicMock()))
+                service.resolve_backup_selection.return_value = ("selection-rules",)
+                service.selection_filter_callback.return_value = "selection-filter"
+                expected = IPhoneCapture(SourceResult(0, (), 0), SourceResult(0, (), 0),
+                                         SourceResult(0, (), 0), "now", "since", ())
+                with (
+                    tempfile.TemporaryDirectory(prefix="amplifai-encryption-completion-") as temporary,
+                    patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+                    patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+                    patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service", return_value=service),
+                    patch.object(ManifestPlist, "from_path", return_value=SimpleNamespace(is_encrypted=manifest_encrypted)),
+                    patch("amplifai_phone.ios_backup.parse_selected_backup", return_value=expected) as parse,
+                ):
+                    if manifest_encrypted:
+                        result = await collect_iphone(
+                            password_provider=lambda: "synthetic-password",
+                            require_encrypted_backup=True,
+                            sessions_root=Path(temporary) / "sessions",
+                        )
+                        result.close()
+                        parse.assert_called_once()
+                    else:
+                        with self.assertRaises(BackupEncryptionPreflightError) as failure:
+                            await collect_iphone(
+                                password_provider=lambda: self.fail("No password after mismatched manifest"),
+                                require_encrypted_backup=True,
+                                sessions_root=Path(temporary) / "sessions",
+                            )
+                        self.assertEqual(failure.exception.code, "backup_encryption_changed")
+                        parse.assert_not_called()
+                service.backup.assert_awaited_once()
 
     async def test_raw_workspace_exit_failure_closes_undelivered_review_store(self) -> None:
         import pymobiledevice3.lockdown

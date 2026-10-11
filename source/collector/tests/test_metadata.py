@@ -3,16 +3,20 @@ from __future__ import annotations
 from contextlib import closing
 
 import hashlib
+import json
+import os
 import sqlite3
 import tempfile
 import tracemalloc
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from amplifai_phone.__main__ import review_capture
 from amplifai_phone.ios_backup import DATABASES, _parse_entries
+from amplifai_phone.paged_transfer import PagedTransfer
 from amplifai_phone.metadata import (
     RETAINED_HISTORY_START,
     Contact,
@@ -27,7 +31,7 @@ from amplifai_phone.metadata import (
     select_people,
 )
 from amplifai_phone.record_store import RecordStore
-from amplifai_phone.workspace import WorkspaceError
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 
 def cocoa(iso: str) -> int:
@@ -59,6 +63,58 @@ class MetadataTest(unittest.TestCase):
         with closing(sqlite3.connect(path)) as db, db:
             db.executemany("INSERT INTO ZCALLRECORD VALUES (?, ?, ?, ?, ?)", rows)
         return path
+
+    def test_named_contact_primary_key_preserves_review_identity_and_phone_owner(self) -> None:
+        path = self.make_db("named-contact-key.db", [
+            "CREATE TABLE ABPerson (contact_key INTEGER PRIMARY KEY, First TEXT, Last TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+            "INSERT INTO ABPerson VALUES (7, 'Fictional', 'Seven')",
+            "INSERT INTO ABPerson VALUES (73, 'Fictional', 'Seventy Three')",
+            "INSERT INTO ABMultiValue VALUES (7, 3, '+12025550123')",
+            "INSERT INTO ABMultiValue VALUES (73, 3, '+12025550124')",
+        ])
+        result = read_contacts(path)
+        self.assertEqual((result.rows_seen, result.excluded), (2, 0))
+        self.assertEqual(
+            [(item.source_id, item.phones) for item in result.records],
+            [(7, ("+12025550123",)), (73, ("+12025550124",))],
+        )
+        self.assertEqual([item.source_id for item in select_people(result, {7})], [7])
+
+    def test_named_call_primary_key_preserves_selected_incoming_outgoing(self) -> None:
+        path = self.make_db("named-call-key.db", [
+            "CREATE TABLE ZCALLRECORD (Z_PK INTEGER PRIMARY KEY, ZDATE REAL, ZDURATION REAL, "
+            "ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)",
+            "INSERT INTO ZCALLRECORD VALUES (7, 800000000, 60, '+12025550123', 1, 1)",
+            "INSERT INTO ZCALLRECORD VALUES (73, 800000100, 30, '+12025550124', 0, 1)",
+        ])
+        calls = read_calls(path, self.since)
+        self.assertEqual((calls.rows_seen, calls.excluded), (2, 0))
+        self.assertEqual(
+            [(item.source_id, item.direction) for item in calls.records],
+            [(7, "outgoing"), (73, "incoming")],
+        )
+        selected = Contact(7, "Fictional Seven", ("+12025550123",), ())
+        self.assertEqual(
+            [item.source_id for item in interactions_for_contacts((selected,), (calls,))],
+            [7],
+        )
+
+    def test_shadowed_noninteger_row_identity_is_not_imported(self) -> None:
+        contacts = self.make_db("shadowed-contact-rowid.db", [
+            "CREATE TABLE ABPerson (ROWID TEXT PRIMARY KEY, First TEXT, Last TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+            "INSERT INTO ABPerson VALUES ('fictional', 'Fictional', 'Person')",
+        ])
+        calls = self.make_db("shadowed-call-rowid.db", [
+            "CREATE TABLE ZCALLRECORD (ROWID TEXT PRIMARY KEY, ZDATE REAL, ZDURATION REAL, "
+            "ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)",
+            "INSERT INTO ZCALLRECORD VALUES ('fictional', 800000000, 60, '+12025550123', 1, 1)",
+        ])
+        with self.assertRaises(UnsupportedSchema):
+            read_contacts(contacts)
+        with self.assertRaises(UnsupportedSchema):
+            read_calls(calls, self.since)
 
     def test_disk_backed_reader_crosses_legacy_row_cap_without_private_content(self) -> None:
         path = self.make_db("paged-contacts.db", [
@@ -563,6 +619,7 @@ class MetadataTest(unittest.TestCase):
                 "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
                 "INSERT INTO ABPerson VALUES ('Ada', 'Test')",
                 "INSERT INTO ABMultiValue VALUES (1, 3, '5551234567')",
+                "INSERT INTO ABMultiValue VALUES (1, 3, '+1 (202) 555-0199')",
             ],
         )
         calls = self.make_db(
@@ -570,6 +627,8 @@ class MetadataTest(unittest.TestCase):
             [
                 "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)",
                 f"INSERT INTO ZCALLRECORD VALUES ({cocoa('2026-09-01T12:00:00+00:00')}, 65, '5551234567', 1, 1)",
+                f"INSERT INTO ZCALLRECORD VALUES ({cocoa('2026-09-01T12:30:00+00:00')}, 21, '+12025550199', 0, 1)",
+                f"INSERT INTO ZCALLRECORD VALUES ({cocoa('2026-09-01T12:45:00+00:00')}, 8, '+12025550000', 0, 0)",
             ],
         )
         messages = self.make_db(
@@ -618,14 +677,54 @@ class MetadataTest(unittest.TestCase):
         self_test = self
         extracted = self.root / "extracted"
         extracted.mkdir()
-        capture = _parse_entries(Backup(), extracted, self.now, self.since)
-        review = review_capture(capture, "1")
-        self.assertEqual(review["selected_contacts"], 1)
-        self.assertEqual(review["matched_calls"], 1)
-        self.assertEqual(review["matched_messages"], 1)
-        self.assertEqual(review["missing_sources"], ())
-        self.assertNotIn("SECRET-BODY", repr(capture))
-        self.assertNotIn("SECRET-BODY", repr(review))
+        # This tiny fixture tests parsing/selection; the real 2 GiB free-space
+        # guard has separate coverage and remains unchanged in production.
+        with patch("amplifai_phone.backup_files.MIN_FREE_BYTES", 0), \
+                patch("amplifai_phone.workspace.MIN_FREE_BYTES", 0):
+            workspace = SessionWorkspace(self.root / "review")
+            with workspace as review_root:
+                store = RecordStore(review_root / "sanitized.sqlite3", workspace)
+                try:
+                    parsed = _parse_entries(Backup(), extracted, self.now, self.since,
+                                            record_store=store)
+                    capture = replace(parsed, review_workspace=workspace, record_store=store)
+                    review = review_capture(capture, "1")
+                    self.assertEqual(review["selected_contacts"], 1)
+                    self.assertEqual((capture.calls.rows_seen, len(capture.calls.records)), (3, 3))
+                    self.assertEqual(review["matched_calls"], 2)
+                    self.assertEqual(review["matched_messages"], 1)
+                    self.assertEqual(review["missing_sources"], ())
+                    transfer = PagedTransfer(capture, {1}, review_root / "selected-transfer.sqlite3")
+                    try:
+                        self.assertEqual(transfer.manifest["sources"]["calls"]["rowsSeen"], 3)
+                        self.assertEqual(transfer.manifest["sources"]["calls"]["rowsIncluded"], 2)
+                        self.assertEqual(transfer.manifest["sources"]["messages"]["rowsIncluded"], 1)
+                        call_rows = [
+                            row for cursor in range(transfer.manifest["sources"]["calls"]["pageCount"])
+                            for row in json.loads(transfer.page("calls", cursor)["chunk"])
+                        ]
+                        self.assertEqual([row["direction"] for row in call_rows], ["outgoing", "incoming"])
+                        self.assertEqual([row["participants"] for row in call_rows],
+                                         [["+15551234567"], ["+12025550199"]])
+                        fixture_path = os.environ.get("AMPLIFAI_SELECTED_CALLS_FIXTURE_OUT")
+                        if fixture_path:
+                            fixture = {
+                                "manifest": transfer.manifest,
+                                "pages": {
+                                    category: [transfer.page(category, cursor)
+                                               for cursor in range(transfer.manifest["sources"][category]["pageCount"])]
+                                    for category in ("contacts", "calls", "messages")
+                                },
+                            }
+                            encoded = json.dumps(fixture, separators=(",", ":"))
+                            self.assertNotIn("SECRET-BODY", encoded)
+                            Path(fixture_path).write_text(encoded + "\n", encoding="utf-8")
+                    finally:
+                        transfer.close()
+                    self.assertNotIn("SECRET-BODY", repr(capture))
+                    self.assertNotIn("SECRET-BODY", repr(review))
+                finally:
+                    store.close()
 
 
 if __name__ == "__main__":

@@ -132,14 +132,17 @@ class BridgeTest(unittest.TestCase):
     def test_safe_optional_reason_and_encryption_state_are_digest_bound_in_both_wires(self) -> None:
         capture = replace(fixture(), missing_sources=("calls", "messages"),
                           calls=SourceResult(0, (), 0), backup_encrypted=False,
-                          unavailable_reasons=(("calls", "absent"), ("messages", "source_integrity")))
+                          unavailable_reasons=(("calls", "absent"), ("messages", "selected_payload_length")))
         small = selected_metadata(capture, {1})
         self.assertEqual(json.loads(small)["unavailableReasons"],
-                         {"calls": "absent", "messages": "source_integrity"})
+                         {"calls": "absent", "messages": "selected_payload_length"})
         self.assertIs(json.loads(small)["backupEncrypted"], False)
         self.assertNotEqual(hashlib.sha256(small).digest(),
                             hashlib.sha256(selected_metadata(replace(capture, backup_encrypted=True), {1})).digest())
-        with tempfile.TemporaryDirectory(prefix="amplifai-source-reason-test-") as temporary:
+        coarse = replace(capture, unavailable_reasons=(("calls", "absent"), ("messages", "source_integrity")))
+        self.assertNotEqual(hashlib.sha256(small).digest(), hashlib.sha256(selected_metadata(coarse, {1})).digest())
+        with (tempfile.TemporaryDirectory(prefix="amplifai-source-reason-test-") as temporary,
+              patch("amplifai_phone.workspace.MIN_FREE_BYTES", 0)):
             workspace = SessionWorkspace(Path(temporary) / "sessions")
             directory = workspace.__enter__()
             store = RecordStore(directory / "sanitized.sqlite3")
@@ -152,10 +155,16 @@ class BridgeTest(unittest.TestCase):
                 transfer = PagedTransfer(paged, {1}, directory / "transfer.sqlite3")
                 try:
                     self.assertEqual(transfer.manifest["unavailableReasons"],
-                                     {"calls": "absent", "messages": "source_integrity"})
+                                     {"calls": "absent", "messages": "selected_payload_length"})
                     self.assertIs(transfer.manifest["backupEncrypted"], False)
                     self.assertEqual(transfer.sha256, hashlib.sha256(json.dumps(
                         transfer.manifest, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest())
+                    changed = PagedTransfer(replace(paged, unavailable_reasons=coarse.unavailable_reasons),
+                                            {1}, directory / "transfer-changed.sqlite3")
+                    try:
+                        self.assertNotEqual(transfer.sha256, changed.sha256)
+                    finally:
+                        changed.close()
                 finally:
                     transfer.close()
             finally:

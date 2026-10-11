@@ -1,0 +1,108 @@
+{
+  "canonicalNativeHead": "14acc4f3f2172245f46b7e8337a266710cf5934a",
+  "compiledMacRc19Source": "0c1b8c5e58ac7326dc29f84777e226b5057c644c",
+  "files": [
+    {
+      "bytes": 13825,
+      "path": "source/collector/README.md",
+      "sha256": "fce4cde350fe523d1a5375fdef01d3dd9e80b39935d991e665d6990bf9668deb"
+    },
+    {
+      "bytes": 3783,
+      "path": "source/collector/WINDOWS-PACKAGING-PLAN.md",
+      "sha256": "01af9ce146bd12929a23816f4b018274f89e20564821332c849579c7b6473d34"
+    },
+    {
+      "bytes": 819,
+      "path": "source/collector/agent_entry.py",
+      "sha256": "abfd01d2681aa97b16fc139481df38bf8578995b7e5a1d67f756c40b3e9f3684"
+    },
+    {
+      "bytes": 24106,
+      "path": "source/collector/amplifai_phone/agent.py",
+      "sha256": "49f0d59c0125d55ae726b491c4e4c8ad9b64eddc49e2d11d7bfa6ca2950b9184"
+    },
+    {
+      "bytes": 5020,
+      "path": "source/collector/amplifai_phone/backup_files.py",
+      "sha256": "5027c38ea82201afff47d5cad280c22a1c3645629823d957e3a6fdf869f890ee"
+    },
+    {
+      "bytes": 26620,
+      "path": "source/collector/amplifai_phone/ios_backup.py",
+      "sha256": "c2641eca30eddf0eee309ebc131a2a6341a144ed9a5263c0bb343bec79ca156b"
+    },
+    {
+      "bytes": 21827,
+      "path": "source/collector/amplifai_phone/metadata.py",
+      "sha256": "0f1674ee8c6e8e68120b1cec9ed18c2c5d52b9e30d207d00875d67f60b0b88d4"
+    },
+    {
+      "bytes": 16581,
+      "path": "source/collector/amplifai_phone/sqlite_encrypted_size_compat.py",
+      "sha256": "4a2735a20ee5a9f80374f142c39c32ced75bf7e368d9ee09c0f728c15c5523f7"
+    },
+    {
+      "bytes": 38930,
+      "path": "source/collector/tests/test_agent.py",
+      "sha256": "76701dbb34ea09c02b07c852f4b7e0e9e0175636a8def07009e00132460fc90b"
+    },
+    {
+      "bytes": 35063,
+      "path": "source/collector/tests/test_bridge.py",
+      "sha256": "db341a7b4d1022a313f9f00fa9ab0dc8ebd4a1f83a7e36cc94fc95dae4ac38c8"
+    },
+    {
+      "bytes": 53339,
+      "path": "source/collector/tests/test_ios_backup.py",
+      "sha256": "7778846820d5a68a8b4f0241561c470a844fc89fa68bfff3804cbf1bd6a202a5"
+    },
+    {
+      "bytes": 35164,
+      "path": "source/collector/tests/test_metadata.py",
+      "sha256": "f541018c543523b028fb1a58feefe8343bec2708523358b1d06443abea6fa52a"
+    },
+    {
+      "bytes": 15405,
+      "path": "source/collector/tests/test_sqlite_encrypted_size_compat.py",
+      "sha256": "b660f5eaa76d494ae56814200754806200a77db94d07cc8f894e6e22e16e00d5"
+    },
+    {
+      "bytes": 3382,
+      "path": "source/collector/windows/PACKAGE-INPUTS.json",
+      "sha256": "b73609b68c53dc33f6252066778092feb30c966cc3d5f771541ad5725ce3919a"
+    },
+    {
+      "bytes": 7144,
+      "path": "source/collector/windows/README.md",
+      "sha256": "dc2ad6fde5b037f5b5675b89dda594777122c1f203fcdbd7c0a417007fb5402a"
+    },
+    {
+      "bytes": 4153,
+      "path": "source/collector/windows/tests/qualify_frozen_encrypted_worker.py",
+      "sha256": "fbf2dd922ea5cb7a054a51034f45fdccea712b9fa02e5667347be9b8e6b1728f"
+    },
+    {
+      "bytes": 10836,
+      "path": "source/script/build_windows_candidate.py",
+      "sha256": "664268dce6406d89587c0492664b5d12a18be8874ee570b609b5deed24650502"
+    },
+    {
+      "bytes": 9231,
+      "path": "source/script/build_windows_msi.py",
+      "sha256": "d9df783c4baec89dfa7d8df018e646e883d0b5b2ffd61fa32a96dd701ab7f54e"
+    },
+    {
+      "bytes": 6523,
+      "path": "source/script/test_windows_candidate.py",
+      "sha256": "d305e466a3ff5205e4eb3d6cb626923cda2354ed2d23966702afdcb7cfbaf6a6"
+    },
+    {
+      "bytes": 5145,
+      "path": "source/script/test_windows_msi.py",
+      "sha256": "36f1237e83403982fb8ba8dc6d3d7cdbef0432c1d671e8a873b4bc48b3fe0096"
+    }
+  ],
+  "kind": "private_windows_rc15_source_projection",
+  "scope": "changed shared collector and Windows build inputs; historical Mac third_party manifest is not this projection"
+}

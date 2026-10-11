@@ -13,6 +13,10 @@ def main():
         from amplifai_phone.sqlite_messages_size_compat import worker_main
 
         return worker_main()
+    if sys.argv[1:] == ['--internal-encrypted-size-validation']:
+        from amplifai_phone.sqlite_encrypted_size_compat import worker_main
+
+        return worker_main()
     from amplifai_phone.agent import main as agent_main
 
     return agent_main()

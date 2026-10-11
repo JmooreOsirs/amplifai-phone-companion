@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from build_windows_candidate import (
     GUI_FILES,
+    WORKER_MODES,
     clean_child_environment,
     file_records,
     freezer_command,
@@ -98,6 +99,16 @@ class WindowsCandidateBoundaryTests(unittest.TestCase):
             self.assertEqual(parse_helper_packet(b'{"code":"unsafe"}\n', mode), {"code": "unsafe"})
             with self.assertRaisesRegex(ValueError, "worker"):
                 parse_helper_packet(b'{"code":"validated_contacts_tables"}\n', mode)
+
+    def test_encrypted_main_worker_is_in_the_frozen_contract(self):
+        self.assertEqual(WORKER_MODES["encrypted-worker"], "--internal-encrypted-size-validation")
+        self.assertEqual(parse_helper_packet(
+            b'{"code":"unsafe","copy_checksum_matches":null}\n', "encrypted-worker"),
+            {"code": "unsafe", "copy_checksum_matches": None})
+        with self.assertRaisesRegex(ValueError, "worker"):
+            parse_helper_packet(
+                b'{"code":"validated_call_database","copy_checksum_matches":true}\n',
+                "encrypted-worker")
 
     def test_legal_inventory_requires_regular_exact_files(self):
         for name in ("COPYRIGHT", "LICENSE", "THIRD-PARTY-NOTICES.txt"):

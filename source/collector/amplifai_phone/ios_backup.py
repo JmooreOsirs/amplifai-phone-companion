@@ -6,6 +6,7 @@ It never changes backup encryption settings or exports source databases.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import plistlib
 import re
@@ -55,6 +56,14 @@ OPTIONAL_PAYLOAD_REASON_CODES = frozenset({
     "selected_payload_invalid", "selected_payload_size", "selected_payload_identity",
     "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto",
 })
+
+
+class BackupEncryptionPreflightError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        if code not in {"backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed"}:
+            raise ValueError("Unsupported backup encryption preflight code")
+        self.code = code
+        super().__init__(code)
 
 
 @dataclass(frozen=True)
@@ -168,6 +177,21 @@ def _extract_database(
 
         diagnostic = None
         raw_before_size = raw_size()
+        raw_hasher = copied_hasher = None
+        raw_count = 0
+        source_before = None
+        if source_kind is not None and not suffix and backup.is_encrypted is True:
+            # Retain identity without preempting the existing decryption error.
+            # The stricter canonical-path guard runs only if compatibility is
+            # actually considered after a successful copy.
+            source_before = source.stat(follow_symlinks=False)
+            raw_hasher = hashlib.sha1()
+            copied_hasher = hashlib.sha256()
+
+        def raw_chunk(chunk: bytes) -> None:
+            nonlocal raw_count
+            raw_count += len(chunk)
+            raw_hasher.update(chunk)
         if payload_diagnostic_callback is not None:
             diagnostic = {
                 "source": source_kind, "component": component,
@@ -177,7 +201,6 @@ def _extract_database(
                 "entry_key_present": isinstance(entry.encryption_key, bytes) and bool(entry.encryption_key),
                 "result": "copying",
             }
-            import hashlib
             diagnostic['standard_file_id'] = entry.file_id == hashlib.sha1((HOME_DOMAIN+'-'+relative_path+suffix).encode()).hexdigest()
             payload_diagnostic_callback(diagnostic)
         try:
@@ -190,6 +213,8 @@ def _extract_database(
                 workspace=workspace,
                 bound_callback=bound_callback,
                 progress_callback=progress_callback,
+                raw_chunk_callback=raw_chunk if raw_hasher is not None else None,
+                copied_chunk_callback=copied_hasher.update if copied_hasher is not None else None,
             )
         except SelectedPayloadIntegrityError:
             if diagnostic is not None:
@@ -213,15 +238,31 @@ def _extract_database(
                     backup, entry, destination, copied, workspace=workspace,
                     bound_callback=bound_callback,
                 )
+            elif (source_kind is not None and not suffix and backup.is_encrypted is True
+                  and raw_hasher is not None and copied_hasher is not None):
+                from .sqlite_encrypted_size_compat import validate_encrypted_size_difference
+
+                validation = validate_encrypted_size_difference(
+                    source_kind, backup, entry, destination, copied,
+                    workspace=workspace, source_before=source_before,
+                    raw_size=raw_count, raw_digest=raw_hasher.digest(),
+                    copied_digest=copied_hasher.digest(), bound_callback=bound_callback,
+                )
         if diagnostic is not None:
             sample = {
                 **diagnostic, 'raw_after_bytes': raw_size(),
                 'copied_plaintext_bytes': copied,
-                'result': 'match' if copied == entry.size else 'length_mismatch',
+                'result': ('match' if copied == entry.size else
+                           'accepted_compatibility' if validation is not None and validation.accepted else
+                           'length_mismatch'),
             }
             if validation is not None:
                 sample['size_difference_validation'] = validation.code
                 sample['size_difference_validation_scope'] = validation.scope
+                if hasattr(validation, 'producer_digest_present'):
+                    sample['producer_digest_present'] = validation.producer_digest_present
+                    sample['producer_digest_matches'] = validation.producer_checksum_matches
+                    sample['sidecars_absent'] = validation.sidecars_absent
             payload_diagnostic_callback(sample)
         if copied != entry.size:
             if validation is None or not validation.accepted:
@@ -240,6 +281,7 @@ def parse_selected_backup(
     *,
     workspace: SessionWorkspace | None = None,
     transfer_callback: Callable[[dict[str, object]], None] | None = None,
+    payload_diagnostic_callback: Callable[[dict[str, object]], None] | None = None,
     record_store: RecordStore | None = None,
 ) -> IPhoneCapture:
     """Read only allowlisted metadata fields, then remove decrypted DB copies."""
@@ -307,6 +349,7 @@ def parse_selected_backup(
                 workspace,
                 processed_bytes,
                 record_store,
+                payload_diagnostic_callback,
             )
             if transfer_callback is not None:
                 transfer_callback({"stage": "processing", "processedBytes": processed})
@@ -324,6 +367,7 @@ def _parse_entries(
     workspace: SessionWorkspace | None = None,
     progress_callback: Callable[[int], None] | None = None,
     record_store: RecordStore | None = None,
+    payload_diagnostic_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> IPhoneCapture:
     missing = []
     reasons: dict[str, str] = {}
@@ -331,8 +375,11 @@ def _parse_entries(
     for key, path in DATABASES.items():
         destination = extracted / key
         try:
+            diagnostic_option = ({"payload_diagnostic_callback": payload_diagnostic_callback}
+                                 if payload_diagnostic_callback is not None else {})
             available[key] = _extract_database(
-                backup, path, destination, bound_callback, workspace, progress_callback
+                backup, path, destination, bound_callback, workspace, progress_callback,
+                **diagnostic_option,
             )
         except (SelectedPayloadMissing, SelectedPayloadIntegrityError) as error:
             if key == "contacts":
@@ -411,6 +458,8 @@ async def collect_iphone(
     progress_callback: Callable[[float], None] | None = None,
     connection_callback: Callable[[str], None] | None = None,
     transfer_callback: Callable[[dict[str, object]], None] | None = None,
+    payload_diagnostic_callback: Callable[[dict[str, object]], None] | None = None,
+    require_encrypted_backup: bool = False,
     now: datetime | None = None,
     sessions_root: Path | None = None,
 ) -> IPhoneCapture:
@@ -421,6 +470,7 @@ async def collect_iphone(
     browser storage, logs, or a URL.
     """
     from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.exceptions import LockdownError
     from pymobiledevice3.services.mobilebackup2 import (
         BackupSelectionRule,
         Mobilebackup2Service,
@@ -453,6 +503,17 @@ async def collect_iphone(
             async def capture_session() -> IPhoneCapture:
                 nonlocal review_capture
                 async with lockdown, Mobilebackup2Service(lockdown) as service:
+                    if require_encrypted_backup:
+                        try:
+                            will_encrypt = await lockdown.get_value(
+                                "com.apple.mobile.backup", "WillEncrypt"
+                            )
+                        except LockdownError as exc:
+                            raise BackupEncryptionPreflightError("backup_encryption_unknown") from exc
+                        if type(will_encrypt) is not bool:
+                            raise BackupEncryptionPreflightError("backup_encryption_unknown")
+                        if not will_encrypt:
+                            raise BackupEncryptionPreflightError("backup_encryption_disabled")
                     await observe_backup_receives(service, watchdog)
                     bind_streamed_device_link(
                         service, workspace, watchdog, transfer_callback
@@ -490,6 +551,8 @@ async def collect_iphone(
                     encrypted = ManifestPlist.from_path(
                         manifest_path_on_disk
                     ).is_encrypted
+                    if require_encrypted_backup and encrypted is not True:
+                        raise BackupEncryptionPreflightError("backup_encryption_changed")
                     password = password_provider() if encrypted else ""
                     if encrypted and not password:
                         raise RuntimeError(
@@ -512,6 +575,7 @@ async def collect_iphone(
                             parsing_bound,
                             workspace=workspace,
                             transfer_callback=transfer_callback,
+                            payload_diagnostic_callback=payload_diagnostic_callback,
                             record_store=record_store,
                         )
                         review_capture = IPhoneCapture(
