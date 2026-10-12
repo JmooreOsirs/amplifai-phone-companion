@@ -65,7 +65,7 @@ def source_window():
 class GuiGuardsTests(unittest.TestCase):
     def test_all_page_controls_expose_exact_progress_without_early_selection(self):
         window = source_window()
-        for name in ("approve", "connect", "agreement", "decline_button", "contacts", "review_button",
+        for name in ("approve", "connect", "agreement", "decline_button", "contacts", "review_button", "change_selection_button",
                      "search_entry", "search_button", "previous_button", "next_button", "select_all_button",
                      "cancel_select_all_button", "clear_all_button", "pair_button", "password_button",
                      "inspect", "clear", "stop_button", "force_button", "progress", "copy_code_button",
@@ -199,6 +199,43 @@ class GuiGuardsTests(unittest.TestCase):
         window.helper.force_stop.assert_not_called()
         self.assertIn("empty or marker-only", window.state.status)
         self.assertIn("No phone data was written", window.state.status)
+
+    def test_recoverable_pairing_failure_keeps_review_and_helper_open(self):
+        window = source_window()
+        window.state.handle({"kind": "capture", "contacts": [
+            {"id": 1, "name": "Synthetic Contact", "phoneCount": 1, "phoneEnds": ["0123"]}],
+            "query": "", "cursor": 0, "nextCursor": None, "totalContacts": 1,
+            "availableCalls": 0, "availableMessages": 0, "missing": []})
+        window.state.update_visible_selection([1])
+        command = window.state.review([1])
+        window.state.handle({"kind": "review-page", "reviewId": command["reviewId"], "nextCursor": 1})
+        window.state.handle({"kind": "review", "reviewId": command["reviewId"],
+                             "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                             "selected_contacts": 1, "matched_calls": 0,
+                             "matched_messages": 0, "missing_sources": []})
+        window.state.pair()
+        window.events.put({"kind": "error", "code": "bridge_unavailable"})
+        window.pump()
+        window.helper.close_input.assert_not_called()
+        self.assertTrue(window.state.can_pair)
+        self.assertEqual(window.state.selected_ids, {1})
+
+    def test_stop_requires_explicit_local_review_discard(self):
+        window = source_window()
+        window.state.handle({"kind": "capture", "contacts": [
+            {"id": 1, "name": "Synthetic Contact", "phoneCount": 1, "phoneEnds": ["0123"]}],
+            "query": "", "cursor": 0, "nextCursor": None, "totalContacts": 1,
+            "availableCalls": 0, "availableMessages": 0, "missing": []})
+        dialog = window.stop.__globals__["messagebox"]
+        dialog.askyesno.return_value = False
+        window.stop()
+        window.helper.close_input.assert_not_called()
+        self.assertEqual(window.state.phase, "selecting")
+        dialog.askyesno.return_value = True
+        window.stop()
+        self.assertIn("final browser receipt", dialog.askyesno.call_args.args[1])
+        window.helper.close_input.assert_called_once()
+        self.assertEqual(window.state.phase, "cancelling")
 
     def test_stale_review_packet_does_not_render_old_output_counts(self):
         window = source_window()

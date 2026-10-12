@@ -84,6 +84,7 @@ class Session:
         self.handoff_id = ""
         self.pair_code = ""
         self.saved_acknowledged = False
+        self.save_receipt_pending = False
         self.approval: str | None = None
         self._polling = self._pairing = self._finishing = False
         self._pending_review: tuple[int, ...] | None = None
@@ -93,6 +94,7 @@ class Session:
         self._review_expected_ack = 0
         self._retired_review_ids: set[str] = set()
         self._pairing_invalidated = False
+        self._selection_change_pending = False
         self._retired_handoff_id = ""
         self._capture_received = False
         self.selecting_all = False
@@ -126,7 +128,17 @@ class Session:
 
     @property
     def can_select(self) -> bool:
-        return self.running and self.mode == "connect" and self.phase in {"selecting", "reviewing"} and not self._stopping and not self._finishing
+        return (self.running and self.mode == "connect" and self.phase in {"selecting", "reviewing"}
+                and not self._stopping and not self._finishing and not self.handoff_id
+                and not self._selection_change_pending and not self.save_receipt_pending
+                and not self.saved_acknowledged)
+
+    @property
+    def can_change_selection(self) -> bool:
+        return (self.running and self.mode == "connect" and self.phase == "reviewing"
+                and self.reviewed and bool(self.handoff_id) and not self._selection_change_pending
+                and not self._pairing and not self._finishing and not self._stopping
+                and not self.save_receipt_pending and not self.saved_acknowledged)
 
     @property
     def can_select_all(self) -> bool:
@@ -145,8 +157,9 @@ class Session:
         return (self.running and self.mode == "connect" and self.phase == "reviewing"
                 and self.reviewed and bool(self.selection) and not self.saved_acknowledged
                 and not self._stopping and not self._finishing and not self._pairing
-                and not self._polling and self._pending_review is None
-                and self.pending_contact is None and not self.selecting_all and not self._retired_handoff_id)
+                and not self.save_receipt_pending and not self._selection_change_pending
+                and self._pending_review is None and self.pending_contact is None
+                and not self.selecting_all and not self._retired_handoff_id)
 
     def approve(self, checked: bool) -> None:
         self.approval = str(uuid.uuid4()) if checked and self.inspected and not self.needs_inspection and not self.residue and not self.running else None
@@ -167,7 +180,7 @@ class Session:
             self.selected_ids.clear()
             self._clear_select_all()
             self.selection = ()
-            self.reviewed = self.saved_acknowledged = False
+            self.reviewed = self.saved_acknowledged = self.save_receipt_pending = False
             self.missing = []
             self.unavailable_reasons = {}
             self.backup_encrypted = None
@@ -181,6 +194,7 @@ class Session:
         self.approval = None
         self._completed = self._stopping = self._failed = False
         self._polling = self._pairing = self._finishing = self._pairing_invalidated = False
+        self._selection_change_pending = False
         self._pending_review = None
         self._pending_review_id = self._pending_review_sha = ""
         self._review_next_cursor = self._review_expected_ack = 0
@@ -347,7 +361,10 @@ class Session:
 
     @property
     def can_decide_destination(self) -> bool:
-        return (self.can_select and self.reviewed and self.handoff_id != ""
+        return (self.running and self.mode == "connect" and self.phase == "reviewing"
+                and self.reviewed and self.handoff_id != "" and not self._pairing
+                and not self._selection_change_pending and not self.save_receipt_pending
+                and not self.saved_acknowledged and not self._stopping and not self._finishing
                 and self.destination_intent_id != "" and self.destination_requested_approval is None
                 and not self.destination_approved and set(self.selection) == self.selected_ids)
 
@@ -382,15 +399,20 @@ class Session:
         self.status = "Selection changed. Pending responses cannot approve it; review the current selection again."
         return {"action": "revoke"} if revoke else None
 
+    def request_selection_change(self) -> dict:
+        if not self.can_change_selection:
+            raise ProtocolError("Finish the current account save before changing contacts")
+        self._selection_change_pending = True
+        self.status = "Checking that changing contacts will not interrupt an account save…"
+        return {"action": "revoke"}
+
     def pair(self) -> dict:
         if not self.can_pair:
             raise ProtocolError("Review the current selection before pairing")
         self._pairing = True
         self._pairing_invalidated = False
-        self.handoff_id = self.pair_code = ""
-        self._clear_destination()
-        self.saved_acknowledged = False
-        self.status = "Preparing an exact-origin, five-minute initial browser pairing…"
+        self.status = ("Preparing a new browser pairing. The current review stays bound until the helper accepts it…"
+                       if self.handoff_id else "Preparing an exact-origin, five-minute initial browser pairing…")
         return {"action": "pair"}
 
     def poll(self) -> dict | None:
@@ -536,6 +558,16 @@ class Session:
                 self.status = {"connecting": "Unlock your iPhone and review its Trust prompt.", "processing": "Reading selected relationship context locally; cleanup is still in progress.", "password_required": "Enter the encrypted backup password. It is not logged or persisted."}[state]
             elif state not in {"disconnected", "cancelled", "pairing_revoked"}:
                 raise ProtocolError("Unknown helper state")
+            elif state == "pairing_revoked" and self._selection_change_pending:
+                self._selection_change_pending = False
+                self._retired_handoff_id = self.handoff_id if self._polling else ""
+                self._polling = False
+                self.handoff_id = self.pair_code = ""
+                self._clear_destination()
+                self.selection = ()
+                self.reviewed = False
+                self.phase = "selecting"
+                self.status = "Browser pairing closed. Your contact choices remain; change them and review again."
         elif kind == "capture":
             if self.mode != "connect" or self._capture_received:
                 raise ProtocolError("Invalid contact preview")
@@ -621,7 +653,11 @@ class Session:
                 return None  # Revoke was queued behind this obsolete pair command.
             if not self.reviewed:
                 raise ProtocolError("Pairing does not match reviewed selection")
+            self._retired_handoff_id = self.handoff_id if self._polling else ""
+            self._polling = False
             self.handoff_id, self.pair_code = binding, code
+            self._clear_destination()
+            self.save_receipt_pending = self.saved_acknowledged = False
             self.status = "Use Connect in your signed-in account. The temporary code remains a manual recovery option; received is not saved."
         elif kind == "destination":
             if (event.get("handoffId") != self.handoff_id or not self.handoff_id
@@ -670,16 +706,24 @@ class Session:
             if self._retired_handoff_id and event.get("handoffId") == self._retired_handoff_id:
                 self._retired_handoff_id = ""
                 return None  # Expected stale acknowledgment cannot finish this selection.
-            if not self._polling or event.get("handoffId") != self.handoff_id:
+            receipted = state in {"saved", "saved_pending_browser_receipt"}
+            if (event.get("handoffId") != self.handoff_id or not self.handoff_id
+                    or not (self._polling or receipted and (
+                        self._pairing or self._selection_change_pending
+                        or self.save_receipt_pending or self.saved_acknowledged))):
                 raise ProtocolError("Handoff acknowledgment does not match")
             self._polling = False
+            if receipted:
+                self._pairing = self._selection_change_pending = False
             if state == "saved":
+                self.save_receipt_pending = False
                 self.saved_acknowledged = True
                 self.status = "Matching account save acknowledged. Waiting for safe helper completion."
             elif state == "received":
                 self.status = "Browser received the preview, not a saved account receipt. Keep this review open."
             elif state == "saved_pending_browser_receipt":
-                self.status = "Account parts are saved; waiting for the browser's verified final receipt. Keep this review open."
+                self.save_receipt_pending = True
+                self.status = "Saving is being finalized. Finish in the browser before changing contacts."
             elif state == "expired":
                 self.handoff_id = self.pair_code = ""
                 self._clear_destination()
@@ -702,6 +746,13 @@ class Session:
             if event.get("transport") not in {"usb", "wifi"}:
                 raise ProtocolError("Invalid connection transport")
         elif kind == "error":
+            if event.get("code") == "bridge_unavailable" and self._pairing:
+                self._retired_handoff_id = self.handoff_id if self._polling else ""
+                self._pairing = self._polling = False
+                self.handoff_id = self.pair_code = ""
+                self._clear_destination()
+                self.status = "New pairing could not start. Your reviewed contacts remain; retry Connect without importing again."
+                return None
             self._failed = True
             self.needs_inspection = True
             self.phase = "error"

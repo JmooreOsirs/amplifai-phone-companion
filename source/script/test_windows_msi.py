@@ -44,7 +44,7 @@ class InstallerAuthoringTests(unittest.TestCase):
         _, records = checked_records(self.package, self.receipt)
         tree = author_xml(records, self.package)
         ns = {"w": NS}
-        self.assertEqual(VERSION, "1.0.15")
+        self.assertEqual(VERSION, "1.0.16")
         self.assertEqual(tree.find(".//w:Product", ns).attrib["Version"], VERSION)
         package = tree.find(".//w:Package", ns)
         self.assertEqual(package.attrib["InstallScope"], "perUser")

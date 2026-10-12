@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import threading
 import unittest
 from uuid import UUID
 
@@ -12,6 +13,36 @@ from test_bridge import fixture
 
 
 class SavedAcknowledgementTest(unittest.TestCase):
+    def test_local_repair_and_first_receipt_share_an_atomic_boundary(self):
+        bridge = BridgeServer(fixture(), {1}, port=0)
+        bridge.start()
+        outcome = []
+        entered = threading.Event()
+        try:
+            def repair() -> None:
+                entered.set()
+                outcome.append(bridge.close_for_repair())
+
+            with bridge.lock:
+                worker = threading.Thread(target=repair)
+                worker.start()
+                self.assertTrue(entered.wait(1))
+                bridge.acknowledged_saved = True
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(outcome, ["saved_pending_browser_receipt"])
+            self.assertFalse(bridge.closed)
+        finally:
+            bridge.close()
+
+        unsaved = BridgeServer(fixture(), {1}, port=0)
+        unsaved.start()
+        try:
+            self.assertIsNone(unsaved.close_for_repair())
+            self.assertTrue(unsaved.closed)
+        finally:
+            unsaved.close()
+
     def request(self, bridge, path, body=None, token=None, origin=None):
         connection = http.client.HTTPConnection("127.0.0.1", bridge.port, timeout=2)
         headers = {"Host": f"127.0.0.1:{bridge.port}", "Origin": origin or bridge.origin}
@@ -52,10 +83,14 @@ class SavedAcknowledgementTest(unittest.TestCase):
             for _ in range(2):
                 self.assertEqual(self.request(bridge, "/v1/acknowledge-save", body, token), (200, {"acknowledged": True}))
             self.assertEqual(bridge.handoff_state(), "saved_pending_browser_receipt")
+            self.assertEqual(bridge.close_for_repair(), "saved_pending_browser_receipt")
+            self.assertFalse(bridge.closed)
             self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", confirmation, "wrong")[0], 403)
             self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", {**confirmation, "received": False}, token)[0], 400)
             self.assertEqual(self.request(bridge, "/v1/confirm-ack-received", confirmation, token), (200, {"received": True}))
             self.assertEqual(bridge.handoff_state(), "saved")
+            self.assertEqual(bridge.close_for_repair(), "saved")
+            self.assertFalse(bridge.closed)
         finally:
             bridge.close()
 

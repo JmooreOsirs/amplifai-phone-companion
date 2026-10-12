@@ -385,9 +385,17 @@ class SessionTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             state.review([1])
         self.assertEqual(state.handoff_id, BINDING)
-        self.assertEqual(state.update_visible_selection([]), {"action": "revoke"})
+        with self.assertRaises(ProtocolError):
+            state.update_visible_selection([])
+        self.assertEqual(state.request_selection_change(), {"action": "revoke"})
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.selected_ids, {1})
+        state.handle({"kind": "state", "state": "pairing_revoked"})
         self.assertEqual(state.handoff_id, "")
         self.assertFalse(state.can_pair)
+        self.assertEqual(state.selected_ids, {1})
+        state.update_visible_selection([])
+        self.assertEqual(state.selected_ids, set())
 
     def test_stale_page_and_review_digest_cannot_grant_pairing(self):
         state = reviewed()
@@ -506,11 +514,16 @@ class SessionTests(unittest.TestCase):
     def test_late_saved_ack_for_revoked_selection_never_finishes(self):
         state = paired()
         state.poll()
-        self.assertEqual(state.invalidate_selection(), {"action": "revoke"})
+        self.assertEqual(state.request_selection_change(), {"action": "revoke"})
         state.handle({"kind": "handoff", "state": "saved", "handoffId": BINDING})
-        self.assertFalse(state.saved_acknowledged)
+        self.assertTrue(state.saved_acknowledged)
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.selected_ids, {1})
         with self.assertRaises(ProtocolError):
-            state.finish()
+            state.request_selection_change()
+        state.handle({"kind": "state", "state": "pairing_revoked"})
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.finish(), {"action": "finish", "handoffId": BINDING})
 
     def test_pairing_requires_exact_loopback_port_and_string_ascii_code(self):
         for changes in ({"port": 48752}, {"pairCode": 1234567890},
@@ -524,6 +537,89 @@ class SessionTests(unittest.TestCase):
                 with self.assertRaises(ProtocolError):
                     state.handle(packet)
                 self.assertFalse(state.handoff_id)
+
+    def test_active_handoff_requires_accepted_revoke_before_selection_changes(self):
+        state = paired()
+        self.assertFalse(state.can_select)
+        with self.assertRaises(ProtocolError):
+            state.update_visible_selection([])
+        self.assertEqual(state.request_selection_change(), {"action": "revoke"})
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.selected_ids, {1})
+        self.assertTrue(state.reviewed)
+        state.handle({"kind": "state", "state": "pairing_revoked"})
+        self.assertEqual(state.handoff_id, "")
+        self.assertEqual(state.selected_ids, {1})
+        self.assertFalse(state.reviewed)
+        self.assertTrue(state.can_select)
+
+    def test_first_save_receipt_refuses_selection_change_and_late_revoke(self):
+        state = paired()
+        self.assertEqual(state.request_selection_change(), {"action": "revoke"})
+        state.handle({"kind": "handoff", "state": "saved_pending_browser_receipt",
+                      "handoffId": BINDING})
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.selected_ids, {1})
+        self.assertTrue(state.reviewed)
+        self.assertFalse(state.can_select)
+        self.assertFalse(state.can_pair)
+        state.handle({"kind": "state", "state": "pairing_revoked"})
+        self.assertEqual(state.handoff_id, BINDING)
+        state.poll()
+        state.handle({"kind": "handoff", "state": "saved", "handoffId": BINDING})
+        self.assertEqual(state.finish(), {"action": "finish", "handoffId": BINDING})
+
+    def test_replacement_pair_keeps_old_binding_until_helper_accepts_new_one(self):
+        state = paired()
+        self.assertEqual(state.pair(), {"action": "pair"})
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.pair_code, "1234567890")
+        state.handle({"kind": "handoff", "state": "saved_pending_browser_receipt",
+                      "handoffId": BINDING})
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertFalse(state.can_pair)
+        self.assertTrue(state.reviewed)
+
+    def test_replacement_accepts_new_binding_and_ignores_old_poll(self):
+        state = paired()
+        state.poll()
+        self.assertEqual(state.pair(), {"action": "pair"})
+        replacement = "33333333-3333-4333-8333-333333333333"
+        state.handle({"kind": "pairing", "pairCode": "0987654321", "port": 48751,
+                      "expiresInSeconds": 300, "handoffId": replacement,
+                      "payloadSha256": "b" * 64})
+        self.assertEqual(state.handoff_id, replacement)
+        self.assertEqual(state.pair_code, "0987654321")
+        state.handle({"kind": "handoff", "state": "received", "handoffId": BINDING})
+        self.assertEqual(state.handoff_id, replacement)
+        self.assertFalse(state.saved_acknowledged)
+        self.assertEqual(state.selected_ids, {1})
+
+    def test_first_receipt_during_replacement_retains_old_binding(self):
+        state = paired()
+        state.poll()
+        state.pair()
+        state.handle({"kind": "handoff", "state": "saved_pending_browser_receipt",
+                      "handoffId": BINDING})
+        self.assertTrue(state.save_receipt_pending)
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertEqual(state.pair_code, "1234567890")
+        self.assertFalse(state.can_pair)
+        with self.assertRaises(ProtocolError):
+            state.request_selection_change()
+        state.poll()
+        state.handle({"kind": "handoff", "state": "saved", "handoffId": BINDING})
+        self.assertEqual(state.finish(), {"action": "finish", "handoffId": BINDING})
+
+    def test_replacement_helper_failure_keeps_review_but_clears_dead_pairing(self):
+        state = paired()
+        state.pair()
+        state.handle({"kind": "error", "code": "bridge_unavailable"})
+        self.assertEqual(state.phase, "reviewing")
+        self.assertEqual(state.handoff_id, "")
+        self.assertEqual(state.selected_ids, {1})
+        self.assertTrue(state.reviewed)
+        self.assertTrue(state.can_pair)
 
     def test_current_storage_marker_error_has_specific_no_phone_data_state(self):
         state = inspected()

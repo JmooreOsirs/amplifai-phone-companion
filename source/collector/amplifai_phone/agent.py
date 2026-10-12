@@ -335,7 +335,11 @@ def run_connect(
                 return 0
             if action == "revoke":
                 if bridge is not None:
-                    bridge.close()
+                    retained_state = bridge.close_for_repair()
+                    if retained_state is not None:
+                        _emit(sink, {"kind": "handoff", "state": retained_state,
+                                     "handoffId": bridge.handoff_id})
+                        continue
                     bridge = None
                 _emit(sink, {"kind": "state", "state": "pairing_revoked"})
                 continue
@@ -399,7 +403,11 @@ def run_connect(
                     _emit(sink, {"kind": "error", "code": "selection"})
                     continue
                 if bridge is not None:
-                    bridge.close()
+                    retained_state = bridge.close_for_repair()
+                    if retained_state is not None:
+                        _emit(sink, {"kind": "handoff", "state": retained_state,
+                                     "handoffId": bridge.handoff_id})
+                        continue
                     bridge = None
                 try:
                     bridge = BridgeServer(capture, selected_ids)
@@ -437,7 +445,11 @@ def run_connect(
                         raise ValueError("Invalid selection page")
                     if cursor == 0:
                         if bridge is not None:
-                            bridge.close()
+                            retained_state = bridge.close_for_repair()
+                            if retained_state is not None:
+                                _emit(sink, {"kind": "handoff", "state": retained_state,
+                                             "handoffId": bridge.handoff_id})
+                                continue
                             bridge = None
                         selected_ids = None
                     snapshot = capture.record_store.append_selection(review_id, cursor, ids, total)
@@ -476,7 +488,11 @@ def run_connect(
                     _emit(sink, {"kind": "error", "code": "selection"})
                     continue
             if bridge is not None:
-                bridge.close()
+                retained_state = bridge.close_for_repair()
+                if retained_state is not None:
+                    _emit(sink, {"kind": "handoff", "state": retained_state,
+                                 "handoffId": bridge.handoff_id})
+                    continue
                 bridge = None
             selected_ids = None
             try:

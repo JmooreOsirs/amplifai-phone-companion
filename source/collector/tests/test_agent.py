@@ -698,6 +698,7 @@ class AgentProtocolTest(unittest.TestCase):
         bridge.port = 48751
         bridge.handoff_id = "00000000-0000-4000-8000-000000000001"
         bridge.payload_sha256 = "a" * 64
+        bridge.close_for_repair.return_value = None
         with patch("amplifai_phone.agent.BridgeServer", return_value=bridge) as factory:
             self.assertEqual(run_connect(source, sink, fake_collector), 0)
         events = [json.loads(line) for line in sink.getvalue().splitlines()]
@@ -713,7 +714,109 @@ class AgentProtocolTest(unittest.TestCase):
         factory.assert_called_once()
         self.assertEqual(factory.call_args.args[1], {1})
         bridge.start.assert_called_once()
-        bridge.close.assert_called_once()
+        bridge.close_for_repair.assert_called_once()
+
+    def test_repair_refuses_to_replace_a_bridge_with_first_account_receipt(self) -> None:
+        async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+            return synthetic_capture()
+
+        bridge = MagicMock()
+        bridge.code, bridge.port = "1234567890", 48751
+        bridge.handoff_id, bridge.payload_sha256 = "00000000-0000-4000-8000-000000000001", "a" * 64
+        bridge.close_for_repair.return_value = "saved_pending_browser_receipt"
+        source = io.StringIO('{"action":"review","ids":[1]}\n{"action":"pair"}\n{"action":"pair"}\n{"action":"disconnect"}\n')
+        sink = io.StringIO()
+        with patch("amplifai_phone.agent.BridgeServer", return_value=bridge) as factory:
+            self.assertEqual(run_connect(source, sink, fake_collector), 0)
+        events = [json.loads(line) for line in sink.getvalue().splitlines()]
+        self.assertIn({"kind": "handoff", "state": "saved_pending_browser_receipt",
+                       "handoffId": bridge.handoff_id}, events)
+        factory.assert_called_once()
+        bridge.close_for_repair.assert_called_once()
+        bridge.close.assert_called_once()  # The explicit owner disconnect still closes the bridge.
+
+    def test_revoke_and_legacy_review_refuse_to_replace_a_receipted_bridge(self) -> None:
+        async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+            return synthetic_capture()
+
+        for state in ("saved_pending_browser_receipt", "saved"):
+            for command in ('{"action":"revoke"}', '{"action":"review","ids":[1]}'):
+                with self.subTest(state=state, command=command):
+                    bridge = MagicMock()
+                    bridge.code, bridge.port = "1234567890", 48751
+                    bridge.handoff_id, bridge.payload_sha256 = "00000000-0000-4000-8000-000000000001", "a" * 64
+                    bridge.close_for_repair.return_value = state
+                    source = io.StringIO(
+                        '{"action":"review","ids":[1]}\n{"action":"pair"}\n'
+                        + command + '\n{"action":"disconnect"}\n'
+                    )
+                    sink = io.StringIO()
+                    with patch("amplifai_phone.agent.BridgeServer", return_value=bridge) as factory:
+                        self.assertEqual(run_connect(source, sink, fake_collector), 0)
+                    events = [json.loads(line) for line in sink.getvalue().splitlines()]
+                    self.assertEqual([event["kind"] for event in events],
+                                     ["state", "capture", "review", "pairing", "handoff", "state"])
+                    self.assertEqual(events[4], {"kind": "handoff", "state": state,
+                                                 "handoffId": bridge.handoff_id})
+                    factory.assert_called_once()
+                    bridge.close_for_repair.assert_called_once()
+                    bridge.close.assert_called_once()  # Only explicit disconnect ends this bridge.
+
+        bridge = MagicMock()
+        bridge.code, bridge.port = "1234567890", 48751
+        bridge.handoff_id, bridge.payload_sha256 = "00000000-0000-4000-8000-000000000001", "a" * 64
+        bridge.close_for_repair.return_value = None
+        source = io.StringIO('{"action":"review","ids":[1]}\n{"action":"pair"}\n'
+                             '{"action":"revoke"}\n{"action":"disconnect"}\n')
+        sink = io.StringIO()
+        with patch("amplifai_phone.agent.BridgeServer", return_value=bridge):
+            self.assertEqual(run_connect(source, sink, fake_collector), 0)
+        events = [json.loads(line) for line in sink.getvalue().splitlines()]
+        self.assertEqual([event["state"] for event in events if event["kind"] == "state"],
+                         ["connecting", "pairing_revoked", "disconnected"])
+        bridge.close_for_repair.assert_called_once()
+        bridge.close.assert_not_called()  # A safe revoke already closed this mock bridge.
+
+    def test_paged_review_refuses_to_replace_a_receipted_bridge(self) -> None:
+        for state in ("saved_pending_browser_receipt", "saved"):
+            with self.subTest(state=state), tempfile.TemporaryDirectory(prefix="amplifai-review-race-") as temporary:
+                workspace = SessionWorkspace(Path(temporary) / "sessions")
+                directory = workspace.__enter__()
+                store = RecordStore(directory / "sanitized.sqlite3")
+                store.add("contacts", Contact(1, "Synthetic", ("+15551234567",), ()))
+
+                async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+                    return IPhoneCapture(SourceResult(1, store.collection("contacts"), 0),
+                                         SourceResult(0, store.collection("calls"), 0),
+                                         SourceResult(0, store.collection("messages"), 0),
+                                         "2026-09-23T00:00:00Z", "2026-03-23T00:00:00Z", (),
+                                         workspace, store)
+
+                bridge = MagicMock()
+                bridge.code, bridge.port = "1234567890", 48751
+                bridge.handoff_id, bridge.payload_sha256 = "00000000-0000-4000-8000-000000000001", "a" * 64
+                bridge.close_for_repair.return_value = state
+                commands = [
+                    {"action": "review-page", "reviewId": "00000000-0000-4000-8000-000000000001",
+                     "cursor": 0, "total": 1, "ids": [1]},
+                    {"action": "pair"},
+                    {"action": "review-page", "reviewId": "00000000-0000-4000-8000-000000000002",
+                     "cursor": 0, "total": 1, "ids": [1]},
+                    {"action": "disconnect"},
+                ]
+                source = io.StringIO("".join(json.dumps(command) + "\n" for command in commands))
+                sink = io.StringIO()
+                with patch("amplifai_phone.agent.BridgeServer", return_value=bridge) as factory:
+                    self.assertEqual(run_connect(source, sink, fake_collector), 0)
+                events = [json.loads(line) for line in sink.getvalue().splitlines()]
+                self.assertEqual([event["kind"] for event in events],
+                                 ["state", "capture", "review-page", "review", "pairing", "handoff", "state"])
+                self.assertEqual(events[5], {"kind": "handoff", "state": state,
+                                             "handoffId": bridge.handoff_id})
+                factory.assert_called_once()
+                bridge.close_for_repair.assert_called_once()
+                bridge.close.assert_called_once()
+                self.assertFalse(directory.exists())
 
     def test_saved_finish_requires_exact_current_run_and_explicit_ack(self) -> None:
         async def fake_collector(**_kwargs: object) -> IPhoneCapture:

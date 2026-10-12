@@ -158,6 +158,8 @@ class PhoneWindow:
         self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
         self.review_button = ttk.Button(outer, text="Review selected metadata", command=self.review)
         self.review_button.pack(anchor="w", pady=(8, 8))
+        self.change_selection_button = ttk.Button(outer, text="Change selected contacts", command=self.change_selection)
+        self.change_selection_button.pack(anchor="w", pady=(0, 8))
         self.label(outer, "After reviewing the exact selection, connect from your signed-in website account. Confirm the account and course here before preview transfer. Connect does not save; each source needs separate Save approval in the account.")
         ttk.Label(outer, textvariable=self.destination_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
         ttk.Label(outer, textvariable=self.pair_code, font=("Arial", 18, "bold"), foreground=LIME).pack(anchor="w")
@@ -321,8 +323,18 @@ class PhoneWindow:
             self.state.status = "Select contacts and wait for any pending response before reviewing again."
         self.refresh()
 
+    def change_selection(self) -> None:
+        if not self.state.can_change_selection:
+            return
+        if messagebox.askyesno("Change selected contacts?", "Close the current browser pairing and return to your selected contacts? The helper will refuse if account saving has started; your reviewed import stays open."):
+            try:
+                self.send(self.state.request_selection_change())
+            except ProtocolError:
+                self.state.status = "Finish the current account save before changing contacts."
+        self.refresh()
+
     def pair(self) -> None:
-        replacing = " This replaces the current browser pairing." if self.state.handoff_id else ""
+        replacing = " A successful new pairing replaces the current browser pairing." if self.state.handoff_id else ""
         if messagebox.askyesno("Connect the signed-in account?", "Create an exact-origin local pairing for " + WEBSITE_ORIGIN + "? Choose Connect on the signed-in account page, then confirm its server-verified destination here. Only the reviewed preview transfers. Each source requires separate account Save approval." + replacing):
             try:
                 self.send(self.state.pair())
@@ -335,6 +347,9 @@ class PhoneWindow:
             self.start("clear-residue")
 
     def stop(self) -> None:
+        if self.state._capture_received and not self.state.saved_acknowledged:
+            if not messagebox.askyesno("Discard local phone review?", "Request stop discards the local reviewed import after the helper exits. Account parts may already be saved, while their final browser receipt may still be pending. Keep this window open and finish in the browser if you want to complete that save. Stop anyway?"):
+                return
         self.send(self.state.request_stop())
         self.clear_password()
         self.helper.close_input()
@@ -374,6 +389,7 @@ class PhoneWindow:
         self.decline_button.configure(state="disabled" if state.running else "normal")
         self.contacts.configure(state="normal" if state.can_select and not state.selecting_all else "disabled")
         self.review_button.configure(state="normal" if state.can_review and state.selected_ids else "disabled")
+        self.change_selection_button.configure(state="normal" if state.can_change_selection else "disabled")
         self.search_entry.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None else "disabled")
         self.search_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None else "disabled")
         self.previous_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None and state.previous_contact_cursors else "disabled")
@@ -428,7 +444,7 @@ class PhoneWindow:
                                               f"{messages} matching messages. Check source coverage below before account Save.")
                     if event.get("kind") == "handoff" and self.state.saved_acknowledged:
                         self.send(self.state.finish())
-                    if event.get("kind") == "error":
+                    if event.get("kind") == "error" and self.state.phase == "error":
                         self.cooperative_failure()
             self.send(self.state.poll())
         except (OSError, RuntimeError, ValueError):

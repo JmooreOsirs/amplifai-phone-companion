@@ -1,6 +1,6 @@
 {
   "status": "private-unsigned-per-user-installer-candidate-not-supported-download",
-  "baseRelease": "current shared local iPhone collector including rc19 extraction; published Mac rc19 and website Android rc9 are separate apps",
+  "baseRelease": "current shared local iPhone collector including rc20 ACK-safe handoff and rc19 extraction; published Mac rc20 and website Android rc9 are separate apps",
   "windowEntrypoint": "collector/windows/app.py",
   "pythonModules": [
     "collector/windows/session.py",

@@ -747,3 +747,24 @@ class BridgeServer:
         self._shutdown()
         if self.transfer is not None:
             self.transfer.close()
+
+    def close_for_repair(self) -> str | None:
+        """Replace only a handoff with no account-save receipt.
+
+        The browser writes the first and final ACK under ``lock``.  Check and
+        retire the old bridge under that same lock so an ACK cannot land in the
+        gap between a status check and a local Reconnect.
+        """
+        with self.lifecycle_lock, self.lock:
+            if self.browser_confirmed_saved:
+                return "saved"
+            if self.acknowledged_saved:
+                return "saved_pending_browser_receipt"
+            was_closed = self.closed
+            self.closed = True
+        if not was_closed:
+            self.timer.cancel()
+            self._shutdown()
+            if self.transfer is not None:
+                self.transfer.close()
+        return None
