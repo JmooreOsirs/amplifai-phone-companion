@@ -6,6 +6,8 @@ throughput is not a USB/phone-speed benchmark. No sparse throughput fixtures.
 
 from __future__ import annotations
 
+from contextlib import closing
+
 import argparse
 import asyncio
 import hashlib
@@ -84,7 +86,7 @@ def fixtures(root: Path) -> tuple[list[tuple[str, str, Path]], sqlite3.Connectio
     )
     # Dense SQLite pages with actual writes. A fixed synthetic block is not private data.
     payload = bytes(range(256)) * (1024 * 1024 // 256)
-    with sqlite3.connect(contacts) as db:
+    with closing(sqlite3.connect(contacts)) as db, db:
         db.executescript(
             "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-2048;"
             "CREATE TABLE ABPerson (First TEXT, Last TEXT);"
@@ -97,7 +99,7 @@ def fixtures(root: Path) -> tuple[list[tuple[str, str, Path]], sqlite3.Connectio
             "INSERT INTO synthetic_ignored_content VALUES (?)",
             ((payload,) for _ in range(1025)),
         )
-    with sqlite3.connect(calls) as db:
+    with closing(sqlite3.connect(calls)) as db, db:
         db.executescript(
             "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER);"
             "INSERT INTO ZCALLRECORD VALUES (800000000, 65, '+12025550101', 1, 1);"
@@ -122,7 +124,7 @@ def fixtures(root: Path) -> tuple[list[tuple[str, str, Path]], sqlite3.Connectio
     )
     manifest = root / "Manifest.db"
     files = []
-    with sqlite3.connect(manifest) as db:
+    with closing(sqlite3.connect(manifest)) as db, db:
         db.executescript(
             "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-2048;"
             "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);"
@@ -165,7 +167,7 @@ def fixtures(root: Path) -> tuple[list[tuple[str, str, Path]], sqlite3.Connectio
     assert contacts.stat().st_size > 1024**3
     assert manifest.stat().st_size > 128 * 1024**2
     # Verify the message rows truly are WAL-only in the source main database.
-    with sqlite3.connect(messages.as_uri() + "?immutable=1", uri=True) as immutable:
+    with closing(sqlite3.connect(messages.as_uri() + "?immutable=1", uri=True)) as immutable, immutable:
         assert immutable.execute("SELECT COUNT(*) FROM message").fetchone()[0] == 0
     return files, sms
 

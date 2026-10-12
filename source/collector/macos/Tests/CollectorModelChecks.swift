@@ -22,7 +22,7 @@ struct CollectorModelChecks {
         do {
             try runChecks()
             try await approvedLaunchUsesExactRun()
-            print("16 macOS recovery and local-approval checks passed")
+            print("20 macOS recovery, progress, approval and update-deferral checks passed")
         } catch {
             FileHandle.standardError.write(Data("macOS recovery check failed: \(error)\n".utf8))
             Darwin.exit(1)
@@ -32,6 +32,7 @@ struct CollectorModelChecks {
     private static func runChecks() throws {
         try uncheckedCollectionCannotStart()
         try explicitApprovalBindsFreshRun()
+        try checkedBackupSettingGatesCallCoverageChoice()
         try uncheckedAndStaleApprovalFailClosed()
         try declineStartsFreshUncheckedRun()
         try directLaunchRequiresApproval()
@@ -39,6 +40,7 @@ struct CollectorModelChecks {
         try terminalEventsInvalidateApproval()
         try residueInspectionDoesNotRequireConsent()
         try storageReasons()
+        try encryptionPreflightReasons()
         try timeoutReasons()
         try deviceFailureIsActionableWithoutPrivateDetails()
         try automaticDiagnosticUsesOnlySafeCode()
@@ -46,6 +48,65 @@ struct CollectorModelChecks {
         try emptyResidueClearsGate()
         try inspectedResidueBlocksConnection()
         try cancellationClearsPrivateReview()
+        try backupEstimateNeedsStableMeasuredProgress()
+        try activityTimestampNeedsRealDataProgress()
+        try updaterCannotReplaceActiveOrUnsavedWork()
+    }
+
+    private static func updaterCannotReplaceActiveOrUnsavedWork() throws {
+        let model = CollectorModel()
+        try require(model.canInstallUpdate, "An untouched idle app may install a verified update")
+        for phase: CollectorModel.Phase in [.connecting, .transferring, .passwordRequired,
+                                            .processing, .selecting, .reviewing, .completing, .cancelling] {
+            model.phase = phase
+            try require(!model.canInstallUpdate, "An active local or browser phase cannot install an update")
+        }
+        model.phase = .error
+        model.receive(try event(#"{"kind":"capture","contacts":[{"id":1,"name":"Ada","phoneCount":1,"phoneEnds":["4567"]}],"totalContacts":1,"nextCursor":null,"availableCalls":0,"availableMessages":0}"#))
+        model.phase = .error
+        try require(model.hasUnsavedReview && !model.canInstallUpdate,
+                    "An error must preserve the unsaved review before allowing replacement")
+        model.phase = .completed
+        try require(!model.canInstallUpdate,
+                    "A completed phase without a bound saved ACK cannot permit replacement")
+        model.disconnect()
+        try require(model.canInstallUpdate,
+                    "After explicit discard and cleanup, a settled app may install")
+    }
+
+    private static func backupEstimateNeedsStableMeasuredProgress() throws {
+        let model = CollectorModel()
+        let now = Date()
+        model.observeBackupProgress(20, at: now.addingTimeInterval(-180))
+        model.observeBackupProgress(25, at: now.addingTimeInterval(-90))
+        try require(model.backupRemainingEstimate(at: now) == nil, "Two observed samples cannot create an ETA")
+        model.receive(try event(#"{"kind":"progress","value":30}"#))
+        let observedAt = Date()
+        guard let range = model.backupRemainingEstimate(at: observedAt) else {
+            throw RecoveryCheckError.failed("Three stable, spaced iPhone samples should qualify a bounded backup-only estimate")
+        }
+        try require(range.lowerBound > 0 && range.upperBound > range.lowerBound,
+                    "A measured backup estimate must have a positive, visible range")
+        try require(model.backupRemainingEstimate(at: observedAt.addingTimeInterval(61)) == nil,
+                    "Stale backup percentage must withdraw the estimate")
+        model.receive(try event(#"{"kind":"progress","value":10}"#))
+        try require(model.backupRemainingEstimate(at: Date()) == nil,
+                    "A regressed device percentage must withdraw the estimate")
+    }
+
+    private static func activityTimestampNeedsRealDataProgress() throws {
+        let model = CollectorModel()
+        model.phase = .transferring
+        try require(model.lastCollectionActivityAt == nil, "No file bytes cannot look like observed data progress")
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":512,"discardedBytes":512,"filesReceived":1,"elapsedSeconds":2,"bytesPerSecond":512}"#))
+        guard let backupActivity = model.lastCollectionActivityAt else {
+            throw RecoveryCheckError.failed("An increasing file transfer should record real activity")
+        }
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":512,"discardedBytes":512,"filesReceived":1,"elapsedSeconds":3,"bytesPerSecond":341}"#))
+        try require(model.lastCollectionActivityAt == backupActivity, "Repeated counters cannot refresh last data activity")
+        model.receive(try event(#"{"kind":"transfer","stage":"processing","processedBytes":4096}"#))
+        try require(model.lastParsingActivityAt != nil && model.lastCollectionActivityAt == model.lastParsingActivityAt,
+                    "Local parsing must report its own measured activity")
     }
 
     private static func uncheckedCollectionCannotStart() throws {
@@ -63,29 +124,71 @@ struct CollectorModelChecks {
         let run = model.collectionApprovalRunID
         let before = Date()
         try require(model.canPrepareCollection && !model.canConnect, "A fresh app must be ready to ask, not already approved")
-        try require(model.approveLocalCollection(for: run, checked: true), "Explicit checked agreement should approve only the prepared run")
+        try require(!model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: nil), "Collection cannot start without an explicit call-history choice")
+        try require(model.localCollectionApproval == nil && !model.canConnect, "A missing call-history choice cannot create a collection receipt")
+        try observeBackupSetting(model, encrypted: true)
+        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .confirmedEncryptedBackup), "Explicit checked agreement and call-history choice should approve only the prepared run")
         guard let receipt = model.localCollectionApproval else { throw RecoveryCheckError.failed("Explicit agreement needs a local receipt") }
         try require(receipt.runID == run && receipt.disclosureVersion == CollectorModel.collectionDisclosureVersion, "Approval must bind the actual current run and disclosure")
         try require(receipt.approvedAt >= before && receipt.approvedAt <= Date(), "Approval timestamp must be operator-action time")
         try require(receipt.scopes == ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"], "Local approval scopes must describe collection and its bounded automatic failure report")
+        try require(receipt.callHistoryPreparation == .confirmedEncryptedBackup, "The current owner call-history choice must be bound to collection approval")
         try require(model.canConnect && !model.helperRunning && model.collectionStartedAt == nil, "Agree unlocks Connect; it must not collect automatically")
         try require(model.pairCode.isEmpty && !model.handoffAcknowledged, "Local collection approval cannot approve browser transfer or account save")
+    }
+
+    private static func observeBackupSetting(_ model: CollectorModel, encrypted: Bool) throws {
+        try require(model.beginBackupEncryptionStatusCheck(), "A fresh owner action must begin the read-only setting check")
+        model.receive(try event("{\"kind\":\"backup-encryption-status\",\"backupEncrypted\":\(encrypted)}"))
+    }
+
+    private static func checkedBackupSettingGatesCallCoverageChoice() throws {
+        let model = CollectorModel()
+        for invalid in ["0", "1", "\"true\""] {
+            try require((try? event("{\"kind\":\"backup-encryption-status\",\"backupEncrypted\":\(invalid)}")) == nil,
+                        "Numeric and string values cannot bridge into a literal JSON backup-setting Bool")
+        }
+        let firstRun = model.collectionApprovalRunID
+        try require(!model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .confirmedEncryptedBackup),
+                    "Owner attestation alone cannot substitute for the read-only setting check")
+        try require(model.beginBackupEncryptionStatusCheck(), "A current precollection check should start")
+        try require(!model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "A pending check cannot be treated as known coverage")
+        model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#))
+        try require(model.backupEncryptionStatus == .unencrypted, "Literal false must be shown as encryption off")
+        try require(!model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .confirmedEncryptedBackup),
+                    "A false phone setting cannot authorize encrypted-call collection")
+        try require(model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "Owner may explicitly continue with unconfirmed Calls coverage")
+        model.declineLocalCollection()
+        try require(model.backupEncryptionStatus == .notChecked, "Back must invalidate the old phone reading")
+        try require(!model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true,
+                                                 callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "The next run cannot reuse the previous phone setting")
+        try require(model.beginBackupEncryptionStatusCheck(), "The new run must recheck")
+        model.receive(try event(#"{"kind":"error","code":"backup_encryption_unknown"}"#))
+        try require(model.backupEncryptionStatus == .unknown && model.backupEncryptionCheckCode == "backup_encryption_unknown",
+                    "An unreadable setting must remain unknown, not false or approved")
+        try require(!model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true,
+                                                 callHistoryPreparation: .confirmedEncryptedBackup),
+                    "Unknown cannot authorize expected encrypted Calls")
     }
 
     private static func uncheckedAndStaleApprovalFailClosed() throws {
         let model = CollectorModel()
         let oldRun = model.collectionApprovalRunID
-        try require(!model.approveLocalCollection(for: oldRun, checked: false), "Unchecked approval cannot create a receipt")
+        try require(!model.approveLocalCollection(for: oldRun, checked: false, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Unchecked approval cannot create a receipt")
         try require(model.localCollectionApproval == nil && !model.canConnect, "Unchecked approval cannot unlock collection")
-        try require(!model.approveLocalCollection(for: oldRun, checked: true), "An invalidated run cannot receive late agreement")
-        try require(!model.approveLocalCollection(for: UUID(), checked: true), "An unrelated run cannot receive agreement")
+        try require(!model.approveLocalCollection(for: oldRun, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "An invalidated run cannot receive late agreement")
+        try require(!model.approveLocalCollection(for: UUID(), checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "An unrelated run cannot receive agreement")
         try require(model.localCollectionApproval == nil && !model.helperRunning, "Stale agreement must not launch or synthesize approval")
     }
 
     private static func declineStartsFreshUncheckedRun() throws {
         let model = CollectorModel()
         let run = model.collectionApprovalRunID
-        try require(model.approveLocalCollection(for: run, checked: true), "Fixture agreement must be explicit")
+        try observeBackupSetting(model, encrypted: false)
+        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
         model.declineLocalCollection()
         try require(model.collectionApprovalRunID != run && model.localCollectionApproval == nil && !model.canConnect, "Decline or Back must invalidate the old agreement")
         model.connect()
@@ -103,28 +206,32 @@ struct CollectorModelChecks {
     private static func storageRecoveryInvalidatesApproval() throws {
         let model = CollectorModel()
         let run = model.collectionApprovalRunID
-        try require(model.approveLocalCollection(for: run, checked: true), "Fixture agreement must be explicit")
+        try observeBackupSetting(model, encrypted: false)
+        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
         model.receive(try event(#"{"kind":"error","code":"workspace_cleanup","cleanupRequired":true}"#))
         try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run, "Cleanup failure must invalidate pending approval")
         model.receive(try event(#"{"kind":"residue","sessions":[]}"#))
         try require(model.canPrepareCollection && !model.canConnect, "Successful inspection cannot restore an old approval")
-        try require(!model.approveLocalCollection(for: run, checked: true), "The pre-recovery receipt cannot be reused")
+        try require(!model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "The pre-recovery receipt cannot be reused")
     }
 
     private static func terminalEventsInvalidateApproval() throws {
         for state in ["cancelled", "disconnected"] {
             let model = CollectorModel()
             let run = model.collectionApprovalRunID
-            try require(model.approveLocalCollection(for: run, checked: true), "Fixture agreement must be explicit")
+            try observeBackupSetting(model, encrypted: false)
+            try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
             model.receive(try event(#"{"kind":"state","state":"\#(state)"}"#))
             try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run && !model.canConnect, "Terminal helper state cannot retain local approval")
         }
         let model = CollectorModel()
         let run = model.collectionApprovalRunID
-        try require(model.approveLocalCollection(for: run, checked: true), "Fixture agreement must be explicit")
+        try observeBackupSetting(model, encrypted: false)
+        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
         model.finished(mode: "connect", code: 1)
         try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run && !model.canConnect, "Helper completion cannot reuse pending approval")
-        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true), "Retry needs a new explicit agreement")
+        try observeBackupSetting(model, encrypted: false)
+        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Retry needs a new explicit agreement")
         model.disconnect()
         try require(model.localCollectionApproval == nil && !model.canConnect, "Explicit cancellation or restart must start unchecked")
     }
@@ -148,13 +255,81 @@ struct CollectorModelChecks {
         try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: fixture) }
         let helper = fixture.appendingPathComponent("amplifai-agent")
-        let source = "#!/bin/sh\nif [ \"$1\" = \"connect\" ]; then\n IFS= read -r command\nelse\n printf '%s\\n' '{\"kind\":\"residue\",\"sessions\":[]}'\nfi\n"
+        let source = "#!/bin/sh\nif [ \"$1\" = \"connect\" ]; then\n IFS= read -r command\nelif [ \"$1\" = \"backup-encryption-status\" ]; then\n /bin/sleep 0.2\n printf '%s\\n' '{\"kind\":\"backup-encryption-status\",\"backupEncrypted\":true}'\nelse\n printf '%s\\n' '{\"kind\":\"residue\",\"sessions\":[]}'\nfi\n"
         try Data(source.utf8).write(to: helper, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
 
+        let settingModel = CollectorModel()
+        settingModel.checkBackupEncryptionStatus()
+        guard let firstCheck = settingModel.operationID else {
+            throw RecoveryCheckError.failed("The read-only setting check must launch a distinct owned helper")
+        }
+        let firstDeadline = Date().addingTimeInterval(3)
+        while settingModel.helperRunning && Date() < firstDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try require(!settingModel.helperRunning && settingModel.backupEncryptionStatus == .encrypted,
+                    "A clean literal-bool check may show On only after helper exit")
+        settingModel.checkBackupEncryptionStatus()
+        guard let secondCheck = settingModel.operationID else {
+            throw RecoveryCheckError.failed("Recheck must launch another owned helper")
+        }
+        try require(secondCheck != firstCheck, "Recheck cannot reuse the consent run as its process callback token")
+        settingModel.handleHelperOutput(
+            Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8) + Data([10]),
+            operation: firstCheck, mode: "backup-encryption-status"
+        )
+        settingModel.handleHelperTermination(1, operation: firstCheck, mode: "backup-encryption-status")
+        try require(settingModel.operationID == secondCheck && settingModel.helperRunning &&
+                    settingModel.backupEncryptionStatus == .checking,
+                    "Old output and old termination must not settle or tear down the new check")
+        let secondDeadline = Date().addingTimeInterval(3)
+        while settingModel.helperRunning && Date() < secondDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try require(settingModel.backupEncryptionStatus == .encrypted,
+                    "Only the current clean helper result may qualify an encrypted choice")
+
+        let abnormal = CollectorModel()
+        try require(abnormal.beginBackupEncryptionStatusCheck(), "Synthetic abnormal check must start")
+        abnormal.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
+        abnormal.finished(mode: "backup-encryption-status", code: 1)
+        try require(abnormal.backupEncryptionStatus == .unknown && !abnormal.canConnect,
+                    "A status frame followed by abnormal helper exit cannot qualify Calls")
+
+        let failedCheck = CollectorModel()
+        try require(failedCheck.beginBackupEncryptionStatusCheck(), "Synthetic check failure must start")
+        failedCheck.receive(try event(#"{"kind":"error","code":"workspace_low_space"}"#))
+        failedCheck.finished(mode: "backup-encryption-status", code: 1)
+        try require(failedCheck.backupEncryptionStatus == .unknown &&
+                    failedCheck.backupEncryptionCheckCode == "workspace_low_space" &&
+                    !failedCheck.canConnect,
+                    "A bounded error frame must survive its normal nonzero helper exit")
+
+        let cancelledCheck = CollectorModel()
+        cancelledCheck.checkBackupEncryptionStatus()
+        guard let cancelledID = cancelledCheck.operationID else {
+            throw RecoveryCheckError.failed("Synthetic cancellation requires a live read-only helper")
+        }
+        try require(cancelledCheck.backupSettingCheckInProgress,
+                    "A running setting check must remain visible and cancellable")
+        cancelledCheck.cancelBackupEncryptionStatusCheck()
+        let cancelDeadline = Date().addingTimeInterval(3)
+        while cancelledCheck.helperRunning && Date() < cancelDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        cancelledCheck.handleHelperOutput(
+            Data(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#.utf8) + Data([10]),
+            operation: cancelledID, mode: "backup-encryption-status"
+        )
+        try require(!cancelledCheck.helperRunning && cancelledCheck.phase == .idle &&
+                    !cancelledCheck.canConnect && cancelledCheck.canPrepareCollection,
+                    "Cancelling the read-only check must settle idle after residue inspection, not retain stale On")
+
         let model = CollectorModel()
         let run = model.collectionApprovalRunID
-        try require(model.approveLocalCollection(for: run, checked: true), "Synthetic helper launch requires actual explicit approval")
+        try observeBackupSetting(model, encrypted: false)
+        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Synthetic helper launch requires actual explicit approval")
         model.connect()
         try require(model.helperRunning && model.operationID == run, "The actual Process launch must use the approved run UUID")
         try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run, "Launching must consume, not recycle, the receipt")
@@ -172,6 +347,8 @@ struct CollectorModelChecks {
         let codes = [
             "workspace_low_space", "workspace_size_limit",
             "workspace_unsafe", "workspace_unavailable", "source_capacity_limit",
+            "backup_control_frame_limit", "backup_control_metadata_limit",
+            "backup_control_path_limit", "contacts_capacity_limit", "source_read_capacity_limit",
         ]
         let messages = codes.map { CollectorModel.message(for: $0) }
         try require(Set(messages).count == codes.count, "Storage failures need distinct recovery messages")
@@ -186,6 +363,17 @@ struct CollectorModelChecks {
             model.receive(try event(#"{"kind":"error","code":"\#(code)"}"#))
             try require(model.phase == .error, "Storage event must enter its error state")
             try require(model.errorMessage == CollectorModel.message(for: code), "Storage event lost its recovery reason")
+        }
+    }
+
+    private static func encryptionPreflightReasons() throws {
+        for code in ["backup_encryption_disabled", "backup_encryption_unknown", "backup_encryption_changed"] {
+            let model = CollectorModel()
+            model.receive(try event("{\"kind\":\"error\",\"code\":\"\(code)\",\"stage\":\"connecting\"}"))
+            try require(model.errorMessage == CollectorModel.message(for: code), "The preflight reason must remain specific in local review")
+            try require(!model.errorMessage.contains("cause was not classified"), "Encryption preflight must not fall through to a generic error")
+            try require(model.safeSupportCode.contains("|\(code)|"), "The safe diagnostic must retain the exact preflight reason")
+            try require(!model.recoverySteps.isEmpty, "The owner needs a next step after a stopped preflight")
         }
     }
 
@@ -214,7 +402,7 @@ struct CollectorModelChecks {
         try require(model.failureContext.contains("1.0 KiB") && model.failureContext.contains("partial"), "Error view must retain last observed transfer and clarify no metadata save")
         try require(!model.failureContext.contains("phone owner"), "No private device reason may be rendered")
         let fields = model.safeSupportCode.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26100806", "Support code must declare its bounded schema and exact build")
+        try require(fields.count == 9 && fields[0] == "A1" && fields[1] == "26101223", "Support code must declare its bounded schema and exact build")
         try require(fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil, "A fresh opaque report reference is required before browser pairing")
         try require(fields[3...8].elementsEqual(["backup", "device_backup_failed", "1800", "1024", "0", "205"]), "Pre-pair failure report must preserve safe first code, stage, elapsed, bytes and device status")
         try require(!model.safeSupportCode.contains("phone owner"), "Support code cannot include private phone text")
@@ -240,7 +428,7 @@ struct CollectorModelChecks {
         try require(parsed == ["code": code] && code.contains("|backup_host_space|"), "Only the safe support code may leave the app")
         try require(SupportDiagnosticReporter.request(for: code + "|phone owner@example.com") == nil, "Extra private fields must be rejected locally")
         try require(SupportDiagnosticReporter.request(for: code.replacingOccurrences(of: "backup_host_space", with: "owner_private_error")) == nil, "Raw helper reason must never be sent")
-        for category in ["backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "contacts_schema"] {
+        for category in ["backup_control_invalid", "selected_payload_missing", "selected_payload_invalid", "selected_payload_size", "selected_payload_identity", "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity", "contacts_schema", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit", "contacts_capacity_limit", "source_read_capacity_limit"] {
             let candidate = code.replacingOccurrences(of: "backup_host_space", with: category)
             try require(SupportDiagnosticReporter.request(for: candidate) != nil, "Specific processing failures must retain their safe diagnostic category")
             let processing = CollectorModel()
@@ -261,6 +449,9 @@ struct CollectorModelChecks {
         try require(!model.canPrepareCollection, "An uninspected cleanup failure must block new approval")
         try require(model.errorMessage.hasPrefix(CollectorModel.message(for: "workspace_low_space")), "Cleanup failure must preserve the primary storage reason")
         try require(model.errorMessage.contains("Temporary phone data may remain. Check temporary data before reconnecting."), "Cleanup failure must explain the required temporary-data recovery")
+        try require(model.workspaceSpaceStatus?.contains("Application Support volume") == true &&
+                    model.workspaceSpaceStatus?.contains("further 2 GiB reserve") == true,
+                    "A storage failure must explain the current Mac volume measurement and preserve the reserve")
     }
 
     private static func emptyResidueClearsGate() throws {
@@ -272,7 +463,8 @@ struct CollectorModelChecks {
         try require(!model.needsStorageReview, "An empty inspection receipt must clear the storage review gate")
         try require(model.residues.isEmpty, "Empty inspection must contain no residue")
         try require(model.canPrepareCollection && !model.canConnect, "An empty verified inspection permits a fresh unchecked retry")
-        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true) && model.canConnect, "Retry after inspection requires explicit fresh approval")
+        try observeBackupSetting(model, encrypted: false)
+        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage) && model.canConnect, "Retry after inspection requires explicit fresh approval")
     }
 
     private static func inspectedResidueBlocksConnection() throws {

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import hashlib
+import json
+import os
 import sqlite3
 import tempfile
+import tracemalloc
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 from amplifai_phone.__main__ import review_capture
 from amplifai_phone.ios_backup import DATABASES, _parse_entries
+from amplifai_phone.paged_transfer import PagedTransfer
 from amplifai_phone.metadata import (
     RETAINED_HISTORY_START,
     Contact,
@@ -23,6 +30,8 @@ from amplifai_phone.metadata import (
     read_messages,
     select_people,
 )
+from amplifai_phone.record_store import RecordStore
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 
 def cocoa(iso: str) -> int:
@@ -39,7 +48,7 @@ class MetadataTest(unittest.TestCase):
 
     def make_db(self, name: str, statements: list[str]) -> Path:
         path = self.root / name
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             for statement in statements:
                 db.execute(statement)
         return path
@@ -51,9 +60,115 @@ class MetadataTest(unittest.TestCase):
                 "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)"
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.executemany("INSERT INTO ZCALLRECORD VALUES (?, ?, ?, ?, ?)", rows)
         return path
+
+    def test_named_contact_primary_key_preserves_review_identity_and_phone_owner(self) -> None:
+        path = self.make_db("named-contact-key.db", [
+            "CREATE TABLE ABPerson (contact_key INTEGER PRIMARY KEY, First TEXT, Last TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+            "INSERT INTO ABPerson VALUES (7, 'Fictional', 'Seven')",
+            "INSERT INTO ABPerson VALUES (73, 'Fictional', 'Seventy Three')",
+            "INSERT INTO ABMultiValue VALUES (7, 3, '+12025550123')",
+            "INSERT INTO ABMultiValue VALUES (73, 3, '+12025550124')",
+        ])
+        result = read_contacts(path)
+        self.assertEqual((result.rows_seen, result.excluded), (2, 0))
+        self.assertEqual(
+            [(item.source_id, item.phones) for item in result.records],
+            [(7, ("+12025550123",)), (73, ("+12025550124",))],
+        )
+        self.assertEqual([item.source_id for item in select_people(result, {7})], [7])
+
+    def test_named_call_primary_key_preserves_selected_incoming_outgoing(self) -> None:
+        path = self.make_db("named-call-key.db", [
+            "CREATE TABLE ZCALLRECORD (Z_PK INTEGER PRIMARY KEY, ZDATE REAL, ZDURATION REAL, "
+            "ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)",
+            "INSERT INTO ZCALLRECORD VALUES (7, 800000000, 60, '+12025550123', 1, 1)",
+            "INSERT INTO ZCALLRECORD VALUES (73, 800000100, 30, '+12025550124', 0, 1)",
+        ])
+        calls = read_calls(path, self.since)
+        self.assertEqual((calls.rows_seen, calls.excluded), (2, 0))
+        self.assertEqual(
+            [(item.source_id, item.direction) for item in calls.records],
+            [(7, "outgoing"), (73, "incoming")],
+        )
+        selected = Contact(7, "Fictional Seven", ("+12025550123",), ())
+        self.assertEqual(
+            [item.source_id for item in interactions_for_contacts((selected,), (calls,))],
+            [7],
+        )
+
+    def test_shadowed_noninteger_row_identity_is_not_imported(self) -> None:
+        contacts = self.make_db("shadowed-contact-rowid.db", [
+            "CREATE TABLE ABPerson (ROWID TEXT PRIMARY KEY, First TEXT, Last TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+            "INSERT INTO ABPerson VALUES ('fictional', 'Fictional', 'Person')",
+        ])
+        calls = self.make_db("shadowed-call-rowid.db", [
+            "CREATE TABLE ZCALLRECORD (ROWID TEXT PRIMARY KEY, ZDATE REAL, ZDURATION REAL, "
+            "ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)",
+            "INSERT INTO ZCALLRECORD VALUES ('fictional', 800000000, 60, '+12025550123', 1, 1)",
+        ])
+        with self.assertRaises(UnsupportedSchema):
+            read_contacts(contacts)
+        with self.assertRaises(UnsupportedSchema):
+            read_calls(calls, self.since)
+
+    def test_disk_backed_reader_crosses_legacy_row_cap_without_private_content(self) -> None:
+        path = self.make_db("paged-contacts.db", [
+            "CREATE TABLE ABPerson (First TEXT, Last TEXT, Note TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+        ])
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executemany("INSERT INTO ABPerson VALUES (?, ?, ?)",
+                           [(f"Person {index}", "Example", "SECRET-NOTE") for index in range(5)])
+            db.executemany("INSERT INTO ABMultiValue VALUES (?, 3, ?)",
+                           [(index, f"+1202555010{index}") for index in range(1, 6)])
+        with patch("amplifai_phone.metadata.MAX_ROWS_PER_SOURCE", 2):
+            with self.assertRaises(SourceCapacityLimit):
+                read_contacts(path)
+            store = RecordStore(self.root / "sanitized.sqlite3")
+            try:
+                result = read_contacts(path, store=store)
+                self.assertEqual((result.rows_seen, len(result.records)), (5, 5))
+                self.assertEqual([item.source_id for item in select_people(result, {1, 5})], [1, 5])
+                self.assertEqual([item.source_id for _, item in result.records.page("person 4", 0, 2)], [5])
+                self.assertNotIn(b"SECRET-NOTE", (self.root / "sanitized.sqlite3").read_bytes())
+            finally:
+                store.close()
+
+    def test_disk_backed_contact_name_is_not_silently_clipped(self) -> None:
+        full_name = "Long " + "N" * 320
+        path = self.make_db("long-contact.db", [
+            "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
+            "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+        ])
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("INSERT INTO ABPerson VALUES (?, NULL)", (full_name,))
+            db.execute("INSERT INTO ABMultiValue VALUES (1, 3, '+15551234567')")
+        store = RecordStore(self.root / "long-contact-sanitized.sqlite3")
+        try:
+            result = read_contacts(path, store=store)
+            self.assertEqual((result.rows_seen, len(result.records)), (1, 1))
+            self.assertEqual(result.records[0].name, full_name)
+        finally:
+            store.close()
+
+    def test_disk_backed_interactions_match_only_selected_phones(self) -> None:
+        path = self.make_calls("paged-calls.db", [
+            (cocoa("2026-09-01T12:00:00+00:00"), 30, f"+1202555010{index}", 1, 1)
+            for index in range(1, 6)
+        ])
+        with patch("amplifai_phone.metadata.MAX_ROWS_PER_SOURCE", 2):
+            store = RecordStore(self.root / "interactions.sqlite3")
+            try:
+                calls = read_calls(path, self.since, store=store)
+                self.assertEqual((calls.rows_seen, len(calls.records)), (5, 5))
+                self.assertEqual([item.source_id for item in calls.records.matched_interactions({"+12025550101", "+12025550105"})], [1, 5])
+            finally:
+                store.close()
 
     def test_nonfinite_durations_preserve_good_calls_before_and_after(self) -> None:
         when = cocoa("2026-09-01T12:00:00+00:00")
@@ -115,7 +230,7 @@ class MetadataTest(unittest.TestCase):
                 for duration in (10, float("nan"), 20)
             ],
         )
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             value, storage_type = db.execute(
                 "SELECT ZDURATION, typeof(ZDURATION) FROM ZCALLRECORD WHERE ROWID = ?",
                 (2,),
@@ -174,7 +289,9 @@ class MetadataTest(unittest.TestCase):
         self.assertEqual(normalize_phone("020 7946 0958"), None)
         self.assertEqual(normalize_phone("person5551234567@example.test"), None)
 
-    def test_contact_value_contract_cannot_silently_drop_the_twenty_first_value(self) -> None:
+    def test_contact_values_keep_every_normalized_value_past_old_count_bound(
+        self,
+    ) -> None:
         for property_id, values in (
             (3, [f"+1202555{number:04d}" for number in range(21)]),
             (4, [f"address{number}@example.test" for number in range(21)]),
@@ -188,23 +305,95 @@ class MetadataTest(unittest.TestCase):
                         "INSERT INTO ABPerson VALUES ('Many', 'Values')",
                     ],
                 )
-                with sqlite3.connect(path) as db:
+                with closing(sqlite3.connect(path)) as db, db:
                     db.executemany(
                         "INSERT INTO ABMultiValue VALUES (1, ?, ?)",
                         [(property_id, value) for value in values[:20]],
                     )
                 complete = read_contacts(path)
                 self.assertEqual(
-                    len(complete.records[0].phones if property_id == 3 else complete.records[0].emails),
+                    len(
+                        complete.records[0].phones
+                        if property_id == 3
+                        else complete.records[0].emails
+                    ),
                     20,
                 )
-                with sqlite3.connect(path) as db:
+                with closing(sqlite3.connect(path)) as db, db:
                     db.execute(
                         "INSERT INTO ABMultiValue VALUES (1, ?, ?)",
                         (property_id, values[20]),
                     )
-                with self.assertRaises(SourceCapacityLimit):
-                    read_contacts(path)
+                expanded = read_contacts(path)
+                self.assertEqual(
+                    len(expanded.records[0].phones if property_id == 3 else expanded.records[0].emails),
+                    21,
+                )
+
+    def test_contact_value_index_keeps_large_orphan_map_off_heap(self) -> None:
+        path = self.make_db(
+            "large-contact-values.db",
+            [
+                "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
+                "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+                "INSERT INTO ABPerson VALUES ('Ada', 'Test')",
+                "INSERT INTO ABMultiValue VALUES (1, 3, '5551234567')",
+            ],
+        )
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executemany(
+                "INSERT INTO ABMultiValue VALUES (?, 3, ?)",
+                ((index, f"+1202555{index:07d}") for index in range(2, 80_002)),
+            )
+        tracemalloc.start()
+        try:
+            result = read_contacts(path)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(
+            result.records, (Contact(1, "Ada Test", ("+15551234567",), ()),)
+        )
+        self.assertEqual((result.rows_seen, result.excluded), (1, 0))
+        self.assertLess(peak, 24 * 1024 * 1024)
+        self.assertEqual(list(self.root.glob("amplifai-contact-index-*")), [])
+
+    def test_contact_value_limit_counts_orphans_and_cleans_private_index(self) -> None:
+        path = self.make_db(
+            "bounded-contact-values.db",
+            [
+                "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
+                "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+                "INSERT INTO ABPerson VALUES ('Ada', 'Test')",
+                "INSERT INTO ABMultiValue VALUES (2, 3, '5551111111')",
+                "INSERT INTO ABMultiValue VALUES (3, 3, '5552222222')",
+            ],
+        )
+        with (
+            patch("amplifai_phone.metadata.MAX_ROWS_PER_SOURCE", 1),
+            self.assertRaisesRegex(SourceCapacityLimit, "Contact value row limit"),
+        ):
+            read_contacts(path)
+        self.assertEqual(list(self.root.glob("amplifai-contact-index-*")), [])
+
+    def test_contact_index_creation_failure_is_a_private_workspace_error(self) -> None:
+        path = self.make_db(
+            "contact-index-failure.db",
+            [
+                "CREATE TABLE ABPerson (First TEXT, Last TEXT)",
+                "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
+            ],
+        )
+        with (
+            patch(
+                "amplifai_phone.metadata.tempfile.TemporaryDirectory",
+                side_effect=OSError("private path"),
+            ),
+            self.assertRaises(WorkspaceError) as failure,
+        ):
+            read_contacts(path)
+        self.assertEqual(failure.exception.code, "workspace_unavailable")
+        self.assertNotIn("private path", str(failure.exception))
 
     def test_selection_can_exceed_the_old_fifty_contact_test_target(self) -> None:
         contacts = tuple(
@@ -279,7 +468,30 @@ class MetadataTest(unittest.TestCase):
         )
         self.assertNotIn("SECRET", repr(result))
 
-    def test_group_membership_frontier_counts_source_rows_not_expanded_join(self) -> None:
+    def test_group_message_keeps_participants_past_old_fifty_bound(self) -> None:
+        path = self.make_db(
+            "large-group-sms.db",
+            [
+                "CREATE TABLE handle (id TEXT)",
+                "CREATE TABLE message (date INTEGER, service TEXT, is_from_me INTEGER, handle_id INTEGER, text TEXT)",
+                "CREATE TABLE chat_message_join (message_id INTEGER, chat_id INTEGER)",
+                "CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER)",
+                f"INSERT INTO message VALUES ({cocoa('2026-09-01T13:00:00+00:00')}, 'iMessage', 1, 0, 'SECRET-GROUP-BODY')",
+                "INSERT INTO chat_message_join VALUES (1, 7)",
+            ],
+        )
+        with closing(sqlite3.connect(path)) as db, db:
+            for index in range(1, 52):
+                db.execute("INSERT INTO handle VALUES (?)", (f"+1555{index:07d}",))
+                db.execute("INSERT INTO chat_handle_join VALUES (7, ?)", (index,))
+        result = read_messages(path, self.since)
+        self.assertEqual((result.rows_seen, len(result.records), result.excluded), (1, 1, 0))
+        self.assertEqual(len(result.records[0].participants), 51)
+        self.assertNotIn("SECRET", repr(result))
+
+    def test_group_membership_frontier_counts_source_rows_not_expanded_join(
+        self,
+    ) -> None:
         path = self.make_db(
             "reused-group-sms.db",
             [
@@ -299,20 +511,78 @@ class MetadataTest(unittest.TestCase):
         )
         with patch("amplifai_phone.metadata.MAX_ROWS_PER_SOURCE", 3):
             result = read_messages(path, self.since)
-        self.assertEqual((result.rows_seen, len(result.records), result.excluded), (2, 2, 0))
+        self.assertEqual(
+            (result.rows_seen, len(result.records), result.excluded), (2, 2, 0)
+        )
         self.assertEqual(
             [message.participants for message in result.records],
             [("+15551234567", "+15559876543")] * 2,
         )
         self.assertNotIn("SECRET", repr(result))
-        with sqlite3.connect(path) as db:
+        with closing(sqlite3.connect(path)) as db, db:
             db.execute("INSERT INTO chat_message_join VALUES (1, 7)")
             db.execute("INSERT INTO chat_message_join VALUES (1, 7)")
-        with patch("amplifai_phone.metadata.MAX_ROWS_PER_SOURCE", 3):
-            with self.assertRaisesRegex(SourceCapacityLimit, "Message chat row limit"):
-                read_messages(path, self.since)
+        with (
+            patch("amplifai_phone.metadata.MAX_ROWS_PER_SOURCE", 3),
+            self.assertRaisesRegex(SourceCapacityLimit, "Message chat row limit"),
+        ):
+            read_messages(path, self.since)
+        self.assertEqual(list(self.root.glob("amplifai-message-index-*")), [])
 
-    def test_oversized_group_is_excluded_instead_of_silently_truncated(self) -> None:
+    def test_message_join_keeps_source_identifier_types_distinct(self) -> None:
+        path = self.make_db(
+            "typed-message-joins.db",
+            [
+                "CREATE TABLE handle (id TEXT)",
+                "CREATE TABLE message (date INTEGER, service TEXT, is_from_me INTEGER, handle_id INTEGER)",
+                "CREATE TABLE chat_message_join (message_id, chat_id)",
+                "CREATE TABLE chat_handle_join (chat_id, handle_id INTEGER)",
+                "INSERT INTO handle VALUES ('5551234567')",
+                f"INSERT INTO message VALUES ({cocoa('2026-09-01T13:00:00+00:00')}, 'SMS', 0, 0)",
+                "INSERT INTO chat_handle_join VALUES ('7', 1)",
+                "INSERT INTO chat_message_join VALUES (1, 7)",
+            ],
+        )
+        unmatched = read_messages(path, self.since)
+        self.assertEqual((unmatched.rows_seen, unmatched.excluded), (1, 1))
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("UPDATE chat_message_join SET chat_id = '7'")
+        matched = read_messages(path, self.since)
+        self.assertEqual(matched.records[0].participants, ("+15551234567",))
+
+    def test_message_join_index_keeps_large_orphan_map_off_heap(self) -> None:
+        path = self.make_db(
+            "large-message-joins.db",
+            [
+                "CREATE TABLE handle (id TEXT)",
+                "CREATE TABLE message (date INTEGER, service TEXT, is_from_me INTEGER, handle_id INTEGER, text TEXT)",
+                "CREATE TABLE chat_message_join (message_id INTEGER, chat_id INTEGER)",
+                "CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER)",
+                "INSERT INTO handle VALUES ('5551234567')",
+                f"INSERT INTO message VALUES ({cocoa('2026-09-01T13:00:00+00:00')}, 'SMS', 0, 0, 'SECRET-BODY')",
+                "INSERT INTO chat_handle_join VALUES (7, 1)",
+                "INSERT INTO chat_message_join VALUES (1, 7)",
+            ],
+        )
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executemany(
+                "INSERT INTO chat_message_join VALUES (?, 7)",
+                ((index,) for index in range(2, 80_002)),
+            )
+        tracemalloc.start()
+        try:
+            result = read_messages(path, self.since)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual((result.rows_seen, result.excluded), (1, 0))
+        self.assertEqual(len(result.records), 1)
+        self.assertEqual(result.records[0].participants, ("+15551234567",))
+        self.assertNotIn("SECRET", repr(result))
+        self.assertLess(peak, 8 * 1024 * 1024)
+        self.assertEqual(list(self.root.glob("amplifai-message-index-*")), [])
+
+    def test_group_past_old_participant_bound_is_retained_without_truncation(self) -> None:
         handles = [
             f"INSERT INTO handle VALUES ('555{index:07d}')" for index in range(51)
         ]
@@ -335,8 +605,9 @@ class MetadataTest(unittest.TestCase):
         )
         result = read_messages(path, self.since)
         self.assertEqual(
-            (result.rows_seen, len(result.records), result.excluded), (1, 0, 1)
+            (result.rows_seen, len(result.records), result.excluded), (1, 1, 0)
         )
+        self.assertEqual(len(result.records[0].participants), 51)
 
     def test_selected_backup_entries_to_review_without_content(self) -> None:
         from pyiosbackup.exceptions import MissingEntryError
@@ -348,6 +619,7 @@ class MetadataTest(unittest.TestCase):
                 "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)",
                 "INSERT INTO ABPerson VALUES ('Ada', 'Test')",
                 "INSERT INTO ABMultiValue VALUES (1, 3, '5551234567')",
+                "INSERT INTO ABMultiValue VALUES (1, 3, '+1 (202) 555-0199')",
             ],
         )
         calls = self.make_db(
@@ -355,6 +627,8 @@ class MetadataTest(unittest.TestCase):
             [
                 "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER)",
                 f"INSERT INTO ZCALLRECORD VALUES ({cocoa('2026-09-01T12:00:00+00:00')}, 65, '5551234567', 1, 1)",
+                f"INSERT INTO ZCALLRECORD VALUES ({cocoa('2026-09-01T12:30:00+00:00')}, 21, '+12025550199', 0, 1)",
+                f"INSERT INTO ZCALLRECORD VALUES ({cocoa('2026-09-01T12:45:00+00:00')}, 8, '+12025550000', 0, 0)",
             ],
         )
         messages = self.make_db(
@@ -403,14 +677,54 @@ class MetadataTest(unittest.TestCase):
         self_test = self
         extracted = self.root / "extracted"
         extracted.mkdir()
-        capture = _parse_entries(Backup(), extracted, self.now, self.since)
-        review = review_capture(capture, "1")
-        self.assertEqual(review["selected_contacts"], 1)
-        self.assertEqual(review["matched_calls"], 1)
-        self.assertEqual(review["matched_messages"], 1)
-        self.assertEqual(review["missing_sources"], ())
-        self.assertNotIn("SECRET-BODY", repr(capture))
-        self.assertNotIn("SECRET-BODY", repr(review))
+        # This tiny fixture tests parsing/selection; the real 2 GiB free-space
+        # guard has separate coverage and remains unchanged in production.
+        with patch("amplifai_phone.backup_files.MIN_FREE_BYTES", 0), \
+                patch("amplifai_phone.workspace.MIN_FREE_BYTES", 0):
+            workspace = SessionWorkspace(self.root / "review")
+            with workspace as review_root:
+                store = RecordStore(review_root / "sanitized.sqlite3", workspace)
+                try:
+                    parsed = _parse_entries(Backup(), extracted, self.now, self.since,
+                                            record_store=store)
+                    capture = replace(parsed, review_workspace=workspace, record_store=store)
+                    review = review_capture(capture, "1")
+                    self.assertEqual(review["selected_contacts"], 1)
+                    self.assertEqual((capture.calls.rows_seen, len(capture.calls.records)), (3, 3))
+                    self.assertEqual(review["matched_calls"], 2)
+                    self.assertEqual(review["matched_messages"], 1)
+                    self.assertEqual(review["missing_sources"], ())
+                    transfer = PagedTransfer(capture, {1}, review_root / "selected-transfer.sqlite3")
+                    try:
+                        self.assertEqual(transfer.manifest["sources"]["calls"]["rowsSeen"], 3)
+                        self.assertEqual(transfer.manifest["sources"]["calls"]["rowsIncluded"], 2)
+                        self.assertEqual(transfer.manifest["sources"]["messages"]["rowsIncluded"], 1)
+                        call_rows = [
+                            row for cursor in range(transfer.manifest["sources"]["calls"]["pageCount"])
+                            for row in json.loads(transfer.page("calls", cursor)["chunk"])
+                        ]
+                        self.assertEqual([row["direction"] for row in call_rows], ["outgoing", "incoming"])
+                        self.assertEqual([row["participants"] for row in call_rows],
+                                         [["+15551234567"], ["+12025550199"]])
+                        fixture_path = os.environ.get("AMPLIFAI_SELECTED_CALLS_FIXTURE_OUT")
+                        if fixture_path:
+                            fixture = {
+                                "manifest": transfer.manifest,
+                                "pages": {
+                                    category: [transfer.page(category, cursor)
+                                               for cursor in range(transfer.manifest["sources"][category]["pageCount"])]
+                                    for category in ("contacts", "calls", "messages")
+                                },
+                            }
+                            encoded = json.dumps(fixture, separators=(",", ":"))
+                            self.assertNotIn("SECRET-BODY", encoded)
+                            Path(fixture_path).write_text(encoded + "\n", encoding="utf-8")
+                    finally:
+                        transfer.close()
+                    self.assertNotIn("SECRET-BODY", repr(capture))
+                    self.assertNotIn("SECRET-BODY", repr(review))
+                finally:
+                    store.close()
 
 
 if __name__ == "__main__":

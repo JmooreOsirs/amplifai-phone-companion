@@ -114,6 +114,14 @@ def main() -> None:
          "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
         for path in outer_files
     ]
+    outer_symlinks = sorted(
+        path for path in args.app.rglob("*")
+        if path.is_symlink() and args.helper.parent not in path.parents
+    )
+    for path in outer_symlinks:
+        target = path.readlink()
+        if target.is_absolute() or not path.resolve(strict=True).is_relative_to(args.app.resolve()):
+            raise ValueError("outer app symlink escapes its bundle")
     manifest = {
         "purpose": "frozen-helper technical inventory; not legal clearance",
         "archive_entries": len(entries),
@@ -130,6 +138,10 @@ def main() -> None:
         "file_hashes": files,
         "outer_app_file_count": len(outer_files),
         "outer_app_file_hashes": outer_manifest,
+        "outer_app_symlinks": [
+            {"path": str(path.relative_to(args.app)), "target": str(path.readlink())}
+            for path in outer_symlinks
+        ],
     }
     args.manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     counts: dict[str, int] = {}

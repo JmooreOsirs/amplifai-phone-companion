@@ -34,13 +34,19 @@ fi
 
 swift build --package-path "$SWIFT_PACKAGE"
 BUILD_BIN="$(swift build --package-path "$SWIFT_PACKAGE" --show-bin-path)/$APP_NAME"
+FRAMEWORK_SOURCE="$(dirname "$BUILD_BIN")/Sparkle.framework"
+if [ ! -d "$FRAMEWORK_SOURCE" ]; then
+  echo "Pinned Sparkle framework is missing from the Swift build" >&2
+  exit 1
+fi
 
 mkdir -p "$DIST_DIR"
 if [ -d "$APP_BUNDLE" ]; then
   rm -rf "$APP_BUNDLE"
 fi
-mkdir -p "$CONTENTS/MacOS" "$RESOURCES/collector/amplifai_phone"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Frameworks" "$RESOURCES/collector/amplifai_phone"
 cp "$BUILD_BIN" "$CONTENTS/MacOS/$APP_NAME"
+ditto "$FRAMEWORK_SOURCE" "$CONTENTS/Frameworks/Sparkle.framework"
 cp "$SWIFT_PACKAGE/Info.plist" "$CONTENTS/Info.plist"
 cp "$UVX_BIN" "$RESOURCES/uvx"
 cp "$UV_BIN" "$RESOURCES/uv"

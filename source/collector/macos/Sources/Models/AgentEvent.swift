@@ -28,11 +28,21 @@ struct AgentEvent: Decodable {
     let elapsedSeconds: Double?
     let processedBytes: Int64?
     let contacts: [ContactPreview]?
+    let totalContacts: Int?
+    let query: String?
+    let cursor: Int?
+    let nextCursor: Int?
+    let scanId: String?
+    let requestId: String?
     let availableCalls: Int?
     let availableMessages: Int?
     let since: String?
     let missing: [String]?
+    let backupEncrypted: Bool?
+    let unavailableReasons: [String: String]?
     let selectedContacts: Int?
+    let reviewId: String?
+    let selectionSha256: String?
     let matchedCalls: Int?
     let matchedMessages: Int?
     let observedCallEarliest: String?
@@ -49,4 +59,16 @@ struct AgentEvent: Decodable {
     let port: Int?
     let expiresInSeconds: Int?
     let handoffId: String?
+    let intentId: String?
+    let email: String?
+    let course: String?
+    let source: String?
+    let component: String?
+    let result: String?
+    let declaredBytes: Int64?
+    let rawBytes: Int64?
+    let copiedBytes: Int64?
+    let encrypted: Bool?
+    let producerDigest: String?
+    let sidecars: String?
 }

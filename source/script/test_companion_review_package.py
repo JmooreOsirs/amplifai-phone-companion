@@ -14,6 +14,7 @@ from package_companion_review import (
     native_input_records,
     verify_app,
     verify_file,
+    verify_legal_offer,
 )
 
 
@@ -42,6 +43,30 @@ class PackageEvidenceTests(unittest.TestCase):
         helper.write_bytes(b"synthetic binary")
         (helper.parent / "extra").write_bytes(b"extra")
         with self.assertRaisesRegex(ValueError, "file set"):
+            verify_app(self.root, inventory)
+
+    def test_release_refuses_missing_in_app_legal_offer(self):
+        with self.assertRaisesRegex(ValueError, "missing or outside evidence file"):
+            verify_legal_offer(self.root, self.root)
+
+    def test_framework_symlinks_require_exact_in_bundle_targets(self):
+        framework = self.root / "Contents/Frameworks/Sparkle.framework"
+        version = framework / "Versions/B"
+        version.mkdir(parents=True)
+        binary = version / "Sparkle"
+        binary.write_bytes(b"synthetic framework")
+        (framework / "Versions/Current").symlink_to("B")
+        (framework / "Sparkle").symlink_to("Versions/Current/Sparkle")
+        inventory = {"file_hashes": [], "outer_app_file_hashes": [
+            {"path": binary.relative_to(self.root).as_posix(), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}
+        ], "outer_app_symlinks": [
+            {"path": "Contents/Frameworks/Sparkle.framework/Versions/Current", "target": "B"},
+            {"path": "Contents/Frameworks/Sparkle.framework/Sparkle", "target": "Versions/Current/Sparkle"},
+        ]}
+        self.assertEqual(verify_app(self.root, inventory), 3)
+        (framework / "Sparkle").unlink()
+        (framework / "Sparkle").symlink_to("/etc/hosts")
+        with self.assertRaisesRegex(ValueError, "escapes"):
             verify_app(self.root, inventory)
 
     def test_rejects_manifest_traversal_and_symlink(self):

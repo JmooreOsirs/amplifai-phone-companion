@@ -1,6 +1,10 @@
-# October 8 processing-repair candidate inputs
+# October 12 rc23 package inputs
 
-Local processing-repair candidate only: `2026.10.08-rc6`, build `26100806`. Existing bundle identifier
+The published rc22 is `2026.10.12-rc22`, build `26101222`, and remains the
+rollback download. The signed and prepared rc18 package remains sealed and unpublished.
+This source is versioned `2026.10.12-rc23`, build `26101223`;
+it requires a newly signed/notarized app. The frozen Python helper inputs are unchanged
+from rc22 and may be reused only after exact input and signed-bundle custody checks. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
@@ -21,13 +25,100 @@ cannot replace this local collection approval.
   the matching bundle. The temporary generator inputs are removed on exit.
   No alternate logo, font or generative asset is used.
 - Keep the existing logo PNG resource for the in-window brand mark.
+- The rc12 review adds atomic all-page contact selection, a separately
+  confirmed server-bound destination account for no-code Connection, a Copy
+  fallback for old manual pairing, and digest-bound optional-source reason
+  and encryption evidence. Connection never means account Save; the existing
+  per-source receipt/readback/ACK contract still governs completion.
+- The rc13 review adds optional local contact-name suggestions with explicit
+  group deselection and generation-bound Undo. Matches are inspectable guesses,
+  never automatic exclusions or source edits.
+- The rc14 helper preserves allowlisted optional Call/SMS source rejection reasons
+  through local review and digest-bound browser previews. This improves diagnosis
+  without identifying the cause of any earlier private run or changing source
+  integrity decisions. Matching website copy gives a plain course-progress
+  timeout/network retry path without treating a 50-item receipt page as missing data.
+- The rc15 review separates Main and Review contacts, starts Review excluded,
+  and keeps all-page selection bound to stable reviewed IDs. The owner may
+  include Review contacts individually or move a locally suggested group and
+  undo that exact selection change. Save and continue preserves the reviewed
+  selection before opening the signed-in account journey; navigation alone
+  does not save data or acknowledge the Mac review.
+- The rc16 error panel makes the safe failure details selectable and copyable.
+  On a workspace-low-space failure it also reports current free space on the
+  Mac Application Support volume, explicitly distinct from space at the failed
+  attempt. The selected-source and further 2 GiB reserve protections are
+  unchanged; copying details does not include phone records, passwords or paths.
+- The rc17 setup makes a fresh owner choose between confirmed encrypted-backup
+  preparation and continuing with potentially unavailable Calls. The first
+  choice performs a read-only, literal-boolean phone backup-encryption preflight
+  before backup transfer, then checks the completed Manifest. Off or unknown
+  state stops before transfer; a later unencrypted Manifest rejects review.
+  The companion does not enable encryption or create a Finder backup. A Finder
+  setting change is owner-controlled, may start its own full backup requiring
+  separate Mac storage, and does not guarantee every historical call. Missing
+  Calls/Messages metrics say Unavailable rather than an observed zero.
+- The rc18 review adds a deliberate all-contact choice across the complete,
+  verified Main and Review workspace while keeping Main as the initial view.
+  Review is not automatically selected.
+  All/Main/Review filters, exact selected/available counts and separate group
+  marks support page-spanning movement with confirmation and generation-bound
+  Undo. Group movement is not an account Save or a source-data edit.
+- The rc19 helper corrects named SQLite integer-primary-key row identity for
+  Contacts and Calls. A smaller decrypted encrypted SQLite main can be accepted
+  only with an exact producer ciphertext digest, intact private copy, no
+  sidecars, and source-specific read-only SQLite validation. Failure remains
+  fatal for Contacts or Unavailable for optional Calls/Messages. Its local
+  copyable size-failure detail contains only bounded source, role, counts and
+  proof statuses; it cannot identify the cause of an earlier private run.
+- The rc20 app binds destination approval to the account/course and exact
+  displayed handoff and intent. A newer request waits for actual Mac sheet
+  dismissal; stale actions cannot approve it. Local Reconnect keeps a retained
+  reviewed import, and replacement cannot close a bridge after its first
+  bound account-save receipt. Editing contacts after pairing requires an
+  explicit Change selected contacts action and a helper-accepted revocation;
+  a racing first receipt keeps the original selection and ACK endpoint locked.
+  The account browser still makes separate
+  source Save decisions and confirms the final ACK.
+- The rc21 setup reads the current local-backup encryption setting before
+  asking the owner to approve a new collection. Only a literal true result
+  presents the encrypted-backup path; off and unknown remain distinct.
+  Finder instructions put the owner-controlled setting and separate full-backup
+  storage warning first. The read-only check does not start a backup, alter
+  encryption, or guarantee historical Calls. The explicit fallback may leave
+  Calls unavailable. The collected run still checks the setting and completed
+  Manifest. Read-only check cancellation, stale replies, abnormal exits and
+  diagnostics cannot grant collection authority. The current setup step is
+  visually primary, with full privacy facts before unchecked consent.
+- The rc22 updater treats disabled automatic checks as a manual-only state,
+  separate from an attempted check that failed. App updates stay out of active
+  collection and unsaved review, while idle shows the current version and
+  signed Mac download guide. Feed failures stay collapsed with an accurate
+  manual-install fallback. Existing safe-install guards still refuse a relaunch
+  until local work and its matching account receipt have settled. The current
+  public Sparkle feed is unavailable; no in-app update success is claimed.
+- The rc23 setup keeps one active Prepare, Consent, or Connect card and moves
+  Finder guidance and technical detail behind explicit help. The unchecked
+  local disclosure and each later account-source approval remain separate.
+  An unencrypted backup still admits an integrity-checked Calls database when
+  present; absent Calls remain Unavailable, never a measured zero. The app does
+  not change Finder encryption or claim complete call history.
 - Run `sh collector/macos/Tests/check_flow.sh` and the existing
   `sh scripts/test_macos_recovery.sh` against actual model/protocol source.
+- This source pages the local contact preview in 200-row helper events and
+  loads more/searches on demand. The Swift model validates totals, cursors,
+  duplicate IDs and stale responses while preserving selected IDs. A local
+  review now freezes the selected IDs and requires an exact echoed review ID
+  and selected count before browser pairing can open. Sanitized rows and
+  selected IDs live in a private temporary SQLite review store. The v2 handoff
+  has an immutable manifest and bounded, chained source pages; the matching
+  website must confirm every page and durable account receipts before saved ACK.
+  Do not pair this Swift app with the rc7 Python helper.
 
 ## Earlier backup repair and current processing incident
 
-The public rc5 build (`26100805`) remains the rollback candidate until this
-source is separately packaged and released. Two earlier owner attempts in ACK2 ended
+The public rc7 build (`26100807`) was the rollback candidate for the earlier
+capacity repair; published rc11 is this candidate's rollback. Two earlier owner attempts in ACK2 ended
 with the generic `collection_failed` code at the backup stage and zero received
 bytes; this does **not** prove a backup file began transferring. The current helper
 maps an upstream host-space rejection to `backup_host_space`, and suppresses a
@@ -44,7 +135,13 @@ manifest-listed but missing optional call/SMS payloads while retaining valid
 contacts, rejects malformed selected-file entry types, and gives distinct safe
 categories for backup-control, required-contact, missing-file and integrity
 failures. It cannot identify the exact cause of that private run from the old
-generic code, and no physical retry of this candidate has occurred.
+generic code. A later owner rc6 run stopped with `source_capacity_limit` after
+21.73 GB received and 616.82 MB retained. The generic code cannot identify
+which capacity guard fired. The rc7 source candidate fixes three plausible
+avoidable control-volume failures with bounded file-backed/plist reads and
+private-error draining; it leaves path, disk, schema and finite parsing guards
+intact, and adds distinct safe capacity categories. The exact owner failure
+is not attributed to one guard and rc7 has not passed physical collection.
 
 The Mac app's fresh collection approval now includes automatic delivery of only
 its bounded support code after an error. The fixed HTTPS endpoint accepts the
@@ -114,7 +211,7 @@ protocol, expired/revoked/stale/partial and failed checks retain the native revi
 Normal managed Auth, actual source-save transaction and packaged cross-layer
 acknowledgement remain release gates; offline fixture success is not those proofs.
 
-The Android `2026.10.08-rc4` owner-test APK is independently published with
+The Android `2026.10.09-rc9` website APK is independently published with
 its matching source and existing signing certificate. It does not qualify this
 Mac helper, normal installation or physical phones. Previously published Mac
 and Android packages remain rollback artifacts.

@@ -1,36 +1,48 @@
 from __future__ import annotations
 
+from contextlib import closing
+
 import asyncio
 import plistlib
 import sqlite3
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from amplifai_phone.__main__ import review_snapshot
 from amplifai_phone.ios_backup import (
+    BackupEncryptionPreflightError,
     DATABASES,
+    MAX_PLIST_BYTES,
     IPhoneCapture,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
     _extract_database,
-    _parse_entries,
     _manifest_plist_path,
+    _parse_entries,
+    _read_plist,
     collect_iphone,
+    inspect_backup_encryption,
     parse_selected_backup,
 )
 from amplifai_phone.metadata import (
-    BackupControlInvalid,
-    ContactsSchemaUnsupported,
     RETAINED_HISTORY_START,
+    BackupControlInvalid,
     Contact,
+    ContactsSchemaUnsupported,
+    Interaction,
     SourceCapacityLimit,
     SourceReadCapacityLimit,
     SourceResult,
     UnsupportedSchema,
 )
+from amplifai_phone.paged_transfer import PagedTransfer
+from amplifai_phone.record_store import RecordStore
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
 
 
 async def fake_backup_control_files(**kwargs: object) -> None:
@@ -50,6 +62,21 @@ async def fake_snapshot_backup_control_files(**kwargs: object) -> None:
 
 
 class ManifestFixtureIsolationTest(unittest.TestCase):
+    def test_large_valid_control_plist_is_read_from_disk_without_old_16m_ceiling(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-plist-") as temporary:
+            path = Path(temporary) / "Info.plist"
+            path.write_bytes(plistlib.dumps({"SyntheticApplications": "x" * (17 * 1024 * 1024)}))
+            self.assertEqual(len(_read_plist(path)["SyntheticApplications"]), 17 * 1024 * 1024)
+
+    def test_extreme_control_plist_still_has_a_finite_parsing_bound(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-large-plist-") as temporary:
+            path = Path(temporary) / "Info.plist"
+            with path.open("wb") as output:
+                output.seek(MAX_PLIST_BYTES)
+                output.write(b"x")
+            with self.assertRaises(SourceCapacityLimit):
+                _read_plist(path)
+
     def test_invalid_manifest_control_and_contacts_shape_are_source_specific(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-control-category-") as temporary:
             directory = Path(temporary)
@@ -99,16 +126,41 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 patch("amplifai_phone.ios_backup.read_messages") as read_messages,
             ):
                 capture = _parse_entries(
-                    object(), Path(temporary), datetime(2026, 10, 8, tzinfo=UTC),
+                    SimpleNamespace(is_encrypted=False), Path(temporary), datetime(2026, 10, 8, tzinfo=UTC),
                     RETAINED_HISTORY_START,
                 )
         self.assertEqual(capture.contacts, contacts)
         self.assertEqual(capture.calls, calls)
         self.assertEqual(capture.messages, SourceResult(0, (), 0))
         self.assertEqual(capture.missing_sources, ("messages",))
+        self.assertEqual(capture.unavailable_reasons, (("messages", "selected_payload_missing"),))
+        self.assertIs(capture.backup_encrypted, False)
         read_messages.assert_not_called()
 
-    def test_optional_payload_length_mismatch_still_fails_the_capture(self) -> None:
+    def test_unencrypted_backup_without_calls_marks_history_unavailable(self) -> None:
+        contacts = SourceResult(1, (Contact(1, "Synthetic", (), ()),), 0)
+
+        def extract(_backup: object, path: str, *_args: object) -> bool:
+            return path != DATABASES["calls"]
+
+        with tempfile.TemporaryDirectory(prefix="amplifai-no-call-file-") as temporary:
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+            ):
+                capture = _parse_entries(
+                    SimpleNamespace(is_encrypted=False), Path(temporary), datetime(2026, 10, 12, tzinfo=UTC),
+                    RETAINED_HISTORY_START,
+                )
+        self.assertIs(capture.backup_encrypted, False)
+        self.assertEqual(capture.contacts, contacts)
+        self.assertEqual(capture.missing_sources, ("calls",))
+        self.assertEqual(capture.unavailable_reasons, (("calls", "absent"),))
+        read_calls.assert_not_called()
+
+    def test_optional_payload_length_mismatch_is_unavailable_without_losing_contacts(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-incomplete-sms-") as temporary:
             directory = Path(temporary)
             source = directory / "selected"
@@ -124,20 +176,134 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                 get_entry_by_domain_and_path=lambda *_: entry,
                 is_encrypted=False,
             )
-            with self.assertRaises(SelectedPayloadIntegrityError):
-                _extract_database(backup, DATABASES["messages"], directory / "messages")
+            with patch("amplifai_phone.backup_files.MIN_FREE_BYTES", 0):
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _extract_database(backup, DATABASES["messages"], directory / "messages")
+            self.assertEqual(raised.exception.code, "selected_payload_length")
 
         with tempfile.TemporaryDirectory(prefix="amplifai-invalid-optional-") as temporary:
+            contacts = SourceResult(1, (Contact(1, "Ada", (), ()),), 0)
+            calls = SourceResult(0, (), 0)
+
             def extract(_backup: object, path: str, *_args: object) -> bool:
                 if path == DATABASES["messages"]:
-                    raise SelectedPayloadIntegrityError("synthetic invalid selected payload")
+                    raise SelectedPayloadIntegrityError(
+                        "synthetic invalid selected payload", code="selected_payload_length"
+                    )
+                return True
+
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                patch("amplifai_phone.ios_backup.read_calls", return_value=calls),
+                patch("amplifai_phone.ios_backup.read_messages") as read_messages,
+            ):
+                capture = _parse_entries(
+                    object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START,
+                )
+            self.assertEqual(capture.contacts, contacts)
+            self.assertEqual(capture.messages, SourceResult(0, (), 0))
+            self.assertEqual(capture.missing_sources, ("messages",))
+            self.assertEqual(capture.unavailable_reasons, (("messages", "selected_payload_length"),))
+            read_messages.assert_not_called()
+
+    def test_invalid_required_contacts_payload_keeps_capture_failed(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-invalid-contacts-") as temporary:
+            def extract(_backup: object, path: str, *_args: object) -> bool:
+                if path == DATABASES["contacts"]:
+                    raise SelectedPayloadIntegrityError(
+                        "private contacts failure", code="selected_payload_identity"
+                    )
                 return True
 
             with patch("amplifai_phone.ios_backup._extract_database", side_effect=extract):
-                with self.assertRaises(SelectedPayloadIntegrityError):
-                    _parse_entries(
-                        object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START,
-                    )
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+            self.assertEqual(raised.exception.code, "selected_payload_identity")
+
+    def test_invalid_optional_calls_payload_is_unavailable(self) -> None:
+        contacts = SourceResult(1, (Contact(1, "Ada", (), ()),), 0)
+        messages = SourceResult(0, (), 0)
+
+        def extract(_backup: object, path: str, *_args: object) -> bool:
+            if path == DATABASES["calls"]:
+                raise SelectedPayloadIntegrityError(
+                    "private call payload", code="selected_payload_crypto"
+                )
+            return True
+
+        with tempfile.TemporaryDirectory(prefix="amplifai-invalid-calls-") as temporary:
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                patch("amplifai_phone.ios_backup.read_messages", return_value=messages),
+            ):
+                capture = _parse_entries(
+                    object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START
+                )
+        self.assertEqual(capture.contacts, contacts)
+        self.assertEqual(capture.calls, SourceResult(0, (), 0))
+        self.assertEqual(capture.missing_sources, ("calls",))
+        self.assertEqual(capture.unavailable_reasons, (("calls", "selected_payload_crypto"),))
+        read_calls.assert_not_called()
+
+    def test_optional_payload_diagnostics_are_fixed_codes_without_private_errors(self) -> None:
+        contacts = SourceResult(1, (Contact(1, "Synthetic", (), ()),), 0)
+        expected = (
+            "selected_payload_invalid", "selected_payload_size", "selected_payload_identity",
+            "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto",
+        )
+        with tempfile.TemporaryDirectory(prefix="amplifai-optional-reasons-") as temporary:
+            for code in expected:
+                with self.subTest(code=code):
+                    def extract(_backup: object, path: str, *_args: object) -> bool:
+                        if path == DATABASES["calls"]:
+                            raise SelectedPayloadIntegrityError("private path and content", code=code)
+                        return True
+
+                    with (
+                        patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                        patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                        patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                        patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+                    ):
+                        capture = _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+                    self.assertEqual(capture.unavailable_reasons, (("calls", code),))
+                    self.assertNotIn("private", repr(capture))
+                    read_calls.assert_not_called()
+
+            for error, reason in (
+                (SelectedPayloadMissing("private manifest-listed path"), "selected_payload_missing"),
+                (SelectedPayloadIntegrityError("private contact-only code", code="selected_contacts_integrity"),
+                 "source_integrity"),
+            ):
+                with self.subTest(reason=reason):
+                    def extract(_backup: object, path: str, *_args: object) -> bool:
+                        if path == DATABASES["calls"]:
+                            raise error
+                        return True
+
+                    with (
+                        patch("amplifai_phone.ios_backup._extract_database", side_effect=extract),
+                        patch("amplifai_phone.ios_backup.read_contacts", return_value=contacts),
+                        patch("amplifai_phone.ios_backup.read_calls") as read_calls,
+                        patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+                    ):
+                        capture = _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+                    self.assertEqual(capture.unavailable_reasons, (("calls", reason),))
+                    self.assertNotIn("private", repr(capture))
+                    read_calls.assert_not_called()
+
+    def test_invalid_required_contacts_sqlite_has_distinct_safe_reason(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-corrupt-contacts-") as temporary:
+            with (
+                patch("amplifai_phone.ios_backup._extract_database", return_value=True),
+                patch("amplifai_phone.ios_backup.read_contacts", side_effect=sqlite3.DatabaseError("private path")),
+            ):
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _parse_entries(object(), Path(temporary), datetime.now(UTC), RETAINED_HISTORY_START)
+        self.assertEqual(raised.exception.code, "selected_contacts_integrity")
 
     def test_malformed_manifest_entry_types_fail_as_integrity_not_unhandled_exception(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-entry-types-") as temporary:
@@ -155,8 +321,12 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                         get_entry_by_domain_and_path=lambda *_: entry,
                         is_encrypted=False,
                     )
-                    with self.assertRaises(SelectedPayloadIntegrityError):
+                    with self.assertRaises(SelectedPayloadIntegrityError) as raised:
                         _extract_database(backup, DATABASES["messages"], directory / "messages")
+                    self.assertEqual(
+                        raised.exception.code,
+                        "selected_payload_size" if isinstance(size, bool) else "selected_payload_identity",
+                    )
 
     def test_optional_source_parse_failure_preserves_valid_contacts_and_calls(self) -> None:
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)
@@ -195,7 +365,48 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                     RETAINED_HISTORY_START,
                 )
         self.assertEqual(capture.missing_sources, ("calls",))
+        self.assertEqual(capture.unavailable_reasons, (("calls", "source_capacity"),))
         self.assertEqual(capture.contacts, contacts)
+
+    def test_failed_optional_reader_cannot_retain_partial_selected_rows(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="amplifai-partial-store-") as temporary:
+            root = Path(temporary)
+            workspace = SessionWorkspace(root / "reviews")
+            review_root = workspace.__enter__()
+            store = RecordStore(review_root / "sanitized.sqlite3", workspace)
+            contact = Contact(1, "Ada", ("+15551234567",), ())
+            call = Interaction(7, "call", "phone", "2026-10-07T16:00:00+00:00", "inbound", contact.phones, 15)
+
+            def contacts_reader(*_args: object) -> SourceResult:
+                store.add("contacts", contact)
+                return SourceResult(1, store.collection("contacts"), 0)
+
+            def broken_calls_reader(*_args: object) -> SourceResult:
+                store.add("calls", call)
+                raise sqlite3.DatabaseError("corrupt call database")
+
+            try:
+                with (
+                    patch("amplifai_phone.ios_backup._extract_database", return_value=True),
+                    patch("amplifai_phone.ios_backup.read_contacts", side_effect=contacts_reader),
+                    patch("amplifai_phone.ios_backup.read_calls", side_effect=broken_calls_reader),
+                    patch("amplifai_phone.ios_backup.read_messages", return_value=SourceResult(0, (), 0)),
+                ):
+                    capture = _parse_entries(object(), root, datetime.now(UTC), RETAINED_HISTORY_START,
+                                             record_store=store)
+                capture = replace(capture, record_store=store, review_workspace=workspace)
+                selected = store.append_selection("review", 0, [1], 1)
+                self.assertIsNotNone(selected)
+                self.assertEqual(capture.missing_sources, ("calls",))
+                self.assertEqual(capture.unavailable_reasons, (("calls", "source_invalid"),))
+                self.assertEqual(review_snapshot(capture, selected)["matched_calls"], 0)
+                self.assertEqual(store.counts["calls"], 0)
+                self.assertEqual(len(tuple(selected.rows("calls"))), 0)
+                transfer = PagedTransfer(capture, selected, review_root / "paged.sqlite3")
+                self.assertEqual(transfer.manifest["sources"]["calls"]["rowsIncluded"], 0)
+            finally:
+                store.close()
+                workspace.__exit__(None, None, None)
 
     def test_contact_or_session_safety_failure_still_stops_capture(self) -> None:
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)
@@ -218,7 +429,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)
         with tempfile.TemporaryDirectory(prefix="amplifai-malformed-sms-") as temporary:
             extracted = Path(temporary)
-            with sqlite3.connect(extracted / "messages") as db:
+            with closing(sqlite3.connect(extracted / "messages")) as db, db:
                 db.execute("CREATE TABLE message (text TEXT)")
             with (
                 patch("amplifai_phone.ios_backup._extract_database", return_value=True),
@@ -227,6 +438,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             ):
                 capture = _parse_entries(object(), extracted, datetime.now(UTC), RETAINED_HISTORY_START)
         self.assertEqual(capture.missing_sources, ("messages",))
+        self.assertEqual(capture.unavailable_reasons, (("messages", "unsupported_schema"),))
         self.assertEqual(capture.contacts, contacts)
         self.assertEqual(capture.messages, SourceResult(0, (), 0))
 
@@ -262,7 +474,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             for name in ("Status.plist", "Info.plist"):
                 (backup_path / name).write_bytes(plistlib.dumps({}))
             manifest_path = backup_path / "Manifest.db"
-            with sqlite3.connect(manifest_path) as db:
+            with closing(sqlite3.connect(manifest_path)) as db, db:
                 db.execute(
                     "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
                     "flags INTEGER, file BLOB)"
@@ -298,7 +510,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             ):
                 (backup_path / name).write_bytes(plistlib.dumps(value))
             manifest_path = backup_path / "Manifest.db"
-            with sqlite3.connect(manifest_path) as db:
+            with closing(sqlite3.connect(manifest_path)) as db, db:
                 db.execute(
                     "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
                     "flags INTEGER, file BLOB)"
@@ -325,6 +537,46 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
 
 
 class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_read_only_encryption_check_uses_existing_trust_and_never_starts_backup(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pymobiledevice3.exceptions import LockdownError
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        for reported, expected in (
+            (True, True), (False, False), (None, "backup_encryption_unknown"),
+            (0, "backup_encryption_unknown"), (1, "backup_encryption_unknown"),
+            ("true", "backup_encryption_unknown"),
+            (LockdownError("synthetic refusal", "SYNTHETIC-UDID", "27.0"), "backup_encryption_unknown"),
+        ):
+            with self.subTest(reported=type(reported).__name__, expected=expected):
+                lockdown = MagicMock()
+                lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+                lockdown.__aexit__ = AsyncMock(return_value=False)
+                lockdown.get_value = AsyncMock(
+                    side_effect=reported if isinstance(reported, Exception) else None,
+                    return_value=None if isinstance(reported, Exception) else reported,
+                )
+                with (
+                    tempfile.TemporaryDirectory(prefix="amplifai-status-check-") as temporary,
+                    patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+                    patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)) as connect,
+                    patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service") as backup_service,
+                ):
+                    sessions = Path(temporary) / "sessions"
+                    if isinstance(expected, bool):
+                        self.assertIs(await inspect_backup_encryption(sessions_root=sessions), expected)
+                    else:
+                        with self.assertRaises(BackupEncryptionPreflightError) as failure:
+                            await inspect_backup_encryption(sessions_root=sessions)
+                        self.assertEqual(failure.exception.code, expected)
+                    self.assertEqual(list(sessions.glob("session-*")), [])
+                self.assertIs(connect.await_args.kwargs["autopair"], False)
+                lockdown.get_value.assert_awaited_once_with("com.apple.mobile.backup", "WillEncrypt")
+                backup_service.assert_not_called()
+
     def test_production_parser_requests_all_retained_history(self) -> None:
         import pyiosbackup
         from pyiosbackup.manifest_plist import ManifestPlist
@@ -437,7 +689,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 now=datetime(2026, 9, 23, tzinfo=UTC),
                 sessions_root=Path(temporary) / "sessions",
             )
-        self.assertIs(result, expected)
+            self.assertIs(result.contacts, expected.contacts)
+            self.assertIsNotNone(result.record_store)
+            result.close()
         self.assertEqual(asked, [True])
         connect.assert_awaited_once()
         self.assertEqual(connect.await_args.kwargs["connection_type"], "USB")
@@ -452,6 +706,157 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(service.backup.await_args.kwargs["unback"])
         self.assertFalse(service.backup.await_args.kwargs["patch_manifest"])
         self.assertEqual(parse.call_args.args[1], "synthetic-password")
+        lockdown.get_value.assert_not_called()
+
+    async def test_encrypted_choice_stops_before_backup_when_disabled_or_unknown(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pymobiledevice3.exceptions import LockdownError
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        for reported, code in (
+            (False, "backup_encryption_disabled"),
+            (None, "backup_encryption_unknown"),
+            (0, "backup_encryption_unknown"),
+            (1, "backup_encryption_unknown"),
+            ("true", "backup_encryption_unknown"),
+            (LockdownError("synthetic read refusal", "SYNTHETIC-UDID", "27.0"), "backup_encryption_unknown"),
+        ):
+            with self.subTest(reported=type(reported).__name__, code=code):
+                lockdown = MagicMock()
+                lockdown.udid = "SYNTHETIC-UDID"
+                lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+                lockdown.__aexit__ = AsyncMock(return_value=False)
+                lockdown.get_value = AsyncMock(
+                    side_effect=reported if isinstance(reported, Exception) else None,
+                    return_value=None if isinstance(reported, Exception) else reported,
+                )
+                service = MagicMock()
+                service.__aenter__ = AsyncMock(return_value=service)
+                service.__aexit__ = AsyncMock(return_value=False)
+                service.backup = AsyncMock()
+                transferred: list[dict[str, object]] = []
+                with (
+                    tempfile.TemporaryDirectory(prefix="amplifai-encryption-preflight-") as temporary,
+                    patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+                    patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+                    patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service", return_value=service),
+                ):
+                    with self.assertRaises(BackupEncryptionPreflightError) as failure:
+                        await collect_iphone(
+                            password_provider=lambda: self.fail("No password before backup"),
+                            transfer_callback=transferred.append,
+                            require_encrypted_backup=True,
+                            sessions_root=Path(temporary) / "sessions",
+                        )
+                self.assertEqual(failure.exception.code, code)
+                lockdown.get_value.assert_awaited_once_with("com.apple.mobile.backup", "WillEncrypt")
+                service.backup.assert_not_awaited()
+                self.assertEqual(transferred, [])
+
+    async def test_encrypted_choice_requires_completed_manifest_confirmation(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pyiosbackup.manifest_plist import ManifestPlist
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        for manifest_encrypted in (True, False):
+            with self.subTest(manifest_encrypted=manifest_encrypted):
+                lockdown = MagicMock()
+                lockdown.udid = "SYNTHETIC-UDID"
+                lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+                lockdown.__aexit__ = AsyncMock(return_value=False)
+                lockdown.get_value = AsyncMock(return_value=True)
+                service = MagicMock()
+                service.__aenter__ = AsyncMock(return_value=service)
+                service.__aexit__ = AsyncMock(return_value=False)
+                service.backup = AsyncMock(side_effect=fake_snapshot_backup_control_files)
+                service.service._ensure_started = AsyncMock(return_value=(asyncio.StreamReader(), MagicMock()))
+                service.resolve_backup_selection.return_value = ("selection-rules",)
+                service.selection_filter_callback.return_value = "selection-filter"
+                expected = IPhoneCapture(SourceResult(0, (), 0), SourceResult(0, (), 0),
+                                         SourceResult(0, (), 0), "now", "since", ())
+                with (
+                    tempfile.TemporaryDirectory(prefix="amplifai-encryption-completion-") as temporary,
+                    patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+                    patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+                    patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service", return_value=service),
+                    patch.object(ManifestPlist, "from_path", return_value=SimpleNamespace(is_encrypted=manifest_encrypted)),
+                    patch("amplifai_phone.ios_backup.parse_selected_backup", return_value=expected) as parse,
+                ):
+                    if manifest_encrypted:
+                        result = await collect_iphone(
+                            password_provider=lambda: "synthetic-password",
+                            require_encrypted_backup=True,
+                            sessions_root=Path(temporary) / "sessions",
+                        )
+                        result.close()
+                        parse.assert_called_once()
+                    else:
+                        with self.assertRaises(BackupEncryptionPreflightError) as failure:
+                            await collect_iphone(
+                                password_provider=lambda: self.fail("No password after mismatched manifest"),
+                                require_encrypted_backup=True,
+                                sessions_root=Path(temporary) / "sessions",
+                            )
+                        self.assertEqual(failure.exception.code, "backup_encryption_changed")
+                        parse.assert_not_called()
+                service.backup.assert_awaited_once()
+
+    async def test_raw_workspace_exit_failure_closes_undelivered_review_store(self) -> None:
+        import pymobiledevice3.lockdown
+        import pymobiledevice3.services.mobilebackup2
+        import pymobiledevice3.usbmux
+        from pyiosbackup.manifest_plist import ManifestPlist
+
+        device = SimpleNamespace(is_usb=True, is_network=False,
+                                 connection_type="USB", serial="SYNTHETIC-UDID")
+        lockdown = MagicMock()
+        lockdown.paired = True
+        lockdown.udid = "SYNTHETIC-UDID"
+        lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+        lockdown.__aexit__ = AsyncMock(return_value=False)
+        service = MagicMock()
+        service.__aenter__ = AsyncMock(return_value=service)
+        service.__aexit__ = AsyncMock(return_value=False)
+        service.backup = AsyncMock(side_effect=fake_backup_control_files)
+        service.service._ensure_started = AsyncMock(return_value=(asyncio.StreamReader(), MagicMock()))
+        expected = IPhoneCapture(SourceResult(0, (), 0), SourceResult(0, (), 0),
+                                 SourceResult(0, (), 0), "now", "since", ())
+        original_exit = SessionWorkspace.__exit__
+        original_close = RecordStore.close
+        closed_stores: list[Path] = []
+
+        def failing_raw_exit(workspace: SessionWorkspace, *args: object) -> None:
+            is_raw = workspace.directory is not None and not (workspace.directory / "sanitized.sqlite3").exists()
+            original_exit(workspace, *args)
+            if is_raw:
+                raise WorkspaceError("Simulated raw cleanup failure", code="workspace_cleanup")
+
+        def tracked_close(store: RecordStore) -> None:
+            closed_stores.append(store.path)
+            original_close(store)
+
+        with (
+            tempfile.TemporaryDirectory(prefix="amplifai-raw-exit-test-") as temporary,
+            patch.object(pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[device])),
+            patch.object(pymobiledevice3.lockdown, "create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+            patch.object(pymobiledevice3.services.mobilebackup2, "Mobilebackup2Service", return_value=service),
+            patch.object(ManifestPlist, "from_path", return_value=SimpleNamespace(is_encrypted=False)),
+            patch("amplifai_phone.ios_backup.parse_selected_backup", return_value=expected),
+            patch.object(SessionWorkspace, "__exit__", new=failing_raw_exit),
+            patch.object(RecordStore, "close", new=tracked_close),
+        ):
+            root = Path(temporary) / "sessions"
+            with self.assertRaises(WorkspaceError) as raised:
+                await collect_iphone(password_provider=lambda: "", sessions_root=root)
+            self.assertEqual(raised.exception.code, "workspace_cleanup")
+            self.assertEqual(len(closed_stores), 1)
+            self.assertFalse(list(root.rglob("sanitized.sqlite3")))
 
     async def test_zero_devices_stops_before_pairing(self) -> None:
         import pymobiledevice3.usbmux
@@ -538,7 +943,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 connection_callback=transports.append,
                 sessions_root=Path(temporary) / "sessions",
             )
-        self.assertIs(result, expected)
+            self.assertIs(result.contacts, expected.contacts)
+            self.assertIsNotNone(result.record_store)
+            result.close()
         self.assertEqual(transports, ["usb"])
         connect.assert_awaited_once()
         self.assertEqual(connect.await_args.kwargs["connection_type"], "USB")
@@ -611,11 +1018,12 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 "amplifai_phone.ios_backup.parse_selected_backup", return_value=expected
             ),
         ):
-            await collect_iphone(
+            result = await collect_iphone(
                 password_provider=lambda: "",
                 connection_callback=transports.append,
                 sessions_root=Path(temporary) / "sessions",
             )
+            result.close()
         self.assertEqual(
             [call.kwargs["connection_type"] for call in connect.await_args_list],
             ["USB"],
@@ -687,7 +1095,9 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
                 connection_callback=transports.append,
                 sessions_root=Path(temporary) / "sessions",
             )
-        self.assertIs(result, expected)
+            self.assertIs(result.contacts, expected.contacts)
+            self.assertIsNotNone(result.record_store)
+            result.close()
         self.assertEqual(transports, ["wifi"])
         connect.assert_awaited_once()
         self.assertEqual(connect.await_args.kwargs["connection_type"], "Network")

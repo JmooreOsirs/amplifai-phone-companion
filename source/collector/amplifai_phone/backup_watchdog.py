@@ -171,9 +171,9 @@ class _ActivityReader:
         if size < 0:
             raise ValueError("readexactly size must not be negative")
         if size > MAX_CONTROL_BYTES:
-            from .metadata import SourceCapacityLimit
+            from .metadata import BackupControlFrameLimit
 
-            raise SourceCapacityLimit("Backup control frame exceeds safe memory bounds")
+            raise BackupControlFrameLimit("Backup control frame exceeds safe memory bounds")
         payload = bytearray()
         while len(payload) < size:
             chunk = await self.read(min(RECEIVE_CHUNK_BYTES, size - len(payload)))

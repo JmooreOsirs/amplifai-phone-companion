@@ -3,17 +3,19 @@ import Foundation
 enum SupportDiagnosticReporter {
     private static let endpoint = URL(string: "https://amplifai-database-engine.vercel.app/api/v1/companion-diagnostics")!
     static let reportCodes: Set<String> = [
-        "backup_host_space", "backup_password", "backup_stalled", "backup_no_file_progress", "backup_time_limit",
+        "backup_host_space", "backup_password", "backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed", "backup_stalled", "backup_no_file_progress", "backup_time_limit",
         "bridge_unavailable", "collection_failed", "connection_lost", "connection_timeout",
-        "device_backup_failed", "phone_connection", "source_capacity_limit", "trust_required",
+        "device_backup_failed", "phone_connection", "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit", "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit", "trust_required",
         "backup_control_invalid", "contacts_schema", "selected_payload_invalid", "selected_payload_missing",
+        "selected_payload_size", "selected_payload_identity", "selected_payload_file_type",
+        "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity",
         "unsupported_schema", "workspace_cleanup", "workspace_low_space", "workspace_size_limit",
         "workspace_unavailable", "workspace_unsafe",
     ]
 
     static func request(for code: String) -> URLRequest? {
         let fields = code.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        guard fields.count == 9, fields[0] == "A1", fields[1] == "26100806",
+        guard fields.count == 9, fields[0] == "A1", fields[1] == "26101223",
               fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil,
               ["connecting", "backup", "processing", "review"].contains(fields[3]),
               reportCodes.contains(fields[4]),

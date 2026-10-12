@@ -47,6 +47,7 @@ class _DirectoryHandleError(PermissionError):
         self.win32_code = win32_code
         self.requested_access = requested_access
         self.ancestor = ancestor
+        self.ancestor_index: int | None = None
         self.api_code = api_code  # 1: CreateFileW; 2: attribute readback.
         super().__init__(
             "Windows private storage owner or ACL is unsafe (native policy stage 15)"
@@ -242,9 +243,10 @@ class _NativeSecurity:
     ) -> object:
         # OPEN_REPARSE_POINT inspects the directory itself, not a junction target.
         # No FILE_SHARE_DELETE: the parent/root cannot be replaced while pinned.
-        # Ancestors need identity/attribute pins, not their security descriptor.
-        # Only the root requires READ_CONTROL for independent owner/DACL readback.
-        access = _FILE_READ_ATTRIBUTES | (0 if ancestor else _READ_CONTROL)
+        # Ancestors need attribute readback; only the root needs READ_CONTROL
+        # for independent owner/DACL validation. The disposable reduced-token
+        # fixture must have the actual app-style protected owner/DACL.
+        access = _FILE_READ_ATTRIBUTES if ancestor else _FILE_READ_ATTRIBUTES | _READ_CONTROL
         handle = self.kernel.CreateFileW(
             str(path), access, 0x03, None, 3, 0x02200000, None
         )
@@ -267,8 +269,12 @@ class _NativeSecurity:
     def pin_parents(self, path: Path, lifetime: ExitStack) -> None:
         # A final-component no-follow flag alone still traverses ancestor
         # junctions. Inspect and pin the whole chain before a root is admitted.
-        for ancestor in reversed(path.parents):
-            self.open_directory(ancestor, lifetime, ancestor=True)
+        for index, ancestor in enumerate(reversed(path.parents)):
+            try:
+                self.open_directory(ancestor, lifetime, ancestor=True)
+            except _DirectoryHandleError as failure:
+                failure.ancestor_index = index
+                raise
 
     def verify(self, handle: object, principals: tuple[object, ...]) -> None:
         owner, dacl, descriptor = _PTR(), _PTR(), _PTR()

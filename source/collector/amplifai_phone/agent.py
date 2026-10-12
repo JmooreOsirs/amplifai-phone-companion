@@ -14,10 +14,14 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TextIO
+from uuid import UUID
 
-from pymobiledevice3.exceptions import ConnectionTerminatedError, NotEnoughDiskSpaceError
+from pymobiledevice3.exceptions import (
+    ConnectionTerminatedError,
+    NotEnoughDiskSpaceError,
+)
 
-from .__main__ import review_capture
+from .__main__ import review_capture, review_snapshot
 from .backup_stream import DeviceBackupRejected
 from .backup_watchdog import (
     BackupCleanupIncomplete,
@@ -27,20 +31,69 @@ from .backup_watchdog import (
 )
 from .bridge import BridgeError, BridgeServer
 from .capture_runtime import run_local_capture
-from .ios_backup import IPhoneCapture, collect_iphone
+from .ios_backup import (
+    BackupEncryptionPreflightError, IPhoneCapture, collect_iphone,
+    inspect_backup_encryption,
+)
 from .metadata import (
     MAX_SELECTED_CONTACTS,
     BackupControlInvalid,
+    Contact,
     ContactsSchemaUnsupported,
+    Interaction,
     SelectedPayloadIntegrityError,
     SelectedPayloadMissing,
     SourceCapacityLimit,
     UnsupportedSchema,
 )
+from .record_store import RecordCollection, SelectionSnapshot
 from .workspace import WorkspaceError, abandoned_sessions, clear_abandoned
 
 MAX_COMMAND_BYTES = 600_000
+CONTACT_PAGE_SIZE = 200
+MAX_CONTACT_QUERY_LENGTH = 120
 MAX_PASSWORD_LENGTH = 512
+MAX_SAFE_BYTE_COUNT = 9_007_199_254_740_991
+
+
+def _payload_diagnostic_event(value: dict[str, object]) -> dict[str, object] | None:
+    """Only copyable local failure context; never a path, digest or source row."""
+    source = value.get("source")
+    component = value.get("component")
+    result = value.get("result")
+    if (type(source) is not str or source not in {"contacts", "calls", "messages"}
+            or type(component) is not str or component not in {"database", "wal", "shm"}
+            or type(result) is not str or result not in {"length_mismatch", "copy_failed"}
+            or type(value.get("encrypted")) is not bool):
+        return None
+    counts: dict[str, int | None] = {}
+    for output, original in (("declaredBytes", "manifest_bytes"),
+                             ("rawBytes", "raw_after_bytes"),
+                             ("copiedBytes", "copied_plaintext_bytes")):
+        amount = value.get(original)
+        if original == "raw_after_bytes" and amount is None:
+            amount = value.get("raw_before_bytes")
+        if amount is not None and (type(amount) is not int or not 0 <= amount <= MAX_SAFE_BYTE_COUNT):
+            return None
+        counts[output] = amount
+    present = value.get("producer_digest_present")
+    matched = value.get("producer_digest_matches")
+    if present is False:
+        producer = "absent"
+    elif matched is True:
+        producer = "matched"
+    elif matched is False:
+        producer = "mismatched"
+    else:
+        producer = "unknown"
+    sidecars = value.get("sidecars_absent")
+    return {
+        "kind": "selected-payload-diagnostic", "source": source,
+        "component": component, "result": result,
+        "encrypted": value["encrypted"], "producerDigest": producer,
+        "sidecars": "absent" if sidecars is True else "present" if sidecars is False else "unknown",
+        **counts,
+    }
 
 
 class CaptureCancelled(KeyboardInterrupt):
@@ -62,6 +115,72 @@ def _command(stream: TextIO) -> dict[str, object]:
     if not isinstance(value, dict):
         raise TypeError("Invalid command")
     return value
+
+
+def _contact_page(
+    contacts: tuple[Contact | Interaction, ...] | RecordCollection, query: object, cursor: object
+) -> dict[str, object]:
+    if (
+        not isinstance(query, str)
+        or not isinstance(cursor, int)
+        or isinstance(cursor, bool)
+    ):
+        raise TypeError("Invalid contact page request")
+    if len(query) > MAX_CONTACT_QUERY_LENGTH or not 0 <= cursor <= len(contacts):
+        raise ValueError("Invalid contact page request")
+    needle = query.strip().casefold()
+    page = []
+    next_cursor = None
+    if isinstance(contacts, RecordCollection):
+        candidates = contacts.page(query, cursor, CONTACT_PAGE_SIZE)
+    else:
+        candidates = ((position, contacts[position]) for position in range(cursor, len(contacts)))
+    for position, item in candidates:
+        if not isinstance(item, Contact):
+            raise TypeError("Invalid contact preview")
+        if needle not in item.name.casefold():
+            continue
+        if len(page) == CONTACT_PAGE_SIZE:
+            next_cursor = position
+            break
+        page.append(_contact_preview(item))
+    return {
+        "contacts": page,
+        "query": query,
+        "cursor": cursor,
+        "nextCursor": next_cursor,
+        "totalContacts": len(contacts),
+    }
+
+
+def _contact_preview(item: Contact) -> dict[str, object]:
+    return {
+        "id": item.source_id,
+        "name": item.name,
+        "phoneCount": len(item.phones),
+        "phoneEnds": [phone[-4:] for phone in item.phones],
+    }
+
+
+def _contact_ids(
+    contacts: tuple[Contact | Interaction, ...] | RecordCollection,
+    ids: object,
+    request_id: object,
+) -> dict[str, object]:
+    if (not isinstance(request_id, str) or
+            str(UUID(request_id)) != request_id or
+            not isinstance(ids, list) or not 1 <= len(ids) <= CONTACT_PAGE_SIZE or
+            any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in ids) or
+            len(set(ids)) != len(ids)):
+        raise ValueError("Invalid bounded contact inspection")
+    if isinstance(contacts, RecordCollection):
+        found = {item.source_id: item for item in contacts.selected_contacts(set(ids))}
+    else:
+        found = {item.source_id: item for item in contacts if isinstance(item, Contact) and item.source_id in ids}
+    if len(found) != len(ids):
+        raise ValueError("Changed contact inspection")
+    return {"requestId": request_id, "totalContacts": len(contacts),
+            "contacts": [_contact_preview(found[value]) for value in ids]}
 
 
 def _error_code(exc: BaseException) -> str:
@@ -97,18 +216,20 @@ def _error_code(exc: BaseException) -> str:
             }
             else "collection_failed"
         )
+    if isinstance(exc, BackupEncryptionPreflightError):
+        return exc.code
     if isinstance(exc, BackupControlInvalid):
         return "backup_control_invalid"
     if isinstance(exc, SelectedPayloadMissing):
         return "selected_payload_missing"
     if isinstance(exc, SelectedPayloadIntegrityError):
-        return "selected_payload_invalid"
+        return exc.code
     if isinstance(exc, ContactsSchemaUnsupported):
         return "contacts_schema"
     if isinstance(exc, UnsupportedSchema):
         return "unsupported_schema"
     if isinstance(exc, SourceCapacityLimit):
-        return "source_capacity_limit"
+        return exc.code
     if isinstance(exc, (BackupPasswordIsRequired, InvalidUnwrap)):
         return "backup_password"
     if isinstance(exc, PairingError):
@@ -139,6 +260,7 @@ def run_connect(
     source: TextIO,
     sink: TextIO,
     collector: Callable[..., Awaitable[IPhoneCapture]] = collect_iphone,
+    require_encrypted_backup: bool = False,
 ) -> int:
     _emit(sink, {"kind": "state", "state": "connecting"})
     capture_stage = "connecting"
@@ -175,35 +297,37 @@ def run_connect(
     def connection(transport: str) -> None:
         _emit(sink, {"kind": "connection", "transport": transport})
 
+    def payload_diagnostic(value: dict[str, object]) -> None:
+        event = _payload_diagnostic_event(value)
+        if event is not None:
+            _emit(sink, event)
+
     bridge: BridgeServer | None = None
-    selected_ids: set[int] | None = None
+    capture: IPhoneCapture | None = None
+    selected_ids: set[int] | SelectionSnapshot | None = None
     try:
-        capture = run_local_capture(
-            collector(
-                password_provider=password_provider,
-                progress_callback=progress,
-                connection_callback=connection,
-                transfer_callback=transfer,
-            )
-        )
+        collector_options: dict[str, object] = {
+            "password_provider": password_provider,
+            "progress_callback": progress,
+            "connection_callback": connection,
+            "transfer_callback": transfer,
+            "payload_diagnostic_callback": payload_diagnostic,
+        }
+        if require_encrypted_backup:
+            collector_options["require_encrypted_backup"] = True
+        capture = run_local_capture(collector(**collector_options))
         capture_stage = "review"
         _emit(
             sink,
             {
                 "kind": "capture",
-                "contacts": [
-                    {
-                        "id": item.source_id,
-                        "name": item.name,
-                        "phoneCount": len(item.phones),
-                        "phoneEnds": [phone[-4:] for phone in item.phones],
-                    }
-                    for item in capture.contacts.records
-                ],
+                **_contact_page(capture.contacts.records, "", 0),
                 "availableCalls": len(capture.calls.records),
                 "availableMessages": len(capture.messages.records),
                 "since": capture.since,
                 "missing": capture.missing_sources,
+                "backupEncrypted": capture.backup_encrypted,
+                "unavailableReasons": dict(capture.unavailable_reasons),
             },
         )
         while True:
@@ -214,9 +338,44 @@ def run_connect(
                 return 0
             if action == "revoke":
                 if bridge is not None:
-                    bridge.close()
+                    retained_state = bridge.close_for_repair()
+                    if retained_state is not None:
+                        _emit(sink, {"kind": "handoff", "state": retained_state,
+                                     "handoffId": bridge.handoff_id})
+                        continue
                     bridge = None
                 _emit(sink, {"kind": "state", "state": "pairing_revoked"})
+                continue
+            if action == "contacts":
+                scan_id = command.get("scanId")
+                if scan_id is not None and (set(command) != {"action", "query", "cursor", "scanId"}
+                                            or not isinstance(scan_id, str)
+                                            or str(UUID(scan_id)) != scan_id):
+                    raise ValueError("Invalid contact scan")
+                page = _contact_page(
+                    capture.contacts.records,
+                    command.get("query"),
+                    command.get("cursor"),
+                )
+                _emit(sink, {"kind": "contacts", **page,
+                             **({"scanId": scan_id} if scan_id is not None else {})})
+                continue
+            if action == "contact-ids":
+                if set(command) != {"action", "ids", "requestId"}:
+                    raise ValueError("Invalid bounded contact inspection")
+                page = _contact_ids(capture.contacts.records, command["ids"], command["requestId"])
+                _emit(sink, {"kind": "contact-ids", **page})
+                continue
+            if action == "destination-decision":
+                if (set(command) != {"action", "handoffId", "intentId", "approved"}
+                        or bridge is None or command.get("handoffId") != bridge.handoff_id
+                        or not isinstance(command.get("intentId"), str)
+                        or not isinstance(command.get("approved"), bool)
+                        or not bridge.approve_destination(command["intentId"], command["approved"])):
+                    _emit(sink, {"kind": "error", "code": "handoff_unconfirmed"})
+                    continue
+                _emit(sink, {"kind": "destination", "state": "approved" if command["approved"] else "denied",
+                             "handoffId": bridge.handoff_id, "intentId": command["intentId"]})
                 continue
             if action in {"handoff-status", "finish"}:
                 if (
@@ -237,18 +396,26 @@ def run_connect(
                     sink,
                     {"kind": "handoff", "state": state, "handoffId": bridge.handoff_id},
                 )
+                destination = bridge.pending_destination()
+                if destination is not None:
+                    _emit(sink, {"kind": "destination", "state": "pending", "handoffId": bridge.handoff_id,
+                                 **destination})
                 continue
             if action == "pair":
                 if selected_ids is None:
                     _emit(sink, {"kind": "error", "code": "selection"})
                     continue
                 if bridge is not None:
-                    bridge.close()
+                    retained_state = bridge.close_for_repair()
+                    if retained_state is not None:
+                        _emit(sink, {"kind": "handoff", "state": retained_state,
+                                     "handoffId": bridge.handoff_id})
+                        continue
                     bridge = None
                 try:
                     bridge = BridgeServer(capture, selected_ids)
                     bridge.start()
-                except (BridgeError, OSError):
+                except (BridgeError, OSError, ValueError):
                     if bridge is not None:
                         bridge.close()
                         bridge = None
@@ -266,11 +433,46 @@ def run_connect(
                     },
                 )
                 continue
+            if action == "review-page":
+                ids = command.get("ids")
+                review_id = command.get("reviewId")
+                cursor = command.get("cursor")
+                total = command.get("total")
+                try:
+                    if (set(command) != {"action", "ids", "reviewId", "cursor", "total"}
+                            or capture.record_store is None
+                            or not isinstance(ids, list) or not 0 < len(ids) <= 1000
+                            or not isinstance(cursor, int) or isinstance(cursor, bool) or cursor < 0
+                            or not isinstance(total, int) or isinstance(total, bool) or total < 1
+                            or not isinstance(review_id, str) or str(UUID(review_id)) != review_id):
+                        raise ValueError("Invalid selection page")
+                    if cursor == 0:
+                        if bridge is not None:
+                            retained_state = bridge.close_for_repair()
+                            if retained_state is not None:
+                                _emit(sink, {"kind": "handoff", "state": retained_state,
+                                             "handoffId": bridge.handoff_id})
+                                continue
+                            bridge = None
+                        selected_ids = None
+                    snapshot = capture.record_store.append_selection(review_id, cursor, ids, total)
+                except ValueError:
+                    _emit(sink, {"kind": "error", "code": "selection"})
+                    continue
+                _emit(sink, {"kind": "review-page", "reviewId": review_id,
+                             "nextCursor": cursor + len(ids)})
+                if snapshot is not None:
+                    selected_ids = snapshot
+                    _emit(sink, {"kind": "review", "reviewId": review_id,
+                                 **review_snapshot(capture, snapshot)})
+                continue
             if action != "review":
                 raise ValueError("Unexpected action")
             ids = command.get("ids")
+            review_id = command.get("reviewId")
             if (
-                not isinstance(ids, list)
+                not set(command) <= {"action", "ids", "reviewId"}
+                or not isinstance(ids, list)
                 or not 0 < len(ids) <= MAX_SELECTED_CONTACTS
                 or any(
                     not isinstance(item, int) or isinstance(item, bool) for item in ids
@@ -278,16 +480,38 @@ def run_connect(
             ):
                 _emit(sink, {"kind": "error", "code": "selection"})
                 continue
+            if review_id is not None:
+                try:
+                    if (
+                        not isinstance(review_id, str)
+                        or str(UUID(review_id)) != review_id
+                    ):
+                        raise ValueError("Invalid review binding")
+                except ValueError:
+                    _emit(sink, {"kind": "error", "code": "selection"})
+                    continue
+            if bridge is not None:
+                retained_state = bridge.close_for_repair()
+                if retained_state is not None:
+                    _emit(sink, {"kind": "handoff", "state": retained_state,
+                                 "handoffId": bridge.handoff_id})
+                    continue
+                bridge = None
+            selected_ids = None
             try:
                 review = review_capture(capture, ",".join(str(item) for item in ids))
             except ValueError:
                 _emit(sink, {"kind": "error", "code": "selection"})
                 continue
-            if bridge is not None:
-                bridge.close()
-                bridge = None
             selected_ids = set(ids)
-            _emit(sink, {"kind": "review", **review})
+            _emit(
+                sink,
+                {
+                    "kind": "review",
+                    **review,
+                    **({"reviewId": review_id} if review_id else {}),
+                },
+            )
     except CaptureCancelled:
         _emit(sink, {"kind": "state", "state": "cancelled"})
         return 130
@@ -295,8 +519,14 @@ def run_connect(
         event = _error_event(exc)
         if event["code"] in {
             "connection_lost", "device_backup_failed", "backup_host_space",
+            "backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed",
             "collection_failed", "backup_control_invalid", "selected_payload_missing",
             "selected_payload_invalid", "contacts_schema", "unsupported_schema",
+            "selected_payload_size", "selected_payload_identity", "selected_payload_file_type",
+            "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity",
+            "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit",
+            "backup_control_frame_limit", "backup_control_metadata_limit",
+            "backup_control_path_limit",
         }:
             event["stage"] = capture_stage
         device_failure = (
@@ -309,8 +539,12 @@ def run_connect(
         _emit(sink, event)
         return 1
     finally:
-        if bridge is not None:
-            bridge.close()
+        try:
+            if bridge is not None:
+                bridge.close()
+        finally:
+            if capture is not None:
+                capture.close()
 
 
 def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
@@ -344,6 +578,11 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
                 list_devices,
             )
             _emit(sink, {"kind": "runtime", "ready": True})
+        elif mode == "backup-encryption-status":
+            encrypted = run_local_capture(inspect_backup_encryption(sessions_root=root))
+            if type(encrypted) is not bool:
+                raise BackupEncryptionPreflightError("backup_encryption_unknown")
+            _emit(sink, {"kind": "backup-encryption-status", "backupEncrypted": encrypted})
         else:
             raise ValueError("Unsupported mode")
         return 0
@@ -356,13 +595,19 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
     except OSError:
         _emit(sink, {"kind": "error", "code": "workspace_unavailable"})
         return 1
+    except Exception as exc:
+        if mode != "backup-encryption-status":
+            raise
+        _emit(sink, _error_event(exc))
+        return 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "mode", choices=("connect", "inspect", "clear-residue", "runtime-check")
+        "mode", choices=("connect", "inspect", "clear-residue", "runtime-check", "backup-encryption-status")
     )
+    parser.add_argument("--require-encrypted-backup", action="store_true")
     args = parser.parse_args()
     if args.mode != "connect":
         return run_admin(args.mode, sys.stdout)
@@ -371,7 +616,7 @@ def main() -> int:
         raise CaptureCancelled()
 
     signal.signal(signal.SIGTERM, terminate)
-    return run_connect(sys.stdin, sys.stdout)
+    return run_connect(sys.stdin, sys.stdout, require_encrypted_backup=args.require_encrypted_backup)
 
 
 if __name__ == "__main__":

@@ -22,8 +22,12 @@ PACKAGE_SCRIPTS = (
     "build_and_run.sh", "build_portable_candidate.sh", "collect_portable_sources.py",
     "record_native_sources.py", "inventory_portable_helper.py", "extract_companion_notices.py",
     "render_companion_coverage.py", "scan_companion_bundle.py", "companion_release_preflight.sh",
-    "package_companion_review.py", "test_companion_review_package.py",
+    "package_companion_review.py", "test_companion_review_package.py", "package_macos_dmg.sh",
     "collect_companion_native_closure.py", "verify_frozen_metadata.py",
+)
+LEGAL_FILES = (
+    "LICENSE", "COPYRIGHT", "SOURCE-README.md", "THIRD-PARTY-NOTICES.txt",
+    "source-package-file-manifest.json",
 )
 
 
@@ -61,16 +65,44 @@ def verify_app(app: Path, inventory: dict) -> int:
     }
     expected.update({record["path"]: record["sha256"] for record in inventory["outer_app_file_hashes"]})
     actual = set()
+    actual_symlinks = {}
     for path in app.rglob("*"):
         if path.is_symlink():
-            raise ValueError("minimal app contains an unexpected symlink")
-        if path.is_file():
+            target = path.readlink()
+            if target.is_absolute() or not path.resolve(strict=True).is_relative_to(app.resolve()):
+                raise ValueError("app symlink escapes its bundle")
+            actual_symlinks[path.relative_to(app).as_posix()] = str(target)
+        elif path.is_file():
             actual.add(path.relative_to(app).as_posix())
     if actual != expected.keys():
         raise ValueError("app file set differs from the selected inventory")
+    expected_symlinks = {
+        record["path"]: record["target"] for record in inventory.get("outer_app_symlinks", [])
+    }
+    if actual_symlinks != expected_symlinks:
+        raise ValueError("app symlink set differs from the selected inventory")
     for relative, expected_hash in expected.items():
         verify_file(app, {"path": relative, "sha256": expected_hash})
-    return len(expected)
+    return len(expected) + len(expected_symlinks)
+
+
+def verify_legal_offer(app: Path, repo: Path) -> None:
+    legal = app / "Contents/Resources/Legal"
+    for name in LEGAL_FILES:
+        path = contained_file(legal, name)
+        if path.stat().st_size == 0:
+            raise ValueError(f"empty in-app legal offer: {name}")
+    for name, source in (("LICENSE", "COMPANION-LICENSE.txt"),
+                         ("COPYRIGHT", "COMPANION-COPYRIGHT.txt"),
+                         ("SOURCE-README.md", "COMPANION-SOURCE-RELEASE-README.md")):
+        if digest(legal / name) != digest(repo / "docs" / source):
+            raise ValueError(f"in-app legal offer differs from source: {name}")
+    manifest = json.loads((legal / "source-package-file-manifest.json").read_text())
+    if not isinstance(manifest.get("files"), list) or not any(
+        record.get("path", "").startswith("source/collector/amplifai_phone/")
+        for record in manifest["files"]
+    ):
+        raise ValueError("in-app source offer manifest has no collector files")
 
 
 def authored_paths(repo: Path) -> list[Path]:
@@ -115,6 +147,7 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         raise ValueError("output must be a new directory; existing packages are never replaced")
     inventory = json.loads(inventory_path.read_text())
     app_files = verify_app(app, inventory)
+    verify_legal_offer(app, repo)
     sources = json.loads(contained_file(evidence, "third_party/source-archive-manifest.json").read_text())
     native = json.loads(contained_file(evidence, "third_party/native-source-manifest.json").read_text())
     notices = json.loads(contained_file(evidence, "third_party/notice-extraction-manifest.json").read_text())
@@ -132,6 +165,22 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
     native_notices = [record for record in notices["native_extracted"] if record["component"] in native_names]
     notice_records = [*notices["extracted"], *native_notices]
     notice_roots = {record["output"]: evidence / "third_party" for record in notice_records}
+    sparkle_checkout = repo / "collector/macos/.build/checkouts/Sparkle"
+    sparkle_pin = json.loads((repo / "collector/macos/Package.resolved").read_text())["pins"]
+    sparkle = next((pin for pin in sparkle_pin if pin["identity"] == "sparkle"), None)
+    if sparkle is None or sparkle["state"]["version"] != "2.10.0":
+        raise ValueError("pinned Sparkle 2.10.0 source is required")
+    sparkle_revision = sparkle["state"]["revision"]
+    checkout_revision = subprocess.check_output(
+        ["git", "-C", str(sparkle_checkout), "rev-parse", "HEAD"], text=True
+    ).strip()
+    if checkout_revision != sparkle_revision:
+        raise ValueError("Sparkle source checkout differs from Package.resolved")
+    sparkle_license = contained_file(sparkle_checkout, "LICENSE")
+    if digest(sparkle_license) != digest(contained_file(
+        repo, "collector/macos/.build/artifacts/sparkle/Sparkle/LICENSE"
+    )):
+        raise ValueError("Sparkle binary and pinned source license differ")
     for closure in native_closures:
         extra = json.loads(contained_file(closure, "native-source-manifest.json").read_text())
         extracted = json.loads(contained_file(closure, "notice-extraction-manifest.json").read_text())
@@ -227,6 +276,16 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         ],
     }
     output.mkdir(parents=True, exist_ok=False)
+    sparkle_archive = output / "third_party/source_archives/Sparkle-2.10.0-source.tar"
+    sparkle_archive.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "-C", str(sparkle_checkout), "archive", "--format=tar",
+                    "--output", str(sparkle_archive), sparkle_revision], check=True)
+    sparkle_record = {"name": "Sparkle", "version": "2.10.0", "revision": sparkle_revision,
+                      "filename": sparkle_archive.name, "sha256": digest(sparkle_archive),
+                      "license_sha256": digest(sparkle_license)}
+    report["sparkle"] = sparkle_record
+    report["native_source_archives"] += 1
+    report["notice_files"] += 1
     for path in authored:
         copy_file(path, output / "source" / path.relative_to(repo))
     for record in archive_records:
@@ -240,10 +299,16 @@ def assemble(repo: Path, app: Path, inventory_path: Path, evidence: Path, output
         notice_text.append(f"\n--- {record.get('distribution', record.get('component'))}: {record['output']} ---\n"
                            f"Source: {record.get('source_archive', record.get('source_url'))}; SHA-256: {record['sha256']}\n")
         notice_text.append(payload.decode("utf-8", errors="replace") + "\n")
+    notice_text.append(f"\n--- Sparkle 2.10.0: LICENSE ---\nSource: {sparkle_archive.name}; SHA-256: {sparkle_record['license_sha256']}\n")
+    notice_text.append(sparkle_license.read_text() + "\n")
     (output / "THIRD-PARTY-NOTICES.txt").write_text("".join(notice_text))
+    if digest(app / "Contents/Resources/Legal/THIRD-PARTY-NOTICES.txt") != digest(output / "THIRD-PARTY-NOTICES.txt"):
+        raise ValueError("in-app notices differ from matching source package")
     write_json(output / "third_party/source-archive-manifest.json", sources)
     write_json(output / "third_party/native-source-manifest.json", {**native, "records": native_records})
     write_json(output / "third_party/notice-extraction-manifest.json", {**notices, "native_extracted": native_notices})
+    write_json(output / "third_party/sparkle-source-manifest.json", sparkle_record)
+    copy_file(sparkle_license, output / "third_party/notices/Sparkle-LICENSE")
     copy_file(inventory_path, output / "third_party/helper-inventory.json")
     for name, path in sboms.items():
         copy_file(path, output / "third_party/artifact-sboms" / name)

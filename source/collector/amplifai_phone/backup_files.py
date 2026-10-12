@@ -28,6 +28,8 @@ def copy_backup_file(
     workspace: SessionWorkspace | None = None,
     bound_callback: Callable[[], None] | None = None,
     progress_callback: Callable[[int], None] | None = None,
+    raw_chunk_callback: Callable[[bytes], None] | None = None,
+    copied_chunk_callback: Callable[[bytes], None] | None = None,
 ) -> int:
     decryptor = unpadder = None
     if keybag is not None:
@@ -61,6 +63,8 @@ def copy_backup_file(
             if stream.write(payload) != len(payload):
                 raise OSError(errno.EIO, "Incomplete parsing copy")
         count += len(payload)
+        if copied_chunk_callback is not None:
+            copied_chunk_callback(payload)
         if progress_callback is not None:
             progress_callback(len(payload))
 
@@ -70,7 +74,9 @@ def copy_backup_file(
         # the entire app-owned ancestor path before reaching this seam.
         source_handle = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         if not stat.S_ISREG(os.fstat(source_handle).st_mode):
-            raise SelectedPayloadIntegrityError("Selected payload is not a regular file")
+            raise SelectedPayloadIntegrityError(
+                "Selected payload is not a regular file", code="selected_payload_file_type"
+            )
         reader = os.fdopen(source_handle, "rb")
         source_handle = None
         with reader:
@@ -84,6 +90,8 @@ def copy_backup_file(
                 destination_handle = None
             with writer:
                 while payload := reader.read(RECEIVE_CHUNK_BYTES):
+                    if raw_chunk_callback is not None:
+                        raw_chunk_callback(payload)
                     if decryptor is not None:
                         payload = decryptor.update(payload)
                     if unpadder is not None:
@@ -96,7 +104,8 @@ def copy_backup_file(
                             tail = unpadder.update(tail) + unpadder.finalize()
                     except ValueError:
                         raise SelectedPayloadIntegrityError(
-                            "Encrypted selected payload was incomplete or invalid"
+                            "Encrypted selected payload was incomplete or invalid",
+                            code="selected_payload_crypto",
                         ) from None
                     write(writer, tail)
         return count

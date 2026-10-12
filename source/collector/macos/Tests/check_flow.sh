@@ -6,6 +6,8 @@ trap 'if [ -f "$native_temp/CollectorFlowChecks" ]; then unlink "$native_temp/Co
 trap 'exit 130' HUP INT TERM
 swiftc -parse-as-library -target arm64-apple-macos14.0 \
     "$native_root/collector/macos/Sources/Services/CollectorModel.swift" \
+    "$native_root/collector/macos/Sources/Services/ContactSuggestions.swift" \
+    "$native_root/collector/macos/Sources/Services/ContactWorkspace.swift" \
     "$native_root/collector/macos/Sources/Services/SupportDiagnosticReporter.swift" \
     "$native_root/collector/macos/Sources/Models/AgentEvent.swift" \
     "$native_root/collector/macos/Tests/CollectorFlowChecks.swift" \

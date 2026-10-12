@@ -124,7 +124,9 @@ class CaptureRuntimeTest(unittest.TestCase):
                     text=True,
                     timeout=0.5,
                 )
-            output = hung.exception.stdout.decode()
+            output = hung.exception.stdout
+            if isinstance(output, bytes):
+                output = output.decode()
             self.assertIn('"phase": "retained"', output)
             self.assertNotIn('"kind": "capture"', output)
             sessions = list(root.glob("session-*"))
@@ -156,7 +158,8 @@ class CaptureRuntimeTest(unittest.TestCase):
             sessions = list(root.glob("session-*"))
             self.assertEqual(len(sessions), 1)
             self.assertTrue((sessions[0] / SESSION_MARKER).is_file())
-            self.assertEqual(sessions[0].stat().st_mode & 0o077, 0)
+            if os.name != "nt":
+                self.assertEqual(sessions[0].stat().st_mode & 0o077, 0)
             self.assertEqual(result.stderr, "")
 
     def test_normal_success_closes_tasks_and_async_generators(self) -> None:

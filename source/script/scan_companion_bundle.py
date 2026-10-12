@@ -43,14 +43,21 @@ def main() -> None:
     source_manifest = json.loads((args.bundle / "third_party/source-archive-manifest.json").read_text())
     native_manifest = json.loads((args.bundle / "third_party/native-source-manifest.json").read_text())
     notice_manifest = json.loads((args.bundle / "third_party/notice-extraction-manifest.json").read_text())
+    sparkle_manifest = json.loads((args.bundle / "third_party/sparkle-source-manifest.json").read_text())
     expected_archives = {
         record["filename"]: record["sha256"]
         for record in [*source_manifest["records"], *native_manifest["records"]]
     }
+    if sparkle_manifest.get("name") != "Sparkle" or sparkle_manifest.get("version") != "2.10.0":
+        raise ValueError("unexpected Sparkle source manifest")
+    if sparkle_manifest["filename"] in expected_archives:
+        raise ValueError("duplicate Sparkle source archive")
+    expected_archives[sparkle_manifest["filename"]] = sparkle_manifest["sha256"]
     expected_notices = {
         f"third_party/{record['output']}": record["sha256"]
         for record in [*notice_manifest["extracted"], *notice_manifest["native_extracted"]]
     }
+    expected_notices["third_party/notices/Sparkle-LICENSE"] = sparkle_manifest["license_sha256"]
     findings: list[str] = []
     scanned_text = 0
     files = sorted(path for path in args.bundle.rglob("*") if path.is_file())
@@ -86,7 +93,7 @@ def main() -> None:
             scanned_text += 1
             if SECRET.search(path.read_bytes()):
                 findings.append(f"possible_secret:{relative}")
-    if len(expected_archives) != len(source_manifest["records"]) + len(native_manifest["records"]):
+    if len(expected_archives) != len(source_manifest["records"]) + len(native_manifest["records"]) + 1:
         findings.append("duplicate_archive_filename_in_manifests")
     present = {path.name for path in (args.bundle / "third_party/source_archives").iterdir() if path.is_file()}
     for filename in expected_archives.keys() - present:
