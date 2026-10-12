@@ -1,0 +1,119 @@
+name: Intel Mac build and qualification
+
+on:
+  push:
+    branches: [codex/macos-intel-support]
+  workflow_dispatch:
+    inputs:
+      keep_candidate:
+        description: Keep the unsigned build as a draft GitHub release (no production publish)
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-intel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  intel:
+    # Standard runner on this public fork: no larger/paid runner, no Homebrew.
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    permissions:
+      contents: write # fork prerelease, or an explicitly requested draft only
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      AMPLIFAI_TARGET_ARCH: x86_64
+      RUSTUP_TOOLCHAIN: '1.98.0'
+      PYTHONNOUSERSITE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify native Intel runner and prepare pinned Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          sw_vers
+          swift --version
+          mkdir -p "$RUNNER_TEMP/intel-python"
+          curl --fail --location --retry 3 'https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-x86_64-apple-darwin-install_only_stripped.tar.gz' -o "$RUNNER_TEMP/intel-python/python.tar.gz"
+          echo "fb3187d95334813b88940db0f1ca57b84cedfd552739c3a5771c3ea0e49988c9  $RUNNER_TEMP/intel-python/python.tar.gz" | shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/intel-python/python.tar.gz" -C "$RUNNER_TEMP/intel-python"
+          echo "$RUNNER_TEMP/intel-python/python/bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.98.0 --profile minimal
+          rustc --version
+      - name: Prepare exact Intel dependency wheels
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import platform,sys; assert platform.machine()=="x86_64"; assert sys.version_info[:3]==(3,12,15)'
+          python3 source/script/prepare_intel_dependencies.py --output-dir "$RUNNER_TEMP/intel-deps"
+          python3 -m venv "$RUNNER_TEMP/intel-venv"
+          "$RUNNER_TEMP/intel-venv/bin/python" -m pip install --no-index --find-links "$RUNNER_TEMP/intel-deps/wheelhouse" --require-hashes -r "$RUNNER_TEMP/intel-deps/runtime-requirements.lock"
+          echo "$RUNNER_TEMP/intel-venv/bin" >> "$GITHUB_PATH"
+      - name: Collect exact Intel Python source and notices
+        shell: bash
+        run: |
+          set -euo pipefail
+          python source/script/collect_intel_python_sources.py --runtime-archive "$RUNNER_TEMP/intel-python/python.tar.gz" --output-dir "$RUNNER_TEMP/intel-python-sources" --reuse-source-dir "$RUNNER_TEMP/intel-deps/source-inputs"
+      - name: Test build guards and source collection regressions
+        shell: bash
+        env:
+          PYTHONPATH: source/collector:source/collector/tests:source/script
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s source/script -p 'test_*intel*.py' -v
+          python source/script/test_macos_architecture.py -v
+          python -m unittest test_metadata test_ios_backup test_agent test_bridge test_bridge_ack test_sqlite_size_compat test_sqlite_messages_size_compat test_sqlite_encrypted_size_compat test_nonfinite_duration_pipeline test_workspace test_backup_capacity test_backup_stream test_backup_watchdog -v
+      - name: Build complete Intel app and audit every Mach-O component
+        shell: bash
+        run: |
+          set -euo pipefail
+          python source/script/build_macos_intel_candidate.py --output "$RUNNER_TEMP/intel-build" --dependency-receipt "$RUNNER_TEMP/intel-deps/receipt.json" --python-sources "$RUNNER_TEMP/intel-python-sources"
+      - name: Run native flow, updater refusal, and actual frozen worker checks
+        shell: bash
+        env:
+          PYTHONPATH: source/collector:source/collector/tests
+        run: |
+          set -euo pipefail
+          sh source/collector/macos/Tests/check_flow.sh
+          sh source/collector/macos/Tests/check_updater.sh
+          helper="$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app/Contents/Resources/helper/amplifai-agent"
+          python source/collector/tests/qualify_frozen_encrypted_worker.py --helper "$helper" > "$RUNNER_TEMP/intel-build/frozen-worker-receipt.json"
+          python source/script/verify_frozen_metadata.py --helper "$helper" --expected-helper-sha256 "$(shasum -a 256 "$helper" | cut -d ' ' -f 1)" --tests source/collector/tests --capacity-tests > "$RUNNER_TEMP/intel-build/frozen-metadata-receipt.json"
+      - name: Package exact build and corresponding source for Jeff
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/intel-delivery"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app" "$RUNNER_TEMP/intel-delivery/AMPLIFai-Phone-Intel-rc23-candidate.zip"
+          cp "$RUNNER_TEMP/intel-build/"*.json "$RUNNER_TEMP/intel-delivery/"
+          cp "$RUNNER_TEMP/intel-deps/receipt.json" "$RUNNER_TEMP/intel-delivery/dependency-receipt.json"
+          mkdir -p "$RUNNER_TEMP/intel-source"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/intel-source"
+          cp -R "$RUNNER_TEMP/intel-deps/source-inputs" "$RUNNER_TEMP/intel-source/intel-dependency-source-inputs"
+          cp -R "$RUNNER_TEMP/intel-python-sources" "$RUNNER_TEMP/intel-source/intel-python-source-inputs"
+          tar -czf "$RUNNER_TEMP/intel-delivery/AMPLIFai-Intel-Build-Source.tar.gz" -C "$RUNNER_TEMP" intel-source
+          cd "$RUNNER_TEMP/intel-delivery"
+          shasum -a 256 ./* > SHA256SUMS
+      - name: Retain candidate without changing production
+        if: github.repository == 'bac1876/amplifai-phone-companion' || (github.event_name == 'workflow_dispatch' && inputs.keep_candidate)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_AS_DRAFT: ${{ github.repository != 'bac1876/amplifai-phone-companion' }}
+        run: |
+          set -euo pipefail
+          tag="intel-rc23-build-${GITHUB_SHA:0:12}"
+          if [ "$KEEP_AS_DRAFT" = true ]; then
+            release_mode=(--draft)
+          else
+            release_mode=(--prerelease)
+          fi
+          gh release create "$tag" "$RUNNER_TEMP/intel-delivery/"* --target "$GITHUB_SHA" "${release_mode[@]}" --title 'Intel Mac RC23 build for signing and device testing' --notes 'Ad-hoc signed Intel build from published RC23 source. Native Intel build, dependency/architecture/minimum-load-command checks and fictional regression tests passed. Not Developer ID signed or notarized. Physical Intel macOS 14, real iPhone collection and hosted account save/report remain separate acceptance checks. This does not change the official website, ARM release or updater. Corresponding build source and receipts are attached; original third-party source is linked from docs/INTEL-RC23-BASELINE.json.'

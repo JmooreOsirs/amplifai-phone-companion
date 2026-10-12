@@ -5,7 +5,7 @@ import Sparkle
 @MainActor
 final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     enum State: Equatable {
-        case manualOnly, checking, current, unavailable, available(String), deferred(String?), installing, failed
+        case updatesDisabled, manualOnly, checking, current, unavailable, available(String), deferred(String?), installing, failed
     }
 
     @Published private(set) var state: State = .manualOnly
@@ -14,12 +14,34 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     private var controller: SPUStandardUpdaterController?
     private var availableVersion: String?
     private var postponedInstall: (() -> Void)?
+    let publishedUpdatesEnabled: Bool
+
+    // The existing signed feed contains Apple Silicon releases. Intel candidates
+    // must not contact it or schedule one of its installers. Enable Intel updates
+    // only after a separate, architecture-qualified signed feed is provided.
+    static var supportsPublishedUpdates: Bool {
+        #if arch(arm64)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    init(enablePublishedUpdates: Bool = true) {
+        publishedUpdatesEnabled = Self.supportsPublishedUpdates && enablePublishedUpdates
+        super.init()
+        if !publishedUpdatesEnabled { state = .updatesDisabled }
+    }
 
     var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
     }
 
     func startIfNeeded(model: CollectorModel) {
+        guard publishedUpdatesEnabled else {
+            state = .updatesDisabled
+            return
+        }
         guard controller == nil else { return }
         bind(model: model)
         let updater = SPUStandardUpdaterController(
@@ -46,6 +68,10 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     func checkNow() {
+        guard publishedUpdatesEnabled else {
+            state = .updatesDisabled
+            return
+        }
         guard model?.canInstallUpdate == true else {
             state = .deferred(availableVersion)
             return
@@ -56,6 +82,10 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     @discardableResult
     func postponeInstallIfNeeded(version: String, handler: @escaping () -> Void) -> Bool {
+        guard publishedUpdatesEnabled else {
+            state = .updatesDisabled
+            return true
+        }
         availableVersion = version
         postponedInstall = handler
         state = .deferred(version)
@@ -64,6 +94,11 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     func resumeIfSafe() {
+        guard publishedUpdatesEnabled else {
+            postponedInstall = nil
+            state = .updatesDisabled
+            return
+        }
         guard let model, model.canInstallUpdate else {
             if let availableVersion { state = .deferred(availableVersion) }
             return
@@ -79,17 +114,20 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        guard publishedUpdatesEnabled else { return }
         availableVersion = item.displayVersionString
         state = model?.canInstallUpdate == true ? .available(item.displayVersionString) : .deferred(item.displayVersionString)
     }
 
     func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: any Error) {
+        guard publishedUpdatesEnabled else { return }
         availableVersion = nil
         model?.endUpdateInstallation()
         state = Self.noUpdateState(error)
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        guard publishedUpdatesEnabled else { return }
         guard let error else { model?.endUpdateInstallation(); return }
         postponedInstall = nil
         model?.endUpdateInstallation()

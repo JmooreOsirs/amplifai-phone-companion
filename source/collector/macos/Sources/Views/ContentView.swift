@@ -166,11 +166,13 @@ struct ContentView: View {
                 Text(updateStatus)
                     .font(.custom("Arial", size: 16))
                     .foregroundStyle(Brand.body)
-                Link("Open signed Mac download guide", destination: URL(string: "https://amplifai-database-engine.vercel.app/phone")!)
-                    .buttonStyle(SecondaryButton())
-                Button("Check for updates") { updater.checkNow() }
-                    .buttonStyle(SecondaryButton())
-                    .disabled(!model.canInstallUpdate || updater.state == .checking || updater.state == .installing)
+                if updater.publishedUpdatesEnabled {
+                    Link("Open signed Mac download guide", destination: URL(string: "https://amplifai-database-engine.vercel.app/phone")!)
+                        .buttonStyle(SecondaryButton())
+                    Button("Check for updates") { updater.checkNow() }
+                        .buttonStyle(SecondaryButton())
+                        .disabled(!model.canInstallUpdate || updater.state == .checking || updater.state == .installing)
+                }
             }
         }
         .panel()
@@ -185,6 +187,7 @@ struct ContentView: View {
 
     private var updateStatus: String {
         switch updater.state {
+        case .updatesDisabled: return "Updates are not available for this Intel test build. Ask the person running your test for an Intel-compatible update."
         case .manualOnly: return "Automatic update checks are off. Keep using this version, or use the signed Mac download guide when ready."
         case .checking: return "Checking the signed update feed. Your current app remains available."
         case .current: return "No newer compatible update was found."
@@ -515,6 +518,15 @@ struct ContentView: View {
         ]
     }
 
+    private var collectionSystemRequirements: String {
+        #if arch(x86_64)
+        let computer = "an Intel Mac"
+        #else
+        let computer = "an Apple M-series Mac"
+        #endif
+        return "Requires \(computer) with macOS 14 or later, a data-capable USB cable and enough Mac storage for selected databases, parsing copies and a further 2 GiB reserve. Internet is needed later for diagnostic delivery, browser handoff and account save; the USB backup runs locally."
+    }
+
     private var collectionConsentStep: some View {
         VStack(alignment: .leading, spacing: 12) {
             consentFact("externaldrive", "This Mac temporarily receives full backup bytes, including unrelated data and message content. Unselected bytes are discarded.")
@@ -526,7 +538,7 @@ struct ContentView: View {
             .buttonStyle(SecondaryButton())
             if showingCollectionDetails {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Requires an Apple M-series Mac with macOS 14 or later, a data-capable USB cable and enough Mac storage for selected databases, parsing copies and a further 2 GiB reserve. Internet is needed later for diagnostic delivery, browser handoff and account save; the USB backup runs locally.")
+                    Text(collectionSystemRequirements)
                     Text("The local review can include phone numbers, dates, participants, call duration and message transport/direction. Physical source coverage varies. Changing Finder encryption after a collection requires another owner-approved capture.")
                     Text("This approval permits one local collection. It does not approve Apple's Trust prompt, supply a password, authorize browser sharing, or save account data. Browser transfer and optional source saves require separate confirmation.")
                     Text("Safe diagnostics contain build, random reference, failure category and stage, elapsed time, byte counts and optional numeric device status. They exclude phone records, backup files, paths and raw errors. Cleanup is attempted; marked residue must be inspected here.")

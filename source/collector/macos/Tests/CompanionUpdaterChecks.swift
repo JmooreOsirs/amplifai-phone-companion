@@ -5,6 +5,14 @@ import Sparkle
 @MainActor
 struct CompanionUpdaterChecks {
     static func main() {
+        disabledUpdatesCannotContactFeedOrInstall()
+        #if arch(x86_64)
+        let intelUpdater = CompanionUpdater()
+        precondition(!intelUpdater.publishedUpdatesEnabled && intelUpdater.state == .updatesDisabled,
+                     "Intel builds must never enable the Apple Silicon feed")
+        print("Intel updater is isolated from the Apple Silicon feed and installer")
+        return
+        #else
         let model = CollectorModel()
         let updater = CompanionUpdater()
         updater.bind(model: model)
@@ -50,5 +58,24 @@ struct CompanionUpdaterChecks {
         precondition(noUpdate(nil) == .failed)
         precondition(CompanionUpdater.noUpdateState(NSError(domain: NSURLErrorDomain, code: 1001)) == .failed)
         print("Mac updater deferral, install-on-quit and no-update reason checks passed")
+        #endif
+    }
+
+    private static func disabledUpdatesCannotContactFeedOrInstall() {
+        let model = CollectorModel()
+        let updater = CompanionUpdater(enablePublishedUpdates: false)
+        precondition(!updater.publishedUpdatesEnabled && updater.state == .updatesDisabled)
+        updater.startIfNeeded(model: model)
+        updater.checkNow()
+        precondition(updater.state == .updatesDisabled,
+                     "Unsupported builds must not create a controller or begin a manual check")
+        var installCalls = 0
+        updater.bind(model: model)
+        updater.postponeInstallIfNeeded(version: "arm64-example") { installCalls += 1 }
+        updater.scheduleInstallOnQuit(version: "arm64-example") { installCalls += 1 }
+        updater.resumeIfSafe()
+        precondition(installCalls == 0 && !model.updateInstallationInProgress,
+                     "Neither deferred nor quit-time installation may replace an Intel candidate")
+        precondition(updater.state == .updatesDisabled)
     }
 }

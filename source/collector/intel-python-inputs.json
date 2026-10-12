@@ -1,0 +1,467 @@
+{
+  "schema": 1,
+  "python_version": "3.12.15",
+  "target_triple": "x86_64-apple-darwin",
+  "release": "20261009",
+  "runtime": {
+    "filename": "cpython-3.12.15+20261009-x86_64-apple-darwin-install_only_stripped.tar.gz",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-x86_64-apple-darwin-install_only_stripped.tar.gz",
+    "sha256": "fb3187d95334813b88940db0f1ca57b84cedfd552739c3a5771c3ea0e49988c9"
+  },
+  "provider_source": {
+    "name": "python-build-standalone",
+    "version": "ccc07c40c2731bfb459c119f2388f65a5a470de6",
+    "filename": "python-build-standalone-ccc07c40c2731bfb459c119f2388f65a5a470de6.tar.gz",
+    "url": "https://codeload.github.com/astral-sh/python-build-standalone/tar.gz/ccc07c40c2731bfb459c119f2388f65a5a470de6",
+    "sha256": "c9780019f37ffdf7ebc66a9c101d1718db685e4d0d9e192db64e1533245fa828"
+  },
+  "metadata_evidence": {
+    "full_archive_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-x86_64-apple-darwin-pgo%2Blto-full.tar.zst",
+    "full_archive_sha256": "7c8bc24113d86ec2ffdb4fa2a48d730100daf3dd1bc6631cb6af0adbca9bfaa1",
+    "metadata_member": "python/PYTHON.json",
+    "metadata_sha256": "39548163006ead5726f451e8660a7045b2edadad7db54e6750469fc154291922",
+    "audit_note": "Exact full archive and metadata were inspected during manifest authoring. The collector verifies the install-only archive, provider source and source inputs; it does not redownload the full archive.",
+    "python_version": "3.12.15",
+    "target_triple": "x86_64-apple-darwin",
+    "build_options": "pgo+lto",
+    "apple_sdk_deployment_target": "10.15",
+    "linked_extensions": {
+      "_bz2": [
+        {
+          "links": [
+            {
+              "name": "bz2",
+              "path_static": "build/lib/libbz2.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.bzip2.txt"
+          ]
+        }
+      ],
+      "_ctypes": [
+        {
+          "links": [
+            {
+              "name": "dl",
+              "system": true
+            },
+            {
+              "name": "ffi",
+              "path_static": "build/lib/libffi.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.libffi.txt"
+          ]
+        }
+      ],
+      "_curses": [
+        {
+          "links": [
+            {
+              "name": "ncurses",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.ncurses.txt"
+          ]
+        }
+      ],
+      "_curses_panel": [
+        {
+          "links": [
+            {
+              "name": "ncurses",
+              "system": true
+            },
+            {
+              "name": "panel",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.ncurses.txt"
+          ]
+        }
+      ],
+      "_decimal": [
+        {
+          "links": [
+            {
+              "name": "mpdec",
+              "path_static": "build/lib/libmpdec.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.mpdecimal.txt"
+          ]
+        }
+      ],
+      "_hashlib": [
+        {
+          "links": [
+            {
+              "name": "crypto",
+              "path_static": "build/lib/libcrypto.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.openssl-1.1.txt",
+            "licenses/LICENSE.openssl-3.txt"
+          ]
+        }
+      ],
+      "_lzma": [
+        {
+          "links": [
+            {
+              "name": "lzma",
+              "path_static": "build/lib/liblzma.a"
+            },
+            {
+              "name": "pthread",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.liblzma.txt"
+          ]
+        }
+      ],
+      "_scproxy": [
+        {
+          "links": [
+            {
+              "framework": true,
+              "name": "CoreFoundation"
+            },
+            {
+              "framework": true,
+              "name": "SystemConfiguration"
+            }
+          ],
+          "license_paths": []
+        }
+      ],
+      "_sqlite3": [
+        {
+          "links": [
+            {
+              "name": "sqlite3",
+              "path_static": "build/lib/libsqlite3.a"
+            },
+            {
+              "name": "z",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.sqlite.txt",
+            "licenses/LICENSE.zlib-ng.txt",
+            "licenses/LICENSE.zlib.txt"
+          ]
+        }
+      ],
+      "_ssl": [
+        {
+          "links": [
+            {
+              "name": "crypto",
+              "path_static": "build/lib/libcrypto.a"
+            },
+            {
+              "name": "ssl",
+              "path_static": "build/lib/libssl.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.openssl-1.1.txt",
+            "licenses/LICENSE.openssl-3.txt"
+          ]
+        }
+      ],
+      "_tkinter": [
+        {
+          "links": [
+            {
+              "framework": true,
+              "name": "CoreFoundation"
+            },
+            {
+              "name": "pthread",
+              "system": true
+            },
+            {
+              "name": "tcl9.0",
+              "system": true
+            },
+            {
+              "name": "tcl9tk9.0",
+              "system": true
+            },
+            {
+              "name": "tclstub",
+              "path_static": "build/lib/libtclstub.a"
+            },
+            {
+              "name": "tkstub",
+              "path_static": "build/lib/libtkstub.a"
+            },
+            {
+              "name": "z",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.tcl.txt",
+            "licenses/LICENSE.zlib-ng.txt",
+            "licenses/LICENSE.zlib.txt"
+          ]
+        }
+      ],
+      "_uuid": [
+        {
+          "links": [
+            {
+              "name": "uuid",
+              "path_static": "build/lib/libuuid.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.libuuid.txt"
+          ]
+        }
+      ],
+      "binascii": [
+        {
+          "links": [
+            {
+              "name": "z",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.zlib-ng.txt",
+            "licenses/LICENSE.zlib.txt"
+          ]
+        }
+      ],
+      "pyexpat": [
+        {
+          "links": [
+            {
+              "name": "expat",
+              "path_static": "build/lib/libexpat.a"
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.expat.txt"
+          ]
+        }
+      ],
+      "readline": [
+        {
+          "links": [
+            {
+              "name": "edit",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.libedit.txt"
+          ]
+        }
+      ],
+      "zlib": [
+        {
+          "links": [
+            {
+              "name": "z",
+              "system": true
+            }
+          ],
+          "license_paths": [
+            "licenses/LICENSE.zlib-ng.txt",
+            "licenses/LICENSE.zlib.txt"
+          ]
+        }
+      ]
+    },
+    "provider_license_sha256": {
+      "LICENSE.bdb.txt": "3bdff06e69991c94664f2ef5c5f8096f60b7dbec071756ea6cc26b445e06ec5b",
+      "LICENSE.bzip2.txt": "1f38bbc7caacafd65169276d759c0d88c991b753b643ce35d0e45ea1971dd441",
+      "LICENSE.cpython.txt": "86e61415828a8b5b06ec8d024e6f086ce155a8b85fd0c419c0ba4dc004e74fdd",
+      "LICENSE.expat.txt": "122f2c27000472a201d337b9b31f7eb2b52d091b02857061a8880371612d9534",
+      "LICENSE.libX11.txt": "2daec087a88e7c9b8082557cdeebad5bbb8155a4137472f0b22e269cd99d0c1e",
+      "LICENSE.libXau.txt": "56abe29bb1d9806a9e04fa9f80fed2c0f18027594df3f098148d814aef6bddfa",
+      "LICENSE.libedit.txt": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1",
+      "LICENSE.libffi.txt": "deaf3a42effb551a5b140fa9afefed183a27f1341c6d1bf430d106a5e6931fc0",
+      "LICENSE.liblzma.txt": "9a4062de0a2c388a98cf35a35d348b62fa97c838a71c3c28ee1a2d7d0a565b02",
+      "LICENSE.libuuid.txt": "122ee1f7e258f2c3c0e538a75c037684f420454bf3850ddc74ce750bbf5fe86b",
+      "LICENSE.libxcb.txt": "c5ffbfeaa501071ceeb97b7de2c0d703fdaa35de01c0fb6cbac1c28453a3e9fd",
+      "LICENSE.mpdecimal.txt": "669512af7219f58be03a398766d7c9da11a3b3df9d3f05cb74c5ceca25c8da3b",
+      "LICENSE.ncurses.txt": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c",
+      "LICENSE.openssl-1.1.txt": "9c04cce50c4989d5601dd8b07f6ab922c40388b66ac736c9007cb1ed9d9dd560",
+      "LICENSE.openssl-3.txt": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "LICENSE.sqlite.txt": "38bef3d28b24f145ea293bd3b6eb4b20396982abc8303128fb493986ea5bc719",
+      "LICENSE.tcl.txt": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16",
+      "LICENSE.tix.txt": "3ac5cdd0bef6c43ce34c6a7ced452081d9e5a0bf94082b9f9147d23ec9e214f5",
+      "LICENSE.zlib.txt": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c"
+    }
+  },
+  "sources": [
+    {
+      "provider_key": "cpython-3.12",
+      "name": "cpython-3.12",
+      "version": "3.12.15",
+      "url": "https://www.python.org/ftp/python/3.12.15/Python-3.12.15.tar.xz",
+      "filename": "Python-3.12.15.tar.xz",
+      "sha256": "c2c4321961fab0fb999d66e0cecf521c2ab3994c7992873ea99e306c1094fd5a",
+      "licenses": [
+        "Python-2.0",
+        "CNRI-Python"
+      ],
+      "license_file": "LICENSE.cpython.txt"
+    },
+    {
+      "provider_key": "bzip2",
+      "name": "bzip2",
+      "version": "1.0.8",
+      "url": "https://astral-sh.github.io/mirror/files/bzip2-1.0.8.tar.gz",
+      "filename": "bzip2-1.0.8.tar.gz",
+      "sha256": "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269",
+      "licenses": [
+        "bzip2-1.0.6"
+      ],
+      "license_file": "LICENSE.bzip2.txt"
+    },
+    {
+      "provider_key": "expat",
+      "name": "expat",
+      "version": "2.9.0",
+      "url": "https://github.com/libexpat/libexpat/releases/download/R_2_9_0/expat-2.9.0.tar.xz",
+      "filename": "expat-2.9.0.tar.xz",
+      "sha256": "1e6371862cc31999b368c3b89b49994f0677e1bab5f1b2b85ae3741f5d803051",
+      "licenses": [
+        "MIT"
+      ],
+      "license_file": "LICENSE.expat.txt"
+    },
+    {
+      "provider_key": "libffi",
+      "name": "libffi",
+      "version": "3.8.0",
+      "url": "https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz",
+      "filename": "libffi-3.8.0.tar.gz",
+      "sha256": "7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4",
+      "licenses": [
+        "MIT"
+      ],
+      "license_file": "LICENSE.libffi.txt"
+    },
+    {
+      "provider_key": "mpdecimal",
+      "name": "mpdecimal",
+      "version": "4.0.0",
+      "url": "https://astral-sh.github.io/mirror/files/mpdecimal-4.0.0.tar.gz",
+      "filename": "mpdecimal-4.0.0.tar.gz",
+      "sha256": "942445c3245b22730fd41a67a7c5c231d11cb1b9936b9c0f76334fb7d0b4468c",
+      "licenses": [
+        "BSD-2-Clause"
+      ],
+      "license_file": "LICENSE.mpdecimal.txt"
+    },
+    {
+      "provider_key": "openssl-3.5",
+      "name": "openssl-3.5",
+      "version": "3.5.9",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+      "filename": "openssl-3.5.9.tar.gz",
+      "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "license_file": "LICENSE.openssl-3.txt"
+    },
+    {
+      "provider_key": "sqlite",
+      "name": "sqlite",
+      "version": "3530100",
+      "url": "https://www.sqlite.org/2026/sqlite-autoconf-3530100.tar.gz",
+      "filename": "sqlite-autoconf-3530100.tar.gz",
+      "sha256": "83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f",
+      "licenses": [],
+      "license_file": "LICENSE.sqlite.txt"
+    },
+    {
+      "provider_key": "tcl",
+      "name": "tcl",
+      "version": "9.0.4",
+      "url": "https://prdownloads.sourceforge.net/tcl/tcl9.0.4-src.tar.gz",
+      "filename": "tcl9.0.4-src.tar.gz",
+      "sha256": "d0aed49230bc02a65c1e0229e65f34590a4b037ec40d546f32573b467f7551ea",
+      "licenses": [
+        "TCL"
+      ],
+      "license_file": "LICENSE.tcl.txt"
+    },
+    {
+      "provider_key": "tk",
+      "name": "tk",
+      "version": "9.0.4",
+      "url": "https://prdownloads.sourceforge.net/tcl/tk9.0.4-src.tar.gz",
+      "filename": "tk9.0.4-src.tar.gz",
+      "sha256": "d7a146d2917eb8b5cc95276dbf0e3d03c7464d2b19c1675357857c989301dbb4",
+      "licenses": [
+        "TCL"
+      ],
+      "license_file": "LICENSE.tcl.txt"
+    },
+    {
+      "provider_key": "uuid",
+      "name": "uuid",
+      "version": "1.0.3",
+      "url": "https://sourceforge.net/projects/libuuid/files/libuuid-1.0.3.tar.gz",
+      "filename": "libuuid-1.0.3.tar.gz",
+      "sha256": "46af3275291091009ad7f1b899de3d0cea0252737550e7919d17237997db5644",
+      "licenses": [
+        "BSD-3-Clause"
+      ],
+      "license_file": "LICENSE.libuuid.txt"
+    },
+    {
+      "provider_key": "xz",
+      "name": "xz",
+      "version": "5.8.4",
+      "url": "https://github.com/tukaani-project/xz/releases/download/v5.8.4/xz-5.8.4.tar.gz",
+      "filename": "xz-5.8.4.tar.gz",
+      "sha256": "0014c7886930454fe8bd4228665b51af55eeae560ea135c9c4cd33f55b2591d9",
+      "licenses": [
+        "0BSD"
+      ],
+      "license_file": "LICENSE.liblzma.txt"
+    }
+  ],
+  "native_dependency_mapping": {
+    "bz2": "bzip2",
+    "crypto": "openssl-3.5",
+    "expat": "expat",
+    "ffi": "libffi",
+    "lzma": "xz",
+    "mpdec": "mpdecimal",
+    "sqlite3": "sqlite",
+    "ssl": "openssl-3.5",
+    "tclstub": "tcl",
+    "tkstub": "tk",
+    "uuid": "uuid"
+  },
+  "bundled_dynamic_library_sources": {
+    "libtcl9.0.dylib": "tcl",
+    "libtcl9tk9.0.dylib": "tk",
+    "itcl4.3.8": "tcl",
+    "thread3.0.6": "tcl"
+  },
+  "coverage_note": "CPython and the standalone build recipes plus all non-system linked library sources. Tcl/Tk sources are included conservatively even if PyInstaller omits tkinter. macOS system libraries remain supplied by Apple. Python wheel package sources are covered separately by the RC23 source archive and Intel dependency inputs."
+}
