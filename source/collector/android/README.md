@@ -1,34 +1,116 @@
-# AMPLIFai Phone — Android owner/partner test
+# AMPLIFai Phone — Android
 
-`2026.09.28-rc2` (`26092802`) is an owner/partner test candidate, not a claim of verified Samsung/Pixel compatibility or universal SMS/call coverage. Publication requires the dedicated release signature and an independently checked download hash. Physical-device acceptance remains separate from compilation and JVM tests.
+`2026.10.13-rc10` (`26101310`) streams each permission-gated source into a
+short-lived, app-private SQLite review store, then prepares immutable selected
+pages for the same-phone browser. The browser validates page hashes, source
+counts and the manifest before a separately approved, per-account save. The
+companion reports pages offered and waits for a matching saved/readback receipt.
+The app now shows measured provider-row progress, retained counts for each
+available source, local selection results and a distinct saved-account receipt.
+The three source cards distinguish a readable zero from not read or unavailable.
+Elapsed time and last measured movement appear while an operation is active;
+an exact count is displayed immediately, with modest optional motion rather
+than interpolated records or a fabricated time-remaining estimate. A report
+button appears only after the bound saved/readback acknowledgment and opens
+the existing signed-in account page. rc9 also verifies all stable contact IDs
+before an atomic all-page selection, with visible Cancel and Clear actions.
+It supports an account-confirmed connection: the app shows the destination
+returned by the authenticated server, and the owner approves it before the
+one-use reviewed preview can transfer. The temporary code remains a fallback.
+Notification drawer visibility is optional: the app still requests the mandatory
+Android foreground-service notification, and the owner can return from Recent
+apps to confirm the destination or cancel. Published rc9 remains the previous
+distribution. Physical-device permission,
+browser and authenticated account-save acceptance are still unverified.
 
-This version fixes an Android-only pairing crash in rc1. Install the signed rc2 APK as an update over rc1; do not uninstall or clear app data to recover. The update must retain the same application ID and signing certificate with a higher version code. After updating, open the app, review the selected sources and approve a fresh one-use browser handoff.
+Support-code wire format is `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
+For this Android release, `build` is the exact dotted version name
+`2026.10.13-rc10`, bytes are `0|0` before pairing, and status is `-`. The
+numeric Mac build values remain distinct and backward-compatible; the website
+derives platform only from an explicit allowlist of exact build values.
+
+Install rc10 as an in-place update, without uninstalling or clearing app data.
+rc9 can discover a signed update at launch, subject to its owner and OS
+install permissions; an ordinary signed APK install remains available. rc9 remains an immutable
+rollback artifact; Android does not install an older version over a newer one
+without a separate deliberate reinstall path.
+Updates retain the application
+ID and signing certificate with a higher version code. After updating, open the
+app, review the selected sources and approve a fresh one-use browser handoff.
+
+## Website app updates
+
+At launch, the website-distributed app performs one bounded anonymous HTTPS
+request for `/phone/android-update-v1.txt`. The exact-order feed is signed by
+the existing RSA-3072 Android release identity whose public certificate is
+pinned in the app. It names a single newer package version, exact signed APK
+URL, byte length, SHA-256 and signer. The app downloads only that allowlisted
+APK into private no-backup storage, rejects unexpected redirects, partial or
+altered bytes, wrong package/version/SDK and wrong signing certificate, then
+lets Android verify and apply the same-signer update through PackageInstaller.
+The request includes no account token, phone record, backup, or pairing code.
+Offline or invalid feeds leave collection usable and show a failed check.
+
+Automatic installation is **off until the owner checks its separate box**.
+Android must also authorize this app as an install source. When both are true,
+the app may ask Android 12+ to update without a new prompt only if Android's
+documented self-update conditions hold; it always handles an Android approval
+prompt when one is required. Android 8–11 and other ineligible devices require
+the ordinary OS approval. If Android needs approval while the app is in the
+background, reopen the companion and tap **Continue Android approval** to see
+the OS prompt; the private install session remains guarded until Android
+reports a terminal outcome or the installed version is observed. Unknown-apps
+Settings is presented as an owner
+choice, never changed by the app. An update waits during source disclosure or
+permission prompts, reading, selection/review, transfer preparation, active
+pairing/browser delivery, and an account save awaiting the matching readback
+acknowledgment. Pending installation blocks new local work. Cancelling an
+install prompt or verification leaves phone review available.
+
+This self-updater is for the **website APK only**. The separate `play` build
+flavor contains no signed website feed, APK downloader, PackageInstaller code,
+update certificate asset, installer receiver/activity, or package-install
+permissions. Its update status says Google Play manages updates. The Play
+flavor retains contacts, call history and SMS history collection, review and
+browser handoff; it is a source/build candidate, not an approved Play release.
+Google's policy does not permit `REQUEST_INSTALL_PACKAGES` for this kind of
+self-update, and the separate SMS/call-log policy and reviewer-login gates
+remain unresolved.
+See [official PackageInstaller user-action rules](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setRequireUserAction(int))
+and [Google Play install-permission policy](https://support.google.com/googleplay/android-developer/answer/12085295).
 
 ## Owner flow
 
 Use the signed APK's normal Android download/install flow. No developer mode, USB debugging, root, default SMS/dialer takeover, or security bypass is part of this product. If the installer or a restricted permission blocks progress, report that limitation; do not disable device protections.
 
-1. Choose **Read contacts**, **Read call history**, and/or **Read SMS metadata** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
-2. Select contacts, then **Review selected metadata**. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
-3. Choose **Approve same-phone browser handoff**. On Android 13+, allow notifications and press Approve again. Disabled app/channel notifications block handoff because its visible Cancel control is required.
-4. Use **Open AMPLIFai account in browser** on this same phone. Enter the **One-use pairing code** within five minutes. Review each browser source and approve its account save separately. This Android app makes no cloud upload.
-5. **Cancel browser handoff**, the notification's **Cancel handoff**, or dismissing that notification stops the local handoff. Cancelling cannot retract metadata already delivered to the browser or separately saved to the account.
+1. Choose **Read contacts**, **Read call history**, and/or **Read SMS history** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
+2. Select contacts, then **Review selected metadata**. **Select all contacts across every page** verifies every stable local contact ID before changing the selection; **Clear all selected contacts** affects the local selection only. Search and visible 100-row pages do not limit an all-page selection. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
+3. Choose **Approve same-phone browser handoff**. Notification access is optional. The app still starts the required foreground service with a valid notification; if its shortcut is hidden, return from Recent apps to confirm the destination or use **Cancel browser handoff**. Android may stop the app after a permission change, requiring a fresh local review.
+4. Use **Open AMPLIFai account in browser** on this same phone. For a current signed-in account, choose **Connect reviewed Android app**, check the account and course displayed by the app from server proof, and approve that destination. The browser then receives the reviewed preview without typing a code. The app's **One-use pairing code** is a five-minute fallback if discovery is unavailable. Each progressing page fetch, valid keepalive and completion extends the active browser session, bounded by inactivity and the visible Cancel action. Review each available source and approve its account save separately.
+5. After delivery, browser-only users can **Cancel browser handoff**. Signed-in users separately save or decline each source, then use **Finalize reviewed sources**. The browser verifies durable account readback before the matching saved assertion; the companion only reports a confirmed save after the final bound receipt. Cancelling cannot retract already saved account data.
+
+For a blocked permission or pre-pair handoff, **Copy safe support code** gives
+the owner an optional code to submit through AMPLIFai contact. It contains only
+the build, a random short reference, fixed stage/category, elapsed seconds and
+zero-byte/status placeholders. It does not contain phone numbers, contact names,
+message content, account identity, pairing secrets or raw exception text.
 
 ## Permission and coverage boundaries
 
 - `READ_SMS` and `READ_CALL_LOG` are hard-restricted permissions: an installer allowlist and an actual runtime grant are separate conditions. The official installer API defaults to allowlisting requested restricted permissions, but an OEM installer can apply different restrictions. A normal sideload can work; installation alone does not prove source access. [Permission reference](https://developer.android.com/reference/android/Manifest.permission#READ_SMS), [installer API](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setWhitelistedRestrictedPermissions(java.util.Set%3Cjava.lang.String%3E)).
+- This website APK's normal installer path and Google Play eligibility are separate. Google's [SMS/call-log policy](https://support.google.com/googleplay/android-developer/answer/10208820?hl=en) requires a declared, reviewed permitted use or exception; this app does not force a default SMS or dialer role or claim a Play exception.
 - Covered downloaded/local-file apps on Android 15/16 can also encounter Restricted Settings for the SMS permission group. This build does not guide users around it; unavailable SMS must leave contacts and permitted calls usable. [Android 16 security requirements](https://source.android.com/docs/compatibility/16/android-16-cdd#225_security_model).
 - Grants are checked before provider queries, after permission results, before handoff, and when returning to the Activity. Revoked local sources are dropped and their handoff cancelled. Provider refusal is unavailable, not an empty successful read.
 - A readable source with zero observed records remains available and distinct from denied/not-read history. `missingSources` identifies unavailable history; unavailable sources cannot export stale interactions. Available metadata is observed coverage, never proof of completeness.
-- Provider scans stop before a partial result can be reviewed when they exceed 100,000 contact-phone rows or 256,000 call/SMS rows per source. A 32 MB selected-metadata handoff bound can also reject an unusually large review; reducing the selected contacts is the only supported retry. Neither condition silently exports incomplete history.
+- Provider scans stream into an atomic private store instead of stopping at the former 100,000/256,000 aggregate scan bounds. Contact phone values have no former 20-per-contact cap. Source counts and selected record counts must fit the versioned protocol's signed 32-bit count fields; a single selected record must fit a 128 KiB page. These are explicit errors, never silent truncation. Page count is driven by the selected records, not a fixed 32 MiB handoff cap. A manifest/control message remains bounded to 8,192 ASCII bytes, with sample labels omitted when too long while full contact names remain in record pages.
 
 ## Bounded handoff lifecycle
 
-An unexported, owner-started `dataSync` foreground service holds only a reviewed in-memory payload while the Activity yields to the same-phone browser. The service performs no provider queries. Leaving the Activity cancels unfinished provider reads; completion after cancellation is discarded.
+An unexported, owner-started `dataSync` foreground service serves immutable reviewed pages from app-private no-backup storage while the Activity yields to the same-phone browser. The service performs no provider queries. Leaving the Activity cancels unfinished provider reads; completion after cancellation is discarded. Transfer pages are deleted on handoff cancellation, replacement, completion or process restart. The local review store closes and is deleted when its Activity is destroyed; a process restart removes any orphaned review file before another read.
 
-The bridge binds only `127.0.0.1:48751`, checks the exact Host and `https://amplifai-database-engine.vercel.app` Origin, limits pairing attempts, and requires the one-use bearer token and ordered page contract. It closes its listener and active socket and zeroes its payload buffer on completion, cancellation, five bad codes, or expiry. A monotonic clock includes device sleep. The service removes its notification and stops; five minutes is an upper bound for useful authorization, not a guaranteed browser-transfer window under OS termination.
+The bridge binds only `127.0.0.1:48751`, checks the exact Host and `https://amplifai-database-engine.vercel.app` Origin, limits pairing attempts, and requires the one-use bearer token and ordered pages. Pairing binds an immutable handoff ID and SHA-256 manifest. The code expires after five minutes without pairing. An authorized v2 session has a two-hour sliding inactivity window while the browser fetches, reviews, saves and verifies pages. A requested page is not proof the browser validated it; native `/v1/complete` records source delivery or explicit decline, and the separate bound saved/readback handshake confirms account persistence. Cancellation, five bad codes, saved confirmation, expiry or I/O failure closes the listener and clears the grant. OS termination can shorten the window; it never asserts a save from page delivery alone.
 
-The notification contains no contacts or pairing code. Disabling notifications, removing the app's task, or service timeout stops the transfer. Activity recreation does not own or close an active bridge. `START_NOT_STICKY`, no boot receiver, and no persisted payload/code mean process loss cannot silently restart collection or transfer. The service requests only foreground-service/data-sync and notification permissions in addition to the existing contacts/call/SMS/Internet permissions. [Foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
+The foreground-service notification contains no contacts or pairing code; it may show the count of pages offered. Denied app/channel notification visibility does not by itself stop the approved handoff, but actual foreground promotion failure, process death or timeout does. Android's Active apps surface and the in-app Cancel remain recovery controls. Activity recreation does not own or close an active bridge. `START_NOT_STICKY`, no boot receiver, no persisted code/token and orphan scratch cleanup mean process loss cannot silently restart collection or transfer. The handoff service requests foreground-service/data-sync and optional notification permissions in addition to contacts/call/SMS/Internet permissions. The separate website updater declares Android's package-install permissions, but performs no package operation until its safety gate and owner/OS approval conditions are met. [Foreground-service types](https://developer.android.com/develop/background-work/services/fgs/service-types), [notification permission](https://developer.android.com/develop/ui/compose/notifications/notification-permission).
 
 ## Local build and controlled signing
 
@@ -38,10 +120,19 @@ Use the installed Android SDK/JBR and existing Gradle dependencies. No signing v
 JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
 ANDROID_HOME='/Users/jeffmoore/Library/Android/sdk' \
 ./gradlew --offline --no-daemon --no-configuration-cache \
-  :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+  :app:testWebsiteDebugUnitTest :app:testPlayDebugUnitTest \
+  :app:lintWebsiteRelease :app:lintPlayRelease \
+  :app:assembleWebsiteRelease :app:bundlePlayRelease
 ```
 
-Run from `collector/android`. The current Android plugin exposes debug JVM tests, not a `testReleaseUnitTest` task; the same production sources are additionally compiled and linted by the release build.
+Run from `collector/android`. The current Android plugin exposes debug JVM
+tests, not a `testReleaseUnitTest` task; both production variants are compiled
+and linted by their release builds. `websiteRelease` retains the existing
+application ID, version and controlled signing path. `playRelease` has the
+same app identity and source consent/ACK behavior but is kept out of the
+website APK download and update feed. Its local AAB is a qualification artifact;
+Play upload signing, policy declarations and reviewer access must be resolved
+before any submission. Do not publish either unsigned local output.
 
 This module contains only Java sources and explicitly sets `android.enableKotlin`
 to false in its build configuration. AGP otherwise injects the Kotlin standard
@@ -59,19 +150,36 @@ The authorized release operator supplies all four environment variables privatel
 - `AMPLIFAI_ANDROID_STORE_PASSWORD`
 - `AMPLIFAI_ANDROID_KEY_PASSWORD`
 
-Partial configuration is rejected. This Android project disables the configuration cache and rejects an explicit `--configuration-cache` before reading any signing values: even failed configuration can otherwise be cached. Use `--no-daemon --no-configuration-cache`; never echo credentials, include passwords in command arguments, or use a build scan. With no variables the release remains **unsigned** for local validation; never publish `app-release-unsigned.apk` as an installable download. With the complete approved configuration, verify `app/build/outputs/apk/release/app-release.apk` using the installed `apksigner`, confirm version/application ID/non-debuggable manifest and signer fingerprint, then record its SHA-256 and exact published URL in the canonical release ledger. Signing/publication are operator-owned, not implied by this README.
+Partial configuration is rejected. This Android project disables the configuration cache and rejects an explicit `--configuration-cache` before reading any signing values: even failed configuration can otherwise be cached. Use `--no-daemon --no-configuration-cache`; never echo credentials, include passwords in command arguments, or use a build scan. With no variables the release remains **unsigned** for local validation; never publish `app-website-release-unsigned.apk` as an installable download. The existing controlled Keychain wrapper's `build` action now builds only `websiteRelease`, preserving its prior signing scope. Verify `app/build/outputs/apk/website/release/app-website-release.apk` with `apksigner`, its version/application ID/non-debuggable manifest and pinned signer before website publication.
+
+For a **local Play candidate only**, `swift script/android_release_signing.swift build-play` signs `app/build/outputs/bundle/playRelease/app-play-release.aab` with the same existing Android rc8 release identity, without printing or exporting its password. Verify the AAB's JAR signature and SHA-256, then compare its certificate fingerprint with the expected upload certificate recorded in Google Play **before** any Console upload. Google Play may distribute APKs under a different app-signing key; compatibility with website installs must be decided from the Play app-signing certificate, not inferred from this local AAB. The current Play listing, reviewer access and restricted SMS/call-log policy are separate gates. Signing/publication are operator-owned, not implied by this README.
+
+After verifying the exact APK, the existing Keychain-held release identity can
+sign the update feed without a password in shell arguments:
+
+```sh
+swift script/android_release_signing.swift sign-feed \
+  /absolute/path/to/verified.apk \
+  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.13-rc10/AMPLIFai-Phone-Android-2026.10.13-rc10.apk \
+  /absolute/path/to/android-update-v1.txt
+```
+
+Run that command from the repository root. Publish the exact signed feed at
+`/phone/android-update-v1.txt` only after the immutable APK/source/checksum
+release exists and its anonymous download hash matches. Never reuse a release
+tag for different bytes.
 
 ## Remaining physical acceptance
 
-No emulator or device run is represented by JVM socket tests. Use the actual published signed APK through the normal download/install path, with owner-approved synthetic test contacts/history where practical. Record device model, Android/OEM version, browser version, APK hash and per-source outcome; never capture bodies, credentials, or pairing tokens in evidence.
+JVM socket tests and emulator runs do not establish physical-device acceptance. Use the actual published signed APK through the normal download/install path, with owner-approved synthetic test contacts/history where practical. Record device model, Android/OEM version, browser version, APK hash and per-source outcome; never capture bodies, credentials, or pairing tokens in evidence.
 
-Pairing release regression: on the existing Pixel 8 emulator, install rc1, start a reviewed synthetic handoff, and observe that its first valid `POST /v1/pair` crashes the bridge thread with Android `PatternSyntaxException`. Install rc2 with `adb install -r` (no uninstall), start a new reviewed handoff, and require HTTP 200 for pairing and metadata plus listener closure after the one-use transfer. Keep the code/token and synthetic contact identity out of logs. Host-JVM socket tests do not catch Android's stricter regex parser; this emulator check is mandatory for the next pairing change.
+The API 36 emulator instrumentation covers the retained v1 pair/ACK contract and v2 private store, optional-source rollback, ordered pages, declined-source revocation, long active transfer, saved-ACK retries, 25,700 selected contacts over 257 pages, and 100,001 contact rows plus 256,001 matching call rows over 2,561 pages. This is Android runtime and local protocol evidence, not same-phone Chrome, cloud saving, normal installer permission or physical-device acceptance. Keep code/token and synthetic record identity out of logs.
 
 - Samsung and Pixel: install without developer tools; confirm contacts-only, contacts+calls, and permitted SMS independently. Denied/installer-restricted sources must stay unavailable and must not block permitted sources. A genuinely empty readable history must say zero observed, not denied.
-- Android 13+: deny notifications (no listener); allow and explicitly approve again (visible notification + Cancel). Disable app/channel notifications or dismiss the notification during transfer (stop). Confirm older API 26–28 two-argument and API 29+ typed foreground-service behavior when those devices are available.
+- Android 13+: deny notifications and disable the channel before approval; confirm foreground promotion still succeeds, the in-app Cancel works and no permission prompt appears during approval. Disable the channel during a live handoff and return from Recent apps to Cancel. A runtime permission revoke may terminate the process; verify fresh-process orphan cleanup and no resurrected code. Confirm older API 26–28 two-argument and API 29+ typed foreground-service behavior when those devices are available.
 - Switch app → same-phone Chrome and complete small and paged transfers; verify the account's separate consent/receipt flow. Browser local-network denial must remain an honest transport failure, not source-access denial or successful pairing.
-- Recreate the Activity while ready; the existing code/session survives without re-collection. Cancel from the notification, finish the Activity, remove the app task, force process death, and wait past five minutes including screen-off time: no new read, replay, silent restart, or stale usable code.
+- Recreate the Activity while ready; the existing code/session survives without re-collection. Cancel in-app or from an available notification, finish the Activity, remove the app task, use Android's Active apps Stop, force process death, and wait past five minutes before initial pairing: no new read, replay, silent restart, or stale usable code. Once paired, verify progress and keepalive extend only the active session's two-hour inactivity deadline, including during account save/readback. Check expiry, cancellation and notification visibility separately.
 - Revoke a previously read permission, return, and confirm that source is dropped and an existing handoff is cancelled before a new review. Simulate cancellation during a slow provider query: no completed source is retained.
-- Confirm exact Host/Origin rejection, bad-code exhaustion, token replay rejection, ordered-page retry, and listener closure on completion. JVM tests cover the local protocol; these do not establish browser/OEM interoperability.
+- Confirm exact Host/Origin rejection, bad-code exhaustion, token replay rejection, ordered-page retry, one-use delivery, wrong and correct saved acknowledgements, and listener closure only after acknowledgement/cancel/expiry. JVM tests cover the local protocol; these do not establish browser/OEM interoperability.
 
-Until those checks pass, describe the release only as an owner/partner **test build** with source coverage conditional on the device's normal permission rules.
+Record actual physical permission and account results separately from local checks. Never infer complete history from a readable provider or infer a saved account from page delivery.

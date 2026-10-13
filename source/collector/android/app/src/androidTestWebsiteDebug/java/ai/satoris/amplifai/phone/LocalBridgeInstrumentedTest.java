@@ -1,0 +1,857 @@
+package ai.satoris.amplifai.phone;
+
+import android.app.Instrumentation;
+import android.app.Activity;
+import android.content.Context;
+import android.content.ComponentName;
+import android.content.Intent;
+import android.content.ServiceConnection;
+import android.content.SharedPreferences;
+import android.content.pm.PackageInstaller;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.io.InputStream;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.lang.reflect.Field;
+import java.time.Instant;
+import java.util.HexFormat;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import org.json.JSONObject;
+
+/** Runs the changed loopback protocol on Android's actual regex and socket runtime. */
+public final class LocalBridgeInstrumentedTest extends Instrumentation {
+    private static final String ORIGIN = LocalBridge.ACCOUNT_ORIGIN;
+    private Bundle testArguments = Bundle.EMPTY;
+
+    @Override public void onCreate(Bundle arguments) {
+        super.onCreate(arguments);
+        if (arguments != null) testArguments = arguments;
+        start();
+    }
+
+    @Override public void onStart() {
+        Bundle result = new Bundle();
+        try {
+            if (testArguments.getString("scenario", "").startsWith("t12_")) {
+                result.putString("result", OptionalNotificationCases.run(this, testArguments));
+                finish(0, result);
+                return;
+            }
+            if ("updater_install_auto".equals(testArguments.getString("scenario"))) {
+                initiateUpdaterInstall(true);
+                result.putString("result", "same-signed disposable higher-version archive committed with conditional no-user-action request; inspect OS callback and installed version separately");
+                finish(0, result);
+                return;
+            }
+            if ("updater_install_manual".equals(testArguments.getString("scenario"))) {
+                initiateUpdaterInstall(false);
+                result.putString("result", "same-signed disposable higher-version archive committed with required user action; inspect OS prompt and installed version separately");
+                finish(0, result);
+                return;
+            }
+            if ("updater".equals(testArguments.getString("scenario"))) {
+                verifyUpdaterArchive();
+                verifyUpdateCallbackState();
+                result.putString("result", "pinned feed/archive identity negatives and installer callback replay, cancel, failure and actual-version reconciliation passed");
+                finish(0, result);
+                return;
+            }
+            if ("recreation_storage".equals(testArguments.getString("scenario"))) {
+                verifyReviewStoreRecreationOwnership();
+                verifyFrozenSourceBindings();
+                verifyTransferFileOwnership();
+                result.putString("result", "synthetic overlapping-review and transfer-file ownership, orphan cleanup, and captured-source availability passed; no physical-device claim");
+                finish(0, result);
+                return;
+            }
+            if ("active_recreation".equals(testArguments.getString("scenario"))) {
+                verifyActiveHandoffRecreation();
+                result.putString("result", "synthetic approved foreground handoff survives Activity recreation with exact source binding and same code; no real phone or account Save");
+                finish(0, result);
+                return;
+            }
+            verifyProgressPanel();
+            if ("progress_ui".equals(testArguments.getString("scenario"))) {
+                result.putString("result", "measured Android progress, unavailable versus zero, local review, and saved-only results passed");
+                result.putString("fontScale", Float.toString(getTargetContext().getResources().getConfiguration().fontScale));
+                result.putString("largeCountLayout", "320dp: exact 2,147,483,647 in two lines with no ellipsis");
+                finish(0, result);
+                return;
+            }
+            if ("bulk_selection".equals(testArguments.getString("scenario"))) {
+                verifyBulkSelection();
+                verifyBulkCancelButton();
+                result.putString("result", "1,205 exact SQLite contact IDs across thirteen keyset pages; local review, incomplete scan refusal and visible Cancel preserving prior selection passed");
+                finish(0, result);
+                return;
+            }
+            if ("account_connect".equals(testArguments.getString("scenario"))) {
+                verifyAccountConnect();
+                result.putString("result", "Android socket v3 discovery, bound claim, explicit destination approval, one-use release and guarded source read passed with synthetic server authority");
+                finish(0, result);
+                return;
+            }
+            verifyHandoff();
+            verifyPagedHandoff();
+            verifyOptionalRollback();
+            verifyLargeStore();
+            verifyFullHistoryStore();
+            result.putString("result", "measured native progress and saved-only results; v1 pair/ACK; v2 private store/pages/decline/long transfer/retryable ACK; 25,700 selected contacts/257 pages; 100,001 contacts and 256,001 matching calls passed");
+            finish(0, result);
+        } catch (Exception | AssertionError failure) {
+            result.putString("error", failure.getClass().getSimpleName() + ": " + failure.getMessage());
+            finish(-1, result);
+        }
+    }
+
+    private void verifyBulkSelection() {
+        try (SanitizedStore source = new SanitizedStore(getTargetContext())) {
+            source.begin("contacts");
+            for (long id = 1; id <= 1_205; id++)
+                source.contact(id, "Synthetic " + id, "+1555" + String.format(java.util.Locale.ROOT, "%07d", id));
+            source.commit("contacts", 1_205, 0);
+            Set<Long> selected = ContactBulkSelector.scan(source.contactCount(""), 100,
+                    source::contactIdsAfter, () -> false);
+            if (selected.size() != 1_205 || !selected.contains(1L) || !selected.contains(1_205L) ||
+                    source.review(selected).selectedContacts != 1_205)
+                throw new AssertionError("Full SQLite selection or review count changed");
+            try {
+                ContactBulkSelector.scan(1_206, 100, source::contactIdsAfter, () -> false);
+                throw new AssertionError("Missing final contact must fail");
+            } catch (IllegalStateException expected) {
+                // No caller selection was changed.
+            }
+            try {
+                ContactBulkSelector.scan(1_205, 100, source::contactIdsAfter, () -> true);
+                throw new AssertionError("Cancelled scan must fail");
+            } catch (java.util.concurrent.CancellationException expected) {
+                // No caller selection was changed.
+            }
+        }
+    }
+
+    private void verifyBulkCancelButton() throws Exception {
+        Activity activity = startActivitySync(new Intent(getTargetContext(), MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            Field selectedField = MainActivity.class.getDeclaredField("selectedIds");
+            Field activeField = MainActivity.class.getDeclaredField("bulkSelectionActive");
+            Field generationField = MainActivity.class.getDeclaredField("bulkSelectionGeneration");
+            Field cancelField = MainActivity.class.getDeclaredField("cancelSelectAll");
+            selectedField.setAccessible(true);
+            activeField.setAccessible(true);
+            generationField.setAccessible(true);
+            cancelField.setAccessible(true);
+            @SuppressWarnings("unchecked") Set<Long> selected = (Set<Long>) selectedField.get(activity);
+            Button cancelButton = (Button) cancelField.get(activity);
+            if (cancelButton == null) throw new AssertionError("Bulk cancel control was not rendered");
+            runOnMainSync(() -> {
+                selected.add(5L);
+                activeFieldSet(activeField, activity, true);
+                cancelButton.setVisibility(View.VISIBLE);
+                cancelButton.performClick();
+            });
+            if (!selected.equals(Set.of(5L)) || activeField.getBoolean(activity) ||
+                    cancelButton.getVisibility() != View.GONE || generationField.getInt(activity) < 1)
+                throw new AssertionError("Visible bulk Cancel changed the prior selection or left a scan active");
+        } finally {
+            runOnMainSync(activity::finish);
+        }
+    }
+
+    private void verifyAccountConnect() throws Exception {
+        try (SanitizedStore source = new SanitizedStore(getTargetContext())) {
+            source.begin("contacts");
+            source.contact(1L, "Synthetic person", "+15551234567");
+            source.commit("contacts", 1, 0);
+            source.review(Set.of(1L));
+            try (PagedTransfer transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L))) {
+                String intent = "12345678-1234-4234-8234-123456789abc";
+                String capability = "A".repeat(43);
+                String releaseCode = "B".repeat(43);
+                AtomicBoolean claimed = new AtomicBoolean();
+                AtomicBoolean consumed = new AtomicBoolean();
+                LocalBridge.AccountProof proof = new LocalBridge.AccountProof() {
+                    @Override public LocalBridge.Destination claim(String id, String cap, String handoff, String digest) {
+                        if (!intent.equals(id) || !capability.equals(cap) || !transfer.manifestSha256().equals(digest)) return null;
+                        claimed.set(true);
+                        return new LocalBridge.Destination(id, "synthetic@example.test", "Synthetic course");
+                    }
+                    @Override public boolean consume(String id, String cap, String code, String handoff, String digest) {
+                        boolean matching = intent.equals(id) && capability.equals(cap) && releaseCode.equals(code) &&
+                                transfer.manifestSha256().equals(digest);
+                        if (matching) consumed.set(true);
+                        return matching;
+                    }
+                };
+                try (LocalBridge bridge = new LocalBridge(transfer, ORIGIN, 0, System::nanoTime,
+                        ignored -> {}, () -> {}, ignored -> {}, proof, () -> {})) {
+                    bridge.start();
+                    String discovery = request(bridge.port(), "GET", "/v3/discover", "", "");
+                    require(discovery.startsWith("HTTP/1.1 200") && !discovery.contains("synthetic@example.test"),
+                            "v3 discovery leaked destination or failed on Android");
+                    JSONObject published = new JSONObject(discovery.substring(discovery.indexOf("\r\n\r\n") + 4));
+                    String binding = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                            "\",\"handoffId\":\"" + published.getString("handoffId") +
+                            "\",\"payloadSha256\":\"" + published.getString("payloadSha256") + "\"}";
+                    require(request(bridge.port(), "POST", "/v3/connect", "Content-Type: application/json\r\n",
+                            binding).contains("\"pending\":true"), "v3 claim failed on Android");
+                    require(claimed.get() && !consumed.get() && bridge.pendingDestination() != null,
+                            "v3 claim skipped native destination approval");
+                    String release = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                            "\",\"releaseCode\":\"" + releaseCode + "\"}";
+                    require(request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n",
+                            release).startsWith("HTTP/1.1 403"), "unapproved Android v3 release succeeded");
+                    require(bridge.decideDestination(intent, true), "native destination approval failed");
+                    String approved = request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n", release);
+                    require(approved.startsWith("HTTP/1.1 200") && consumed.get(), "server-consumed Android v3 release failed");
+                    JSONObject pairing = new JSONObject(approved.substring(approved.indexOf("\r\n\r\n") + 4));
+                    require(request(bridge.port(), "GET", "/v2/source/contacts?cursor=0",
+                            "Authorization: Bearer " + pairing.getString("token") + "\r\n", "").startsWith("HTTP/1.1 200"),
+                            "approved Android v3 did not expose the reviewed page");
+                    require(request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n",
+                            release).startsWith("HTTP/1.1 403"), "v3 token release replayed");
+                }
+            }
+        }
+    }
+
+    private static void activeFieldSet(Field field, Object target, boolean value) {
+        try { field.setBoolean(target, value); }
+        catch (IllegalAccessException failure) { throw new AssertionError(failure); }
+    }
+
+    private void verifyUpdaterArchive() throws Exception {
+        Context target = getTargetContext();
+        byte[] feed;
+        byte[] certificate;
+        try (InputStream input = getContext().getAssets().open("rc7-signed-feed.txt")) {
+            feed = input.readAllBytes();
+        }
+        try (InputStream input = target.getAssets().open("android_update_publisher.der")) {
+            certificate = input.readAllBytes();
+        }
+        AndroidUpdateFeed.Release rc7 = AndroidUpdateFeed.parse(feed, certificate);
+        File copy = new File(target.getNoBackupFilesDir(), "updater-rc7-fixture.apk");
+        try {
+            try (InputStream input = getContext().getAssets().open("rc7-signed.apk");
+                 FileOutputStream output = new FileOutputStream(copy)) {
+                input.transferTo(output);
+            }
+            UpdateInstaller.verifyArchive(target, rc7, copy, 26100806);
+            expectUpdateRejection(target, new AndroidUpdateFeed.Release(26100808, rc7.versionName(),
+                    rc7.minSdk(), rc7.bytes(), rc7.sha256(), rc7.url()), copy, "wrong version");
+            try (RandomAccessFile change = new RandomAccessFile(copy, "rw")) {
+                change.seek(copy.length() - 1);
+                int last = change.read();
+                change.seek(copy.length() - 1);
+                change.write(last ^ 1);
+            }
+            expectUpdateRejection(target, rc7, copy, "corrupt APK");
+            try (RandomAccessFile change = new RandomAccessFile(copy, "rw")) {
+                change.setLength(rc7.bytes() - 1);
+            }
+            expectUpdateRejection(target, rc7, copy, "truncated APK");
+            File debug = new File(target.getNoBackupFilesDir(), "updater-wrong-signer-fixture.apk");
+            try (InputStream input = getContext().getAssets().open("rc8-debug.apk");
+                 FileOutputStream output = new FileOutputStream(debug)) {
+                input.transferTo(output);
+            }
+            byte[] digest;
+            try {
+                try (FileInputStream input = new FileInputStream(debug)) {
+                    digest = MessageDigest.getInstance("SHA-256").digest(input.readAllBytes());
+                }
+                AndroidUpdateFeed.Release wrongSigner = new AndroidUpdateFeed.Release(26100808, "2026.10.08-rc8",
+                        26, debug.length(), AndroidUpdateFeed.hex(digest), rc7.url());
+                expectUpdateRejection(target, wrongSigner, debug, "wrong signer");
+            } finally {
+                if (!debug.delete()) debug.deleteOnExit();
+            }
+        } finally { if (!copy.delete()) copy.deleteOnExit(); }
+    }
+
+    private static void expectUpdateRejection(Context context, AndroidUpdateFeed.Release release,
+                                              File file, String label) throws Exception {
+        try {
+            UpdateInstaller.verifyArchive(context, release, file, 26100806);
+            throw new AssertionError(label + " was accepted");
+        } catch (IOException expected) { /* A bad archive must fail before an OS session is created. */ }
+    }
+
+    private void verifyUpdateCallbackState() {
+        Context target = getTargetContext();
+        SharedPreferences state = target.getSharedPreferences("android-update-status", Context.MODE_PRIVATE);
+        state.edit().clear().commit();
+        try {
+            UpdateInstallReceiver.pendingIntent(target, 987654, 26100809);
+            require(UpdateInstallReceiver.pending(target), "pending installer guard missing");
+            String nonce = state.getString("nonce", "");
+            Intent callback = new Intent(target, UpdateInstallReceiver.class)
+                    .setAction("ai.satoris.amplifai.phone.UPDATE_INSTALL_RESULT")
+                    .putExtra("session", 987654).putExtra("nonce", nonce);
+            UpdateInstallReceiver receiver = new UpdateInstallReceiver();
+            receiver.onReceive(target, new Intent(callback).putExtra("nonce", "wrong")
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE));
+            require(UpdateInstallReceiver.pending(target), "wrong-nonce callback revoked live guard");
+            receiver.onReceive(target, new Intent(callback)
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_SUCCESS));
+            require(UpdateInstallReceiver.pending(target), "success callback cleared guard before installed version");
+            UpdateInstallReceiver.reconcile(target, 26100808);
+            require(UpdateInstallReceiver.pending(target), "old installed version cleared guard");
+            UpdateInstallReceiver.reconcile(target, 26100809);
+            require(!UpdateInstallReceiver.pending(target) &&
+                    UpdateInstallReceiver.confirmedTarget(target) == 26100809,
+                    "installed target did not reconcile exactly");
+
+            UpdateInstallReceiver.pendingIntent(target, 987655, 26100810);
+            String nextNonce = state.getString("nonce", "");
+            Intent approval = new Intent(callback).putExtra("session", 987655)
+                    .putExtra("nonce", nextNonce)
+                    .putExtra(Intent.EXTRA_INTENT, new Intent(target, MainActivity.class))
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_PENDING_USER_ACTION);
+            receiver.onReceive(target, approval);
+            require(UpdateInstallReceiver.pendingApproval(target) != null &&
+                    "awaiting_android_approval".equals(UpdateInstallReceiver.status(target)),
+                    "OS approval was not recoverable without background launch");
+            Intent cancelled = new Intent(callback).putExtra("session", 987655)
+                    .putExtra("nonce", nextNonce)
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE_ABORTED);
+            receiver.onReceive(target, cancelled);
+            require(!UpdateInstallReceiver.pending(target) && "cancelled".equals(UpdateInstallReceiver.status(target)),
+                    "OS cancellation did not release guard");
+            require(UpdateInstallReceiver.pendingApproval(target) == null,
+                    "cancelled OS approval remained active");
+            UpdateInstallReceiver.pendingIntent(target, 987656, 26100810);
+            receiver.onReceive(target, new Intent(callback).putExtra("session", 987656)
+                    .putExtra("nonce", state.getString("nonce", ""))
+                    .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE));
+            require(!UpdateInstallReceiver.pending(target) && "failed".equals(UpdateInstallReceiver.status(target)),
+                    "OS failure did not release guard");
+        } finally { state.edit().clear().commit(); }
+    }
+
+    private void initiateUpdaterInstall(boolean automatic) throws Exception {
+        Context target = getTargetContext();
+        require(UpdateInstaller.archiveVersionCode(target.getPackageManager().getPackageInfo(
+                target.getPackageName(), 0)) == 26100808, "isolated base must be signed rc8");
+        require(!UpdateInstallReceiver.pending(target), "another Android update remains pending");
+        File copy = new File(target.getNoBackupFilesDir(), "synthetic-higher-version.apk");
+        try {
+            try (InputStream input = getContext().getAssets().open("synthetic-rc9-signed.apk");
+                 FileOutputStream output = new FileOutputStream(copy)) {
+                input.transferTo(output);
+            }
+            byte[] digest;
+            try (FileInputStream input = new FileInputStream(copy)) {
+                digest = MessageDigest.getInstance("SHA-256").digest(input.readAllBytes());
+            }
+            AndroidUpdateFeed.Release fixture = new AndroidUpdateFeed.Release(26100809, "2026.10.08-rc9",
+                    26, copy.length(), AndroidUpdateFeed.hex(digest),
+                    "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.08-rc9/AMPLIFai-Phone-Android-2026.10.08-rc9.apk");
+            UpdateInstaller.Staged staged = UpdateInstaller.stage(target, fixture, copy, 26100808, automatic);
+            UpdateInstaller.commit(target, staged, fixture.versionCode());
+            require(UpdateInstallReceiver.pending(target), "OS installation session was not durably guarded");
+        } finally { if (!copy.delete()) copy.deleteOnExit(); }
+    }
+
+    private void verifyProgressPanel() {
+        AtomicBoolean accountOpened = new AtomicBoolean();
+        runOnMainSync(() -> {
+            LinearLayout root = new LinearLayout(getTargetContext());
+            root.setOrientation(LinearLayout.VERTICAL);
+            CollectionProgressPanel panel = new CollectionProgressPanel(getTargetContext(), root,
+                    () -> accountOpened.set(true));
+            try {
+                panel.sources(new long[]{0, 123_456, -1}, new String[]{"Available", "Available", "Unavailable"});
+                require(hasDescription(root, "Contacts: 0 metadata records kept on this phone"),
+                        "readable empty contacts looked unavailable");
+                require(hasDescription(root, "Calls: 123,456 metadata records kept on this phone"),
+                        "large retained call count was not displayed");
+                require(hasDescription(root, "SMS: unavailable"), "unavailable SMS looked like zero");
+                panel.sources(new long[]{2_147_483_647L, 123_456, -1},
+                        new String[]{"Available", "Available", "Unavailable"});
+                int narrowWidth = Math.round(320 * getTargetContext().getResources().getDisplayMetrics().density);
+                root.measure(View.MeasureSpec.makeMeasureSpec(narrowWidth, View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+                root.layout(0, 0, narrowWidth, root.getMeasuredHeight());
+                TextView maximum = findTextView(root, "2,147\n483,647");
+                require(maximum != null && maximum.getWidth() > 0 && maximum.getLayout() != null &&
+                                maximum.getLayout().getLineCount() == 2 &&
+                                maximum.getPaint().measureText("483,647") <= maximum.getWidth() &&
+                                maximum.getLayout().getEllipsisCount(0) == 0 &&
+                                maximum.getLayout().getEllipsisCount(1) == 0,
+                        "maximum source count clips at a 320dp layout");
+                require(hasDescription(root, "Contacts: 2,147,483,647 metadata records kept on this phone"),
+                        "maximum count was shortened in accessibility text");
+                panel.beginRead("Calls");
+                panel.inspected(1_000);
+                require(hasText(root, "1,000") && hasText(root, "Phone entries checked"),
+                        "measured provider rows were not distinct from retained source counts");
+                panel.reviewed(12, 34, 0, true, false);
+                require(hasText(root, "12") && hasText(root, "Selected contacts"),
+                        "local selected review was not shown");
+                panel.handoff("received", 4, 4);
+                Button report = findButton(root, "Open saved account and report");
+                require(report != null && report.getVisibility() == View.GONE,
+                        "browser delivery exposed account-saved report control");
+                panel.handoff("completed", 4, 4);
+                require(report.getVisibility() == View.VISIBLE && hasText(root, "Verified saved receipt"),
+                        "matching saved receipt did not expose results control");
+                report.performClick();
+                require(accountOpened.get(), "saved result did not open the existing account destination");
+            } finally { panel.close(); }
+        });
+    }
+
+    private static boolean hasDescription(View root, String description) {
+        if (description.equals(root.getContentDescription())) return true;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++)
+            if (hasDescription(group.getChildAt(index), description)) return true;
+        return false;
+    }
+
+    private static boolean hasText(View root, String value) {
+        if (root instanceof TextView text && value.contentEquals(text.getText())) return true;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++)
+            if (hasText(group.getChildAt(index), value)) return true;
+        return false;
+    }
+
+    private static boolean hasTextContaining(View root, String value) {
+        if (root instanceof TextView text && text.getText().toString().contains(value)) return true;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++)
+            if (hasTextContaining(group.getChildAt(index), value)) return true;
+        return false;
+    }
+
+    private static TextView findTextView(View root, String value) {
+        if (root instanceof TextView text && value.contentEquals(text.getText())) return text;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++) {
+            TextView found = findTextView(group.getChildAt(index), value);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static Button findButton(View root, String label) {
+        if (root instanceof Button button && label.contentEquals(button.getText())) return button;
+        if (root instanceof ViewGroup group) for (int index = 0; index < group.getChildCount(); index++) {
+            Button found = findButton(group.getChildAt(index), label);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static void verifyHandoff() throws Exception {
+        byte[] payload = "{\"schema\":1}".getBytes(StandardCharsets.US_ASCII);
+        try (LocalBridge bridge = new LocalBridge(payload, ORIGIN, 0)) {
+            bridge.start();
+            String paired = request(bridge.port(), "POST", "/v1/pair", "Content-Type: application/json\r\n",
+                    "{\"code\":\"" + bridge.code() + "\"}");
+            require(paired.startsWith("HTTP/1.1 200"), "pair failed");
+            String token = capture(paired, "\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"");
+            String handoff = capture(paired, "\\\"handoffId\\\":\\\"([0-9a-f-]{36})\\\"");
+            String digest = capture(paired, "\\\"payloadSha256\\\":\\\"([0-9a-f]{64})\\\"");
+            require(digest.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload))),
+                    "pairing digest mismatch");
+            String auth = "Authorization: Bearer " + token + "\r\n";
+            String acknowledgment = "{\"handoffId\":\"" + handoff + "\",\"payloadSha256\":\"" + digest + "\",\"saved\":true}";
+            require(request(bridge.port(), "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n",
+                    acknowledgment).startsWith("HTTP/1.1 409"), "ack accepted before delivery");
+            String delivered = request(bridge.port(), "GET", "/v1/metadata", auth, "");
+            require(delivered.startsWith("HTTP/1.1 200") && delivered.endsWith(new String(payload, StandardCharsets.US_ASCII)),
+                    "metadata delivery failed");
+            require(request(bridge.port(), "GET", "/v1/metadata", auth, "").startsWith("HTTP/1.1 410"),
+                    "delivered payload replayed");
+            require(request(bridge.port(), "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n",
+                    acknowledgment.replace(digest, "0".repeat(64))).startsWith("HTTP/1.1 409"),
+                    "wrong digest acknowledged");
+            require(request(bridge.port(), "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n",
+                    acknowledgment).contains("\"acknowledged\":true"), "saved acknowledgment failed");
+            try (Socket ignored = new Socket(InetAddress.getByName("127.0.0.1"), bridge.port())) {
+                throw new AssertionError("listener remained open after saved acknowledgment");
+            } catch (java.net.ConnectException expected) {
+                // The one-use listener must be closed now.
+            }
+        }
+    }
+
+    private void verifyReviewStoreRecreationOwnership() throws Exception {
+        SanitizedStore retiring = new SanitizedStore(getTargetContext());
+        boolean retired = false;
+        try (SanitizedStore replacement = new SanitizedStore(getTargetContext())) {
+            retiring.begin("contacts");
+            retiring.contact(1, "Synthetic old review", "+15551234567");
+            retiring.commit("contacts", 1, 0);
+            replacement.begin("contacts");
+            replacement.contact(2, "Synthetic replacement review", "+15551234568");
+            replacement.commit("contacts", 1, 0);
+            retiring.close();
+            retired = true;
+            require(replacement.count("contacts") == 1 && replacement.phones(2).size() == 1,
+                    "old Activity cleanup erased replacement SQLite review");
+        } finally { if (!retired) retiring.close(); }
+    }
+
+    private void verifyFrozenSourceBindings() throws Exception {
+        try (SanitizedStore review = new SanitizedStore(getTargetContext())) {
+            review.begin("contacts");
+            review.contact(1, "Synthetic binding review", "+15551234567");
+            review.commit("contacts", 1, 0);
+            try (PagedTransfer contacts = new PagedTransfer(getTargetContext(), review, Set.of(1L))) {
+                require(contacts.capturedSources() == TransferSourceBinding.CONTACTS,
+                        "unread optional sources appeared in frozen binding");
+            }
+            review.begin("calls"); review.commit("calls", 0, 0);
+            try (PagedTransfer emptyCalls = new PagedTransfer(getTargetContext(), review, Set.of(1L))) {
+                require(emptyCalls.capturedSources() == (TransferSourceBinding.CONTACTS | TransferSourceBinding.CALLS)
+                        && emptyCalls.pageCount("calls") == 0,
+                        "readable empty Calls lost its required permission binding");
+            }
+            review.begin("messages");
+            review.interaction("messages", 1, "+15551234567", 1_750_000_000_000L, "incoming", null);
+            review.commit("messages", 1, 0);
+            try (PagedTransfer all = new PagedTransfer(getTargetContext(), review, Set.of(1L))) {
+                require(all.capturedSources() == 7, "captured SMS missing from binding");
+                require(!TransferSourceBinding.permitted(new TransferSourceBinding("active", all.capturedSources()),
+                        "active", permission -> permission != TransferSourceBinding.MESSAGES),
+                        "revoked captured SMS was accepted");
+            }
+        }
+    }
+
+    private void verifyTransferFileOwnership() throws Exception {
+        Context target = getTargetContext();
+        try (SanitizedStore review = new SanitizedStore(target)) {
+            review.begin("contacts");
+            review.contact(1, "Synthetic old and new transfer", "+15551234567");
+            review.commit("contacts", 1, 0);
+            PagedTransfer old = new PagedTransfer(target, review, Set.of(1L));
+            File oldFile = transferFile(old);
+            PagedTransfer current = null;
+            try {
+                current = new PagedTransfer(target, review, Set.of(1L));
+                File currentFile = transferFile(current);
+                require(!oldFile.equals(currentFile) && oldFile.exists() && currentFile.exists(),
+                        "overlapping transfer builds shared a SQLite file");
+                PagedTransfer.clearOrphaned(target);
+                require(oldFile.exists() && currentFile.exists(), "cold cleanup erased a live transfer");
+                CountDownLatch releaseOld = new CountDownLatch(1);
+                AtomicReference<Throwable> oldFailure = new AtomicReference<>();
+                Thread retiring = new Thread(() -> {
+                    try {
+                        require(releaseOld.await(5, TimeUnit.SECONDS), "old transfer release timed out");
+                        old.close();
+                    } catch (Throwable failed) { oldFailure.set(failed); }
+                }, "synthetic-old-transfer-cleanup");
+                retiring.start();
+                releaseOld.countDown();
+                retiring.join(5000);
+                require(!retiring.isAlive() && oldFailure.get() == null, "old transfer cleanup failed");
+                require(!oldFile.exists() && currentFile.exists() &&
+                        current.pageJson("contacts", 0) != null,
+                        "late old transfer cleanup erased the new transfer");
+                old.close(); // A second stale callback must be harmless.
+            } finally {
+                if (current != null) current.close();
+                old.close();
+            }
+            File orphan = new File(target.getNoBackupFilesDir(),
+                    "phone-transfer-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.sqlite");
+            try (FileOutputStream stream = new FileOutputStream(orphan)) { stream.write(1); }
+            require(orphan.exists(), "synthetic orphan was not written");
+            PagedTransfer.clearOrphaned(target);
+            require(!orphan.exists(), "cold startup did not clean an orphaned transfer");
+
+            PagedTransfer blocked = new PagedTransfer(target, review, Set.of(1L));
+            File blockedFile = transferFile(blocked);
+            File stubbornJournal = new File(blockedFile.getPath() + "-journal");
+            File stubbornChild = new File(stubbornJournal, "synthetic-child");
+            if (stubbornJournal.exists())
+                require(stubbornJournal.isFile() && stubbornJournal.delete(),
+                        "synthetic transfer journal was not replaceable");
+            require(stubbornJournal.mkdir(), "synthetic cleanup failure directory was not created");
+            try (FileOutputStream stream = new FileOutputStream(stubbornChild)) { stream.write(1); }
+            boolean cleanupFailed = false;
+            try { blocked.close(); }
+            catch (android.database.sqlite.SQLiteException expected) { cleanupFailed = true; }
+            require(cleanupFailed && PagedTransfer.cleanupRequired(),
+                    "failed transfer deletion did not block another handoff");
+            boolean refused = false;
+            try (PagedTransfer ignored = new PagedTransfer(target, review, Set.of(1L))) {
+                // A new transfer may not be created until cleanup is verified.
+            } catch (android.database.sqlite.SQLiteException expected) { refused = true; }
+            require(refused, "transfer storage accepted a new build after failed cleanup");
+            require(stubbornChild.delete() && stubbornJournal.delete(), "synthetic cleanup obstruction remained");
+            PagedTransfer.clearOrphaned(target);
+            require(!PagedTransfer.cleanupRequired(), "verified cleanup did not reopen private transfer storage");
+            try (PagedTransfer recovered = new PagedTransfer(target, review, Set.of(1L))) {
+                require(recovered.pageJson("contacts", 0) != null, "recovered transfer lost its page");
+            }
+        }
+    }
+
+    private static File transferFile(PagedTransfer transfer) throws Exception {
+        Field field = PagedTransfer.class.getDeclaredField("file");
+        field.setAccessible(true);
+        return (File) field.get(transfer);
+    }
+
+    private void verifyActiveHandoffRecreation() throws Exception {
+        Context target = getTargetContext();
+        CountDownLatch connected = new CountDownLatch(1);
+        AtomicReference<HandoffService.LocalBinder> current = new AtomicReference<>();
+        ServiceConnection connection = new ServiceConnection() {
+            @Override public void onServiceConnected(ComponentName name, IBinder service) {
+                current.set((HandoffService.LocalBinder) service);
+                connected.countDown();
+            }
+            @Override public void onServiceDisconnected(ComponentName name) { current.set(null); }
+        };
+        require(target.bindService(new Intent(target, HandoffService.class), connection, Context.BIND_AUTO_CREATE),
+                "synthetic service bind failed");
+        Activity first = null;
+        Activity second = null;
+        try {
+            require(connected.await(5, TimeUnit.SECONDS) && current.get() != null,
+                    "synthetic service did not bind");
+            HandoffService.LocalBinder binder = current.get();
+            require(binder.storageAvailable() && binder.notificationsAvailable(),
+                    "synthetic service storage or notification was unavailable");
+            try (SanitizedStore source = new SanitizedStore(target)) {
+                source.begin("contacts");
+                source.contact(1, "Synthetic handoff review", "+15551234567");
+                source.commit("contacts", 1, 0);
+                PagedTransfer transfer = new PagedTransfer(target, source, Set.of(1L));
+                runOnMainSync(() -> binder.approve(transfer));
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (!"ready".equals(binder.snapshot().state()) && System.nanoTime() < until)
+                    Thread.sleep(20);
+                require("ready".equals(binder.snapshot().state()) && binder.snapshot().code() != null,
+                        "approved handoff did not start its foreground listener");
+                String code = binder.snapshot().code();
+                first = startActivitySync(new Intent(target, MainActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+                waitForIdleSync();
+                require(binder.recoverSources() != null && binder.recoverSources().capturedSources() == 1,
+                        "first Activity lost its frozen Contacts source binding");
+                ActivityMonitor recreated = addMonitor(MainActivity.class.getName(), null, false);
+                try {
+                    Activity old = first;
+                    runOnMainSync(old::recreate);
+                    second = waitForMonitorWithTimeout(recreated, 5_000);
+                    require(second != null && second != first, "Activity did not recreate");
+                    waitForIdleSync();
+                    require("ready".equals(binder.snapshot().state()) && code.equals(binder.snapshot().code()),
+                            "recreated Activity replaced or cancelled the approved handoff");
+                    require(hasTextContaining(second.getWindow().getDecorView(), "Active reviewed handoff: Contacts"),
+                            "recreated Activity did not present the service's frozen source coverage");
+                } finally { removeMonitor(recreated); }
+            }
+        } finally {
+            Activity closing = second != null ? second : first;
+            if (closing != null) runOnMainSync(closing::finish);
+            HandoffService.LocalBinder binder = current.get();
+            if (binder != null) runOnMainSync(binder::cancel);
+            target.unbindService(connection);
+        }
+    }
+
+    private void verifyPagedHandoff() throws Exception {
+        SanitizedStore source = new SanitizedStore(getTargetContext());
+        PagedTransfer transfer;
+        try {
+            source.begin("contacts");
+            String longName = "Synthetic " + "N".repeat(320);
+            source.contact(1, longName, "+15551234567");
+            source.contact(1, longName, "+15551234568");
+            source.commit("contacts", 2, 0);
+            source.begin("calls");
+            source.interaction("calls", 10, "+15551234567", 1_750_000_000_000L, "incoming", 31L);
+            source.commit("calls", 1, 0);
+            source.review(Set.of(1L));
+            Instant frozen = Instant.parse("2026-10-08T17:00:00Z");
+            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L), frozen, ignored -> {});
+            String firstManifest = transfer.manifestJson();
+            String firstDigest = transfer.manifestSha256();
+            transfer.close();
+            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L), frozen, ignored -> {});
+            require(transfer.manifestJson().equals(firstManifest) && transfer.manifestSha256().equals(firstDigest),
+                    "unchanged reviewed snapshot changed retry identity after re-pair");
+            require(transfer.pageJson("contacts", 0) != null, "re-paired contact page missing");
+            transfer.close();
+            try (PagedTransfer changed = new PagedTransfer(getTargetContext(), source, Set.of(1L),
+                    frozen.plusSeconds(1), ignored -> {})) {
+                require(!changed.manifestSha256().equals(firstDigest),
+                        "changed reviewed snapshot reused the prior retry identity");
+            }
+            transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L), frozen, ignored -> {});
+            require(transfer.manifestJson().contains("\"platform\":\"android\""), "Android manifest missing");
+            require(transfer.manifestJson().contains("\"rowsSeen\":1,\"rowsIncluded\":1,\"providerRowsSeen\":2"),
+                    "phone rows were misreported as excluded contact records");
+            require(transfer.manifestJson().contains("\"pageCount\":1"), "selected source page missing");
+            require(transfer.manifestJson().contains("\"missingSources\":[\"messages\"]"), "missing SMS not marked");
+        } finally { source.close(); }
+        AtomicLong clock = new AtomicLong();
+        try (LocalBridge bridge = new LocalBridge(transfer, ORIGIN, 0, clock::get, reason -> {}, () -> {})) {
+            bridge.start();
+            String paired = request(bridge.port(), "POST", "/v1/pair", "Content-Type: application/json\r\n",
+                    "{\"code\":\"" + bridge.code() + "\"}");
+            require(paired.startsWith("HTTP/1.1 200"), "v2 pair failed");
+            JSONObject pairing = new JSONObject(paired.substring(paired.indexOf("\r\n\r\n") + 4));
+            String token = pairing.getString("token");
+            String handoff = pairing.getString("handoffId");
+            String digest = pairing.getString("payloadSha256");
+            require(pairing.getBoolean("confirmReceiptRequired"), "v2 ACK handshake missing");
+            require(digest.equals(PagedTransfer.sha256(pairing.getString("manifestJson"))), "manifest hash mismatch");
+            String auth = "Authorization: Bearer " + token + "\r\n";
+            String binding = "{\"handoffId\":\"" + handoff + "\",\"payloadSha256\":\"" + digest + "\"";
+            clock.set(TimeUnit.MINUTES.toNanos(6));
+            require(request(bridge.port(), "POST", "/v2/keepalive", auth, "").contains("\"active\":true"),
+                    "active paged review expired with initial pairing code");
+            String page = request(bridge.port(), "GET", "/v2/source/contacts?cursor=0", auth, "");
+            JSONObject recordPage = new JSONObject(page.substring(page.indexOf("\r\n\r\n") + 4));
+            require(recordPage.getString("chunk").contains("N".repeat(320)), "full selected name clipped");
+            require(recordPage.getString("pageSha256").equals(PagedTransfer.sha256(recordPage.getString("chunk"))),
+                    "contact page hash mismatch");
+            require(request(bridge.port(), "GET", "/v2/source/contacts?cursor=0", auth, "").startsWith("HTTP/1.1 200"),
+                    "lost page response not retryable");
+            require(request(bridge.port(), "GET", "/v2/source/contacts?cursor=1", auth, "").startsWith("HTTP/1.1 409"),
+                    "future page accepted");
+            String decline = binding + ",\"category\":\"calls\"}";
+            require(request(bridge.port(), "POST", "/v2/decline", auth + "Content-Type: application/json\r\n", decline)
+                    .contains("\"declined\":true"), "call decline failed");
+            require(request(bridge.port(), "POST", "/v2/decline", auth + "Content-Type: application/json\r\n", decline)
+                    .contains("\"declined\":true"), "lost decline response not retryable");
+            require(request(bridge.port(), "GET", "/v2/source/calls?cursor=0", auth, "").startsWith("HTTP/1.1 410"),
+                    "declined call page replayed");
+            String completed = request(bridge.port(), "POST", "/v1/complete", auth, "");
+            require(completed.contains("\"calls\":\"declined\""), "completion lost decline disposition");
+            require(request(bridge.port(), "POST", "/v1/complete", auth, "").contains("\"completed\":true"),
+                    "lost completion response not retryable");
+            String saved = binding + ",\"saved\":true}";
+            require(request(bridge.port(), "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n",
+                    saved.replace(digest, "0".repeat(64))).startsWith("HTTP/1.1 409"), "wrong manifest ACK accepted");
+            require(request(bridge.port(), "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n", saved)
+                    .contains("\"acknowledged\":true"), "saved ACK failed");
+            require(request(bridge.port(), "POST", "/v1/acknowledge-save", auth + "Content-Type: application/json\r\n", saved)
+                    .contains("\"acknowledged\":true"), "lost saved ACK not retryable");
+            require(request(bridge.port(), "POST", "/v1/confirm-ack-received", auth + "Content-Type: application/json\r\n",
+                    binding + ",\"received\":true}").contains("\"received\":true"), "final receipt failed");
+        }
+    }
+
+    private void verifyLargeStore() throws Exception {
+        SanitizedStore source = new SanitizedStore(getTargetContext());
+        try {
+            Set<Long> selected = new HashSet<>();
+            source.begin("contacts");
+            for (int index = 1; index <= 25_700; index++) {
+                source.contact(index, "Synthetic " + index, "+1555" + String.format(java.util.Locale.ROOT, "%07d", index));
+                selected.add((long) index);
+            }
+            source.commit("contacts", 25_700, 0);
+            require(source.count("contacts") == 25_700, "private source omitted contacts");
+            try (PagedTransfer transfer = new PagedTransfer(getTargetContext(), source, selected)) {
+                require(transfer.pageCount("contacts") == 257, "old aggregate page ceiling remained");
+                require(transfer.page("contacts", 0) != null && transfer.page("contacts", 256) != null,
+                        "first or final immutable page missing");
+                require(transfer.manifestJson().contains("\"rowsIncluded\":25700"), "manifest silently truncated selected count");
+            }
+        } finally { source.close(); }
+    }
+
+    private void verifyOptionalRollback() throws Exception {
+        SanitizedStore source = new SanitizedStore(getTargetContext());
+        try {
+            source.begin("contacts");
+            source.contact(1, "Synthetic Contact", "+15551234567");
+            source.commit("contacts", 1, 0);
+            source.begin("calls");
+            source.interaction("calls", 1, "+15551234567", 1_750_000_000_000L, "incoming", 10L);
+            source.abort("calls");
+            require(source.count("calls") == 0 && !source.coverage("calls").available,
+                    "failed optional source exposed partial records");
+            try (PagedTransfer transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L))) {
+                require(transfer.pageCount("contacts") == 1 && transfer.pageCount("calls") == 0,
+                        "optional-source failure contaminated valid contact selection");
+                require(transfer.manifestJson().contains("\"missingSources\":[\"calls\",\"messages\"]"),
+                        "failed optional source not marked unavailable");
+            }
+        } finally { source.close(); }
+    }
+
+    private void verifyFullHistoryStore() throws Exception {
+        SanitizedStore source = new SanitizedStore(getTargetContext());
+        try {
+            source.begin("contacts");
+            for (int index = 1; index <= 100_001; index++) {
+                source.contact(index, "Synthetic " + index, "+1555" + String.format(java.util.Locale.ROOT, "%07d", index));
+            }
+            source.commit("contacts", 100_001, 0);
+            source.begin("calls");
+            for (int index = 1; index <= 256_001; index++) {
+                source.interaction("calls", index, "+15550000001", 1_750_000_000_000L + index,
+                        "incoming", 30L);
+            }
+            source.commit("calls", 256_001, 0);
+            try (PagedTransfer transfer = new PagedTransfer(getTargetContext(), source, Set.of(1L))) {
+                require(transfer.pageCount("contacts") == 1, "selected contact missing beyond old source scan cap");
+                require(transfer.pageCount("calls") == 2561, "old interaction cap or page ceiling remained");
+                require(transfer.page("calls", 2560) != null, "last history page missing");
+                require(transfer.manifestJson().contains("\"rowsSeen\":256001,\"rowsIncluded\":256001"),
+                        "history manifest omitted measured rows");
+            }
+        } finally { source.close(); }
+    }
+
+    private static String capture(String response, String pattern) {
+        Matcher match = Pattern.compile(pattern).matcher(response);
+        require(match.find(), "missing pairing field");
+        return match.group(1);
+    }
+
+    private static String request(int port, String method, String path, String headers, String body) throws Exception {
+        try (Socket socket = new Socket(InetAddress.getByName("127.0.0.1"), port)) {
+            socket.setSoTimeout(3000);
+            byte[] bodyBytes = body.getBytes(StandardCharsets.US_ASCII);
+            String request = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1:" + port +
+                    "\r\nOrigin: " + ORIGIN + "\r\n" + headers + "Content-Length: " + bodyBytes.length +
+                    "\r\nConnection: close\r\n\r\n" + body;
+            socket.getOutputStream().write(request.getBytes(StandardCharsets.US_ASCII));
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] chunk = new byte[4096];
+            int count;
+            while ((count = socket.getInputStream().read(chunk)) != -1) output.write(chunk, 0, count);
+            return output.toString(StandardCharsets.US_ASCII);
+        }
+    }
+
+    private static void require(boolean condition, String message) {
+        if (!condition) throw new AssertionError(message);
+    }
+}

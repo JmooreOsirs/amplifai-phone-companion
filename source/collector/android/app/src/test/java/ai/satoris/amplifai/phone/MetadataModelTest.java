@@ -9,6 +9,7 @@ import org.junit.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 
 public final class MetadataModelTest {
     @Test public void reviewIncludesOnlySelectedExactPhoneMatches() {
@@ -47,6 +48,21 @@ public final class MetadataModelTest {
             fail("A bounded provider scan must not be eligible for review or handoff.");
         } catch (MetadataModel.SourceLimitExceededException expected) {
             assertTrue(expected.getMessage().contains("scan limit"));
+        }
+    }
+
+    @Test public void twentyFirstDistinctPhoneCannotBecomeAnApparentlyCompleteContact() {
+        LinkedHashSet<String> phones = new LinkedHashSet<>();
+        for (int index = 0; index < 20; index++) {
+            MetadataModel.addContactPhone(phones, String.format("+1202555%04d", index));
+        }
+        MetadataModel.addContactPhone(phones, "+12025550000");
+        assertEquals(20, phones.size());
+        try {
+            MetadataModel.addContactPhone(phones, "+12025550020");
+            fail("An extra distinct value must stop the source, not disappear.");
+        } catch (MetadataModel.SourceLimitExceededException expected) {
+            assertEquals(20, phones.size());
         }
     }
 }

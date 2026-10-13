@@ -35,9 +35,21 @@ android {
         applicationId = "ai.satoris.amplifai.phone"
         minSdk = 26
         targetSdk = 37
-        versionCode = 26092802
-        versionName = "2026.09.28-rc2"
+        versionCode = 26101310
+        versionName = "2026.10.13-rc10"
+        testInstrumentationRunner = "ai.satoris.amplifai.phone.LocalBridgeInstrumentedTest"
 
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("website") {
+            dimension = "distribution"
+        }
+        create("play") {
+            dimension = "distribution"
+            testInstrumentationRunner = "ai.satoris.amplifai.phone.PlayDistributionInstrumentedTest"
+        }
     }
 
     signingConfigs {
