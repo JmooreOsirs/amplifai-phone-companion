@@ -1,14 +1,14 @@
-name: Windows rc16 private ACK-safe candidate
+name: Windows rc17 private video candidate
 
 on:
   push:
-    branches: [codex/windows-rc16-ack-private]
+    branches: [codex/windows-rc17-video-oct13]
 
 permissions:
   contents: write
 
 concurrency:
-  group: windows-rc16-ack-private
+  group: windows-rc17-video-oct13
   cancel-in-progress: false
 
 jobs:
@@ -61,6 +61,12 @@ jobs:
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiAckRender'
           python source/collector/windows/tests/render_ack_recovery.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Render video guide and contact details on actual Windows desktop
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiVideoRender'
+          python source/collector/windows/tests/render_video_parity.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Freeze distinct runtimes and inspect exact package
         shell: pwsh
         run: |
@@ -69,8 +75,10 @@ jobs:
           python source/script/build_windows_candidate.py --source source --python $python --output $output --legal-root .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $render = Get-Content (Join-Path $env:RUNNER_TEMP 'AmplifaiAckRender\render-receipt.json') -Raw | ConvertFrom-Json
+          $video = Get-Content (Join-Path $env:RUNNER_TEMP 'AmplifaiVideoRender\render-video-receipt.json') -Raw | ConvertFrom-Json
           $frozen = Get-Content (Join-Path $output 'candidate-receipt.json') -Raw | ConvertFrom-Json
           if ($render.guiSourceSha256 -ne $frozen.gui_source_sha256) { throw 'Rendered Windows source differs from frozen launcher source' }
+          if ($video.guiSourceSha256 -ne $frozen.gui_source_sha256) { throw 'Video guide render differs from frozen launcher source' }
       - name: Qualify exact frozen encrypted-main worker and owned cleanup
         shell: pwsh
         run: |
@@ -103,7 +111,7 @@ jobs:
         run: |
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $msi = Join-Path $installer 'AmplifaiPhone-rc16-unsigned.msi'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc17-unsigned.msi'
           $receipt = Join-Path $candidate 'candidate-receipt.json'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           if (Test-Path $installed) { throw 'Per-user install path is not clean' }
@@ -123,15 +131,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'windows-rc16-private-' + $env:GITHUB_SHA.Substring(0, 12)
+          $tag = 'windows-rc17-private-' + $env:GITHUB_SHA.Substring(0, 12)
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $msi = Join-Path $installer 'AmplifaiPhone-rc16-unsigned.msi'
+          $msi = Join-Path $installer 'AmplifaiPhone-rc17-unsigned.msi'
           $msiReceipt = Join-Path $installer 'msi-receipt.json'
           $frozenReceipt = Join-Path $candidate 'candidate-receipt.json'
           $workerReceipt = Join-Path $candidate 'frozen-encrypted-worker-receipt.json'
           $render = Join-Path $env:RUNNER_TEMP 'AmplifaiAckRender'
-          gh release create $tag "$msi#AmplifaiPhone-rc16-unsigned.msi" "$msiReceipt#msi-receipt.json" "$frozenReceipt#candidate-receipt.json" "$workerReceipt#frozen-encrypted-worker-receipt.json" (Join-Path $render 'render-receipt.json') (Join-Path $render 'windows-920-review.png') (Join-Path $render 'windows-920-change-pending.png') (Join-Path $render 'windows-920-first-receipt.png') (Join-Path $render 'windows-680-review.png') (Join-Path $render 'windows-680-change-pending.png') (Join-Path $render 'windows-680-first-receipt.png') --draft --target $env:GITHUB_SHA --title 'Windows rc16 private unsigned ACK-safe candidate' --notes 'Private unsupported qualification only. Unsigned per-user MSI; no customer download. Windows session, shared ACK-refusal boundary, actual synthetic Tk controls, frozen helper and runner-user install/uninstall qualify this source. Normal consumer non-admin host, trusted signature, Apple USB driver, physical iPhone and authenticated account Save/ACK remain unverified.'
+          $video = Join-Path $env:RUNNER_TEMP 'AmplifaiVideoRender'
+          $assets = @(
+            "$msi#AmplifaiPhone-rc17-unsigned.msi", "$msiReceipt#msi-receipt.json",
+            "$frozenReceipt#candidate-receipt.json", "$workerReceipt#frozen-encrypted-worker-receipt.json",
+            (Join-Path $render 'render-receipt.json'),
+            (Join-Path $render 'windows-920-review.png'),
+            (Join-Path $render 'windows-920-change-pending.png'),
+            (Join-Path $render 'windows-920-first-receipt.png'),
+            (Join-Path $render 'windows-680-review.png'),
+            (Join-Path $render 'windows-680-change-pending.png'),
+            (Join-Path $render 'windows-680-first-receipt.png'),
+            (Join-Path $video 'render-video-receipt.json'),
+            (Join-Path $video 'windows-920-setting-off.png'),
+            (Join-Path $video 'windows-920-guide-step2.png'),
+            (Join-Path $video 'windows-680-setting-off.png'),
+            (Join-Path $video 'windows-680-guide-step2.png'),
+            (Join-Path $video 'windows-contact-source-details.png')
+          )
+          gh release create $tag @assets --draft --target $env:GITHUB_SHA --title 'Windows rc17 private unsigned video candidate' --notes 'Private unsigned TEST candidate only. Windows video guide, read-only backup-setting check, contact source details, ACK refusal, synthetic Tk controls, frozen helper and runner-user install/uninstall qualify this source. Consumer non-admin host, Apple USB, physical iPhone and authenticated account Save/ACK remain unverified.'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $draft = gh release view $tag --json isDraft --jq '.isDraft'
           if ($LASTEXITCODE -ne 0 -or $draft.Trim() -ne 'true') { throw 'Retained release is not draft' }

@@ -39,10 +39,10 @@ This candidate branch also projects the current Python collection engine and
 the Windows Tk wrapper under `source/collector/windows/`. The fixed package
 builder at `source/script/build_windows_candidate.py` creates a disposable
 dual-onedir candidate only on Windows x64/CPython 3.12. The branch's bounded
-    Windows runner checks private storage, synthetic protocol behavior, actual Tk
+Windows runner checks private storage, synthetic protocol behavior, actual Tk
 review and consent controls, frozen helper imports/empty residue, GUI startup,
 and per-user WiX install/uninstall. It retains an **unsigned private draft MSI**,
-not a public download. The rc14 private draft preserves the corrected consent-row fit, and rc15 binds the encrypted-size worker. This branch prepares a distinct rc16 private candidate with the shared helper's receipt-safe reconnect/refusal behavior and an explicit selection-change action. No Windows signature, Apple USB/Trust run,
+not a public download. The public rc16 unsigned TEST remains the rollback. This branch prepares a distinct rc17 candidate with a current-step Windows guide, read-only backup-setting check and contact source details, while preserving the receipt-safe reconnect/refusal behavior. No Windows signature, Apple USB/Trust run,
 physical-device transfer or authenticated saved acknowledgment is implied.
 
 ## Mac source package
@@ -59,7 +59,7 @@ under **GPL-3.0-or-later**. See `COPYRIGHT` for the scope and warranty notice,
 notices. The separate private website/backend source is not part of this package.
 
 This branch also carries historical macOS arm64 companion and frozen-helper
-source; the current signed rc20 archive is in its own release. The historical third_party manifests in this Windows branch describe their original Mac source package, not a refreshed Windows candidate inventory. The private Windows frozen receipt and source-projection manifest bind the changed rc16 bytes; neither proves a byte-for-byte reproducible binary build or operation on an owner phone.
+source; the signed Mac archive is in its own release. The historical third_party manifests in this Windows branch describe their original Mac source package, not a refreshed Windows candidate inventory. The rc17 frozen receipt and corresponding-source archive must bind the changed bytes; neither proves a byte-for-byte reproducible binary build or operation on an owner phone.
 
 ## Contents
 
