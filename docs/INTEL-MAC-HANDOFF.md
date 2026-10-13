@@ -13,6 +13,7 @@ The new path:
 3. Checks the architecture, minimum-OS load commands, internal links and hashes of every bundled Mach-O, not just the app executable.
 4. Disables both automatic and manual Intel updater actions until an Intel-compatible signed feed exists. ARM updater behavior stays unchanged.
 5. Produces a separate ad-hoc signed candidate and truthful receipts. It neither installs over another app nor changes an account database, website, original ARM release, or phone.
+6. Uses its own private `~/Library/Application Support/AMPLIFai Phone Intel Test/sessions` root. Existing Apple Silicon local sessions and incomplete reviews do not transfer. The browser bridge uses port 48751 in both apps, so close one companion before starting the other.
 
 ## Build
 

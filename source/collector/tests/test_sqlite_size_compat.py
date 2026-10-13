@@ -472,6 +472,29 @@ class SizeCompatibilityTests(unittest.TestCase):
             marker.write_text(json.dumps({'version':1,'session':session.name,'pid':os.getppid()+1,'created_at':0}))
             self.assertFalse(compat._frozen_owned_path(path))
 
+    @unittest.skipIf(os.name == 'nt', 'Intel candidate isolation is macOS-only')
+    def test_frozen_worker_intel_root_never_accepts_arm_session(self):
+        home=self.root/'fictional-intel-home'
+        parent=home/'Library/Application Support'
+        roots=[parent/name/'sessions' for name in
+               ('AMPLIFai Phone Intel Test','AMPLIFai Phone Candidate')]
+        paths=[]
+        for root in roots:
+            root.mkdir(parents=True,mode=0o700)
+            (root/'.amplifai-phone-sessions-v1').write_bytes(b'AMPLIFAI_PHONE_SESSIONS_V1\n')
+            session=root/('session-'+'c'*32)
+            session.mkdir(mode=0o700)
+            (session/'.amplifai-owned-session.json').write_text(json.dumps(
+                {'version':1,'session':session.name,'pid':os.getppid(),'created_at':0}))
+            path=session/'selected-copy'
+            path.write_bytes(self.database().read_bytes())
+            paths.append(path)
+        with (patch.object(compat.sys,'frozen',True,create=True),
+              patch.object(compat.Path,'home',return_value=home),
+              patch.dict(os.environ,{'AMPLIFAI_INTEL_CANDIDATE':'1'})):
+            self.assertTrue(compat._frozen_owned_path(paths[0]))
+            self.assertFalse(compat._frozen_owned_path(paths[1]))
+
     def test_frozen_worker_rejects_unconfined_or_public_session(self):
         home=self.root/'fictional-home'
         parent=home/'AppData/Local' if os.name=='nt' else home/'Library/Application Support'

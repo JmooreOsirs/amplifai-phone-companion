@@ -470,7 +470,7 @@ final class CollectorModel: ObservableObject {
     var workspaceSpaceStatus: String? {
         guard phase == .error, lastErrorCode == "workspace_low_space" else { return nil }
         let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/AMPLIFai Phone Candidate/sessions", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/AMPLIFai Phone Intel Test/sessions", isDirectory: true)
         guard let attributes = try? FileManager.default.attributesOfFileSystem(forPath: root.path),
               let free = attributes[.systemFreeSize] as? NSNumber else {
             return "The app checks free space on this Mac's Application Support volume, not the iPhone. Current free space could not be measured here. Selected sources, parsing copies and a further 2 GiB reserve must fit."
@@ -1235,7 +1235,8 @@ final class CollectorModel: ObservableObject {
             "PATH": "/usr/bin:/bin",
             "PYTHONPATH": module.path,
             "PYTHONDONTWRITEBYTECODE": "1",
-            "UV_OFFLINE": "1"
+            "UV_OFFLINE": "1",
+            "AMPLIFAI_INTEL_CANDIDATE": "1"
         ]
         runner.standardInput = input
         runner.standardOutput = output

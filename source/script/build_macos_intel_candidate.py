@@ -28,6 +28,12 @@ INTEL_MODIFIED_BASE_FILES = {
     "source/collector/macos/Tests/CompanionUpdaterChecks.swift",
     "source/collector/macos/Tests/check_flow.sh",
     "source/collector/macos/Tests/check_updater.sh",
+    "source/collector/macos/Tests/check_contact_provenance.sh",
+    "source/collector/macos/Sources/Services/CollectorModel.swift",
+    "source/collector/amplifai_phone/workspace.py",
+    "source/collector/amplifai_phone/sqlite_size_compat.py",
+    "source/collector/tests/test_workspace.py",
+    "source/collector/tests/test_sqlite_size_compat.py",
 }
 
 

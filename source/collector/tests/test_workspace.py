@@ -17,11 +17,31 @@ from amplifai_phone.workspace import (
     _pid_alive,
     abandoned_sessions,
     clear_abandoned,
+    default_sessions_root,
 )
 from test_windows_storage import NativeBoundary, ace
 
 
 class WorkspaceTest(unittest.TestCase):
+    @unittest.skipIf(os.name == "nt", "Intel candidate isolation is macOS-only")
+    def test_intel_candidate_uses_separate_sessions_root(self) -> None:
+        with (
+            patch.object(workspace_module.Path, "home", return_value=Path("/test-home")),
+            patch.dict(os.environ, {"AMPLIFAI_INTEL_CANDIDATE": "1"}),
+        ):
+            intel = default_sessions_root()
+        with (
+            patch.object(workspace_module.Path, "home", return_value=Path("/test-home")),
+            patch.dict(os.environ, {"AMPLIFAI_INTEL_CANDIDATE": ""}),
+        ):
+            arm = default_sessions_root()
+        self.assertEqual(
+            intel, Path("/test-home/Library/Application Support/AMPLIFai Phone Intel Test/sessions")
+        )
+        self.assertEqual(
+            arm, Path("/test-home/Library/Application Support/AMPLIFai Phone Candidate/sessions")
+        )
+
     def test_windows_process_probe_never_sends_a_signal(self) -> None:
         with (
             patch("amplifai_phone.workspace.os.name", "nt"),

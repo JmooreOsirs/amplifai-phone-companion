@@ -58,11 +58,16 @@ def default_sessions_root() -> Path:
                 "LOCALAPPDATA is unavailable", code="workspace_unavailable"
             )
         return Path(parent) / "AMPLIFai Phone Candidate" / "sessions"
+    product = (
+        "AMPLIFai Phone Intel Test"
+        if os.environ.get("AMPLIFAI_INTEL_CANDIDATE") == "1"
+        else "AMPLIFai Phone Candidate"
+    )
     return (
         Path.home()
         / "Library"
         / "Application Support"
-        / "AMPLIFai Phone Candidate"
+        / product
         / "sessions"
     )
 

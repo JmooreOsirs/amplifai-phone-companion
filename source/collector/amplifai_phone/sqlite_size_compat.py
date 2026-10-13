@@ -236,7 +236,10 @@ def _frozen_owned_path(path):
     if not getattr(sys, 'frozen', False):
         return True
     parent = Path(os.environ['LOCALAPPDATA']) if os.name == 'nt' else Path.home()/'Library/Application Support'
-    root = parent/'AMPLIFai Phone Candidate/sessions'
+    product = ('AMPLIFai Phone Intel Test'
+               if os.name != 'nt' and os.environ.get('AMPLIFAI_INTEL_CANDIDATE') == '1'
+               else 'AMPLIFai Phone Candidate')
+    root = parent/product/'sessions'
     try:
         relative = path.relative_to(root)
     except ValueError:
