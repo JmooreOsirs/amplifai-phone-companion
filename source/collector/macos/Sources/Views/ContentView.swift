@@ -12,6 +12,8 @@ struct ContentView: View {
     @State private var callHistoryPreparation: CollectorModel.CallHistoryPreparation?
     @State private var showingCollectionDetails = false
     @State private var showingFinderGuide = false
+    @State private var finderGuideStep = 0
+    @AccessibilityFocusState private var finderGuideHeadingFocused: Bool
     @State private var showingUpdates = false
     @State private var confirmingRetainedReviewDiscard = false
     @State private var confirmingBulkMove = false
@@ -30,7 +32,7 @@ struct ContentView: View {
                     else { collectionApprovalPanel.id("collection-setup") }
                 }
                 if model.phase != .error && model.phase != .idle { statusPanel }
-                if model.canInstallUpdate && callHistoryPreparation == nil && model.localCollectionApproval == nil { updatePanel }
+                if model.canInstallUpdate && callHistoryPreparation == nil && model.localCollectionApproval == nil && !showingFinderGuide { updatePanel }
                 if model.phase == .passwordRequired { passwordPanel }
                 if model.phase == .selecting || model.phase == .reviewing { contactPanel }
                 if model.phase == .reviewing { reviewPanel }
@@ -234,12 +236,12 @@ struct ContentView: View {
                 .buttonStyle(SecondaryButton())
                 .keyboardShortcut(.cancelAction)
             } else if let choice = callHistoryPreparation {
-                Text("Approve this collection")
+                Text("Approve collection")
                     .font(.custom("Arial", size: 26).weight(.bold))
                     .foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
                 HStack(alignment: .top, spacing: 12) {
-                    Text("Backup: \(backupSettingLabel). \(callHistoryChoiceSummary(choice))")
+                    Text("Backup \(backupSettingLabel) · \(callHistoryChoiceSummary(choice))")
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button("Change") {
                         callHistoryPreparation = nil
@@ -253,6 +255,13 @@ struct ContentView: View {
                     HStack(spacing: 12) { collectionApprovalActions }
                     VStack(alignment: .leading, spacing: 12) { collectionApprovalActions }
                 }
+            } else if showingFinderGuide && model.backupEncryptionStatus == .unencrypted {
+                Text("Backup encryption is Off. Finder setup is optional; this app will still read any available Calls.")
+                    .font(.custom("Arial", size: 16))
+                    .foregroundStyle(Brand.body)
+                Button("Back to collection choices") { showingFinderGuide = false }
+                    .buttonStyle(SecondaryButton())
+                finderEncryptionGuide
             } else {
                 Text("Prepare this iPhone")
                     .font(.custom("Arial", size: 26).weight(.bold))
@@ -264,11 +273,11 @@ struct ContentView: View {
                     Text("We will read available calls. This backup may not include them.")
                         .font(.custom("Arial", size: 16))
                         .foregroundStyle(Brand.body)
-                    Button(showingFinderGuide ? "Hide Finder call-history steps" : "Prepare call history in Finder") {
-                        showingFinderGuide.toggle()
+                    Button("Prepare call history in Finder") {
+                        finderGuideStep = 0
+                        showingFinderGuide = true
                     }
                     .buttonStyle(SecondaryButton())
-                    if showingFinderGuide { finderEncryptionGuide }
                 }
                 if model.backupEncryptionStatus != .notChecked && model.backupEncryptionStatus != .checking {
                     if model.backupEncryptionStatus == .encrypted {
@@ -320,7 +329,7 @@ struct ContentView: View {
                 Button("Check iPhone setting") { checkBackupSetting() }
                     .buttonStyle(LimeButton())
                     .disabled(!model.canPrepareCollection || model.localCollectionApproval != nil)
-            } else if model.backupEncryptionStatus != .checking {
+            } else if model.backupEncryptionStatus != .checking && !showingFinderGuide {
                 Button("Recheck iPhone setting") { checkBackupSetting() }
                     .buttonStyle(SecondaryButton())
                     .disabled(!model.canPrepareCollection || model.localCollectionApproval != nil)
@@ -374,42 +383,143 @@ struct ContentView: View {
     }
 
     private var finderEncryptionGuide: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let step = finderEncryptionSteps[finderGuideStep]
+        return VStack(alignment: .leading, spacing: 12) {
             Text("To prepare call history in Finder")
                 .font(.custom("Arial", size: 22).weight(.bold))
                 .foregroundStyle(Brand.heading)
                 .accessibilityAddTraits(.isHeader)
-            ForEach(Array(finderEncryptionSteps.enumerated()), id: \.offset) { index, step in
-                HStack(alignment: .top, spacing: 12) {
-                    Text("\(index + 1).")
-                        .font(.custom("Arial", size: 22).weight(.bold))
-                        .foregroundStyle(Brand.lime)
-                    Text(step).fixedSize(horizontal: false, vertical: true)
+            Text("Step \(finderGuideStep + 1) of \(finderEncryptionSteps.count) · Finder guide")
+                .font(.custom("Arial", size: 16).weight(.bold))
+                .foregroundStyle(Brand.lime)
+            HStack(spacing: 6) {
+                ForEach(finderEncryptionSteps.indices, id: \.self) { index in
+                    Capsule()
+                        .fill(index == finderGuideStep ? Brand.lime : index < finderGuideStep ? Brand.blue : Brand.border)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 5)
                 }
             }
-            Text("Finder can start a full backup and overwrite/encrypt previous local backups. Let it finish. Finder needs its own Mac storage beyond this app's 2 GiB reserve; do not remove other backups just to make room.")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Finder guide, step \(finderGuideStep + 1) of \(finderEncryptionSteps.count)")
+            finderIllustration
+            Text(step.title)
+                .font(.custom("Arial", size: 22).weight(.bold))
+                .foregroundStyle(Brand.heading)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused($finderGuideHeadingFocused)
+            Text(step.detail)
+                .font(.custom("Arial", size: 18))
+                .foregroundStyle(Brand.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if finderGuideStep == 2 {
+                Text("Turning encryption on starts a Finder backup and can overwrite and encrypt earlier local backups. Finder needs separate Mac storage beyond this app's 2 GiB reserve. Let that backup finish.")
+                    .font(.custom("Arial", size: 16))
+                    .foregroundStyle(Brand.body)
+                    .textSelection(.enabled)
+            }
+            if finderGuideStep == 3 {
+                Button("Recheck iPhone setting") { checkBackupSetting() }
+                    .buttonStyle(LimeButton())
+                    .disabled(!model.canPrepareCollection)
+            }
+            HStack(spacing: 12) {
+                Button("Back") { finderGuideStep -= 1 }
+                    .buttonStyle(SecondaryButton())
+                    .disabled(finderGuideStep == 0)
+                    .frame(minHeight: 44)
+                if finderGuideStep < finderEncryptionSteps.count - 1 {
+                    Button("Next") { finderGuideStep += 1 }
+                        .buttonStyle(LimeButton())
+                        .frame(minHeight: 44)
+                }
+            }
+            DisclosureGroup("iPhone missing in Finder or password unknown?") {
+                Text("Use a data-capable USB cable, unlock the iPhone and answer any normal Allow or Trust prompt yourself. In Finder, use View > Show Sidebar and check Locations. Keep an existing backup password; AMPLIFai cannot reset it or change encryption for you.")
                 .font(.custom("Arial", size: 16))
                 .foregroundStyle(Brand.body)
+                .textSelection(.enabled)
+            }
+            .font(.custom("Arial", size: 16))
         }
+        .onChange(of: finderGuideStep) { _, _ in finderGuideHeadingFocused = true }
     }
 
-    private var finderEncryptionSteps: [String] {
+    @ViewBuilder private var finderIllustration: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("FINDER GUIDE · ILLUSTRATION")
+                .font(.custom("Arial", size: 12).weight(.bold))
+                .foregroundStyle(Brand.muted)
+            switch finderGuideStep {
+            case 0:
+                HStack(spacing: 10) {
+                    Image(systemName: "face.smiling").font(.system(size: 30)).foregroundStyle(Brand.blue)
+                    Text("Finder in the Dock").font(.custom("Arial", size: 18).weight(.bold))
+                    Spacer(minLength: 0)
+                    Image(systemName: "iphone.gen3").font(.system(size: 30)).foregroundStyle(Brand.lime)
+                }
+            case 1:
+                HStack(alignment: .top, spacing: 0) {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("Locations").font(.custom("Arial", size: 14).weight(.bold))
+                        Text("▸ This iPhone").foregroundStyle(Brand.lime)
+                        Text("◇ AMPLIFai Phone disk").foregroundStyle(Brand.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Rectangle().fill(Brand.border).frame(width: 1)
+                    Text("Select the iPhone device")
+                        .font(.custom("Arial", size: 16))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 12)
+                }
+            case 2:
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 12) {
+                        Text("General").foregroundStyle(Brand.lime)
+                        Text("Music").foregroundStyle(Brand.muted)
+                        Text("Files").foregroundStyle(Brand.muted)
+                    }
+                    .font(.custom("Arial", size: 15).weight(.bold))
+                    Rectangle().fill(Brand.border).frame(height: 1)
+                    Text("Backups").font(.custom("Arial", size: 16).weight(.bold))
+                    HStack(spacing: 8) {
+                        Image(systemName: "square").foregroundStyle(Brand.lime)
+                        Text("Encrypt local backup")
+                    }
+                    .font(.custom("Arial", size: 16))
+                }
+            default:
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Finder backup finishes", systemImage: "clock")
+                    Label("Return and recheck", systemImage: "arrow.right")
+                }
+                .font(.custom("Arial", size: 16).weight(.bold))
+            }
+        }
+        .font(.custom("Arial", size: 16))
+        .foregroundStyle(Brand.heading)
+        .textSelection(.enabled)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+        .background(Brand.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.border, lineWidth: 1))
+    }
+
+    private var finderEncryptionSteps: [(title: String, detail: String)] {
         [
-            "Connect the iPhone by USB.",
-            "Unlock it and approve Trust on the iPhone if asked.",
-            "Open Finder and select your iPhone under Locations.",
-            "Open General.",
-            "Turn on Encrypt local backup.",
-            "Choose and keep the backup password yourself. Enter it locally in AMPLIFai if asked; it is never sent to the account.",
-            "Let Finder finish its backup. If an existing password is unknown, ask the owner; this app cannot reset it.",
-            "Return here and choose Recheck iPhone setting."
+            ("Open Finder", "Connect the unlocked iPhone with a data-capable USB cable. Decide any Allow or Trust prompt on the phone yourself, then open Finder on this Mac."),
+            ("Select this iPhone", "In Finder's Locations sidebar, select the iPhone. The AMPLIFai Phone installer disk is a different item. If Locations is hidden, use View > Show Sidebar."),
+            ("Prepare the local backup", "Open General, then Backups. Choose Encrypt local backup and set a password you can keep. AMPLIFai does not change this setting for you."),
+            ("Finish, then recheck", "Let Finder finish its backup. Return to AMPLIFai and choose Recheck iPhone setting. Keep the existing backup password; enter it only in this Mac app if asked. Even an encrypted backup may not contain every older call.")
         ]
     }
 
     private var collectionConsentStep: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("USB collection temporarily receives a full backup, including unrelated data and message content, then discards unselected bytes. Only chosen metadata can reach your account after separate browser and source approval; message text and backup files do not.")
-            Text("The password stays local and is not saved. Interrupted runs may leave marked temporary data. Safe diagnostics contain codes and counts, not records, content, passwords or paths.")
+            consentFact("externaldrive", "This Mac temporarily receives full backup bytes, including unrelated data and message content. Unselected bytes are discarded.")
+            consentFact("checkmark.shield", "Only chosen metadata may reach your account after separate browser and source approvals. Message text and backup files stay here.")
+            consentFact("lock.doc", "The backup password stays local and unsaved. Interrupted runs may leave marked temporary data. Safe diagnostics send codes and counts, never records, content, passwords or paths.")
             Button(showingCollectionDetails ? "Hide exact collection details" : "Show exact collection details") {
                 showingCollectionDetails.toggle()
             }
@@ -438,8 +548,19 @@ struct ContentView: View {
         }
     }
 
+    private func consentFact(_ symbol: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 20))
+                .foregroundStyle(Brand.blue)
+                .frame(width: 24)
+                .accessibilityHidden(true)
+            Text(detail).font(.custom("Arial", size: 18)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     @ViewBuilder private var collectionApprovalActions: some View {
-        Button("Agree to local collection") {
+        Button("Agree to collection") {
             model.approveLocalCollection(
                 for: model.collectionApprovalRunID,
                 checked: localCollectionChecked,
@@ -489,137 +610,185 @@ struct ContentView: View {
     }
 
     private var contactPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Choose people")
-                .font(.custom("Arial", size: 24).weight(.bold))
-                .foregroundStyle(Brand.heading)
-            Text("\(model.selectedIDs.count) of \(model.totalContacts) selected across all pages")
-                .foregroundStyle(Brand.heading)
-            Text("Main starts with people whose name and phone details look usable. Review holds organization-like or incomplete entries for your decision. Emoji and unusual formatting alone do not move anyone. Nothing changes on your phone.")
-                .foregroundStyle(Brand.body)
+        VStack(alignment: .leading, spacing: 20) {
             if let workspace = model.workspace {
-                Text("Main \(workspace.mainCount) (\(model.selectedMainCount) selected) · Review \(workspace.reviewCount) (\(model.selectedReviewCount) selected)")
-                    .font(.caption)
-                    .foregroundStyle(Brand.muted)
                 ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { workspaceFilters(workspace) }
-                    VStack(alignment: .leading, spacing: 10) { workspaceFilters(workspace) }
-                }
-                Button("Select all contacts · \(workspace.knownIDs.count)") { model.selectAllVerifiedContacts() }
-                    .buttonStyle(LimeButton())
-                    .disabled(!model.canSelectAllVerifiedContacts)
-                Text("This deliberate action includes Main and Review contacts across every page, even when this view is filtered or searched. Review is never included automatically.")
-                    .font(.caption)
-                    .foregroundStyle(Brand.muted)
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) { workspaceSelectionActions(workspace) }
-                    VStack(alignment: .leading, spacing: 10) { workspaceSelectionActions(workspace) }
-                }
-                Button(showingGroupTools
-                       ? "Hide group organizing · \(model.markedGroupMoveIDs.count) marked"
-                       : "Organize Main and Review · \(model.markedGroupMoveIDs.count) marked") {
-                    showingGroupTools.toggle()
-                }
-                .buttonStyle(SecondaryButton())
-                if showingGroupTools && workspace.group == .all {
-                    Text("Open Main or Review to mark and move contacts between groups. Import selection stays separate.")
-                        .font(.caption)
-                        .foregroundStyle(Brand.muted)
-                }
-                if showingGroupTools && workspace.group != .all && workspace.filteredCount > 0 {
-                    Text("\(model.markedGroupMoveIDs.count) marked for group movement · import selection is separate")
-                        .font(.caption)
-                        .foregroundStyle(Brand.muted)
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) { groupMoveActions(workspace) }
-                        VStack(alignment: .leading, spacing: 10) { groupMoveActions(workspace) }
+                    HStack(alignment: .top, spacing: 24) {
+                        contactSelectionSummary.frame(width: 240, alignment: .leading)
+                        contactWorkspaceContent(workspace).frame(minWidth: 400)
                     }
-                    Text("Mark individual rows on any page, or mark every search match across all pages. Confirm before changing groups.")
-                        .font(.caption)
-                        .foregroundStyle(Brand.muted)
+                    VStack(alignment: .leading, spacing: 20) {
+                        contactSelectionSummary
+                        contactWorkspaceContent(workspace)
+                    }
                 }
-                if model.canUndoGroupMove {
-                    Button("Undo last group move") { model.undoContactMove() }
+            } else {
+                contactSelectionSummary
+                if model.suggestionScanning {
+                    Text("Checking \(model.suggestionVisited) of \(model.totalContacts) contacts across all pages…")
+                    Button("Stop and retry grouping") { model.cancelSuggestionScan() }
+                        .buttonStyle(SecondaryButton())
+                } else if model.totalContacts == 0 {
+                    Text("No usable contacts were present in the selected backup.")
+                } else {
+                    Text("The full contact review is not ready. Retry the local check before selecting or saving.")
+                    Button("Retry contact check") { model.scanContactSuggestions() }
                         .buttonStyle(SecondaryButton())
                 }
-                TextField("Search \(workspace.group.rawValue) contacts", text: $search)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Search contacts in \(workspace.group.rawValue)")
-                    .onChange(of: search) { _, value in
-                        if value.unicodeScalars.count > 120 { search = String(value.unicodeScalars.prefix(120)) }
-                        else { model.searchWorkspace(value) }
-                    }
-                Text("\(workspace.filteredCount) \(workspace.group.rawValue.lowercased()) contacts match across all pages · \(workspace.visible.count) shown")
-                    .font(.caption)
+            }
+        }
+        .font(.custom("Arial", size: 18))
+        .foregroundStyle(Brand.body)
+        .panel()
+        .onAppear { model.prepareWorkspace() }
+    }
+
+    private var contactSelectionSummary: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Choose contacts")
+                .font(.custom("Arial", size: 28).weight(.bold))
+                .foregroundStyle(Brand.heading)
+            Text("Check contacts to include. Organize groups separately.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(model.selectedIDs.count) selected")
+                    .font(.custom("Arial", size: 24).weight(.bold))
+                    .foregroundStyle(Brand.lime)
+                Text("\(model.totalContacts) available across all pages")
+                    .font(.custom("Arial", size: 16))
                     .foregroundStyle(Brand.muted)
+            }
+            Button("Continue with \(model.selectedIDs.count) selected") {
+                continueAfterBrowserShare = true
+                confirmingBrowserShare = true
+            }
+            .buttonStyle(LimeButton())
+            .disabled(model.selectedIDs.isEmpty || !model.canEditWorkspace)
+            .opacity(model.selectedIDs.isEmpty || !model.canEditWorkspace ? 0.55 : 1)
+            if model.selectedIDs.isEmpty {
+                Text("Check at least one contact to continue.")
+                    .foregroundStyle(Brand.muted)
+            }
+            Text(model.accountSaveAwaitingBrowserReceipt
+                 ? "Saving is being finalized. Finish in the browser before changing contacts."
+                 : model.selectionChangePending
+                 ? "Checking that changing contacts won’t interrupt a save… Your reviewed selection is still intact."
+                 : !model.handoffID.isEmpty
+                 ? "This selection is linked to the account browser. Finish source choices there, or use Change selected contacts in Local review."
+                 : "Next: confirm the account and source choices. Continuing does not save by itself.")
+                .font(.custom("Arial", size: 16))
+                .foregroundStyle(Brand.muted)
+            if model.reviewPending {
+                Text("Reviewing selected metadata…")
+                    .foregroundStyle(Brand.muted)
+            }
+            if !model.errorMessage.isEmpty && model.phase == .selecting {
+                Text(model.errorMessage).foregroundStyle(.red).textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func contactWorkspaceContent(_ workspace: ContactWorkspace) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { workspaceFilters(workspace) }
+                VStack(alignment: .leading, spacing: 8) { workspaceFilters(workspace) }
+            }
+            TextField("Search \(workspace.group.rawValue) contacts", text: $search)
+                .textFieldStyle(.plain)
+                .font(.custom("Arial", size: 18))
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .background(Brand.background, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.border, lineWidth: 1))
+                .accessibilityLabel("Search contacts in \(workspace.group.rawValue)")
+                .onChange(of: search) { _, value in
+                    if value.unicodeScalars.count > 120 { search = String(value.unicodeScalars.prefix(120)) }
+                    else { model.searchWorkspace(value) }
+                }
+            Text("Main: \(model.selectedMainCount) of \(workspace.mainCount) selected · Review: \(model.selectedReviewCount) of \(workspace.reviewCount) selected")
+                .font(.custom("Arial", size: 16))
+                .foregroundStyle(Brand.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            if workspace.filteredCount == 0 {
+                Text("No matches here. Your selections are kept. Clear the search or choose another group.")
+                    .foregroundStyle(Brand.muted)
+            } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 8) {
                         ForEach(workspace.visible) { contact in
                             contactRow(contact, workspace: workspace)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(minHeight: 420, maxHeight: 640)
-                if workspace.filteredCount == 0 {
-                    Text("No contacts match this view and search. Try All, Main or Review, or clear the search.")
-                        .foregroundStyle(Brand.muted)
-                }
+                .frame(height: 300)
                 HStack(spacing: 10) {
                     if workspace.hasPreviousPage {
-                        Button("Previous contacts") { model.previousWorkspacePage() }
+                        Button("Previous") { model.previousWorkspacePage() }
                             .buttonStyle(SecondaryButton())
+                            .accessibilityLabel("Previous page of contacts")
                     }
                     if workspace.hasNextPage {
-                        Button("Next contacts") { model.nextWorkspacePage() }
+                        Button("Next") { model.nextWorkspacePage() }
                             .buttonStyle(SecondaryButton())
+                            .accessibilityLabel("Next page of contacts")
                     }
-                    if workspace.filteredCount > 0 {
-                        Text("\(workspace.pageStart + 1)–\(workspace.pageStart + workspace.visible.count) of \(workspace.filteredCount)")
-                            .font(.caption).foregroundStyle(Brand.muted)
+                    Text("\(workspace.pageStart + 1)–\(workspace.pageStart + workspace.visible.count) of \(workspace.filteredCount) matches")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                }
+            }
+            DisclosureGroup("Select or clear a whole group") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("These actions cover every page and ignore search.")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                    Button("Select all contacts · \(workspace.knownIDs.count)") { model.selectAllVerifiedContacts() }
+                        .buttonStyle(SecondaryButton())
+                        .disabled(!model.canSelectAllVerifiedContacts)
+                    Text("Includes Main and Review only when you choose it.")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) { workspaceSelectionActions(workspace) }
+                        VStack(alignment: .leading, spacing: 10) { workspaceSelectionActions(workspace) }
                     }
                 }
-            } else if model.suggestionScanning {
-                Text("Checking \(model.suggestionVisited) of \(model.totalContacts) contacts across all pages before grouping…")
+                .padding(.top, 8)
+            }
+            Button(showingGroupTools
+                   ? "Hide organizing · \(model.markedGroupMoveIDs.count) marked"
+                   : "Organize groups · \(model.markedGroupMoveIDs.count) marked") {
+                showingGroupTools.toggle()
+            }
+            .buttonStyle(SecondaryButton())
+            if showingGroupTools {
+                Text("Marks are for moving groups, not selecting contacts to save. Moving to Review clears their selection; Undo restores it.")
+                    .font(.custom("Arial", size: 16))
                     .foregroundStyle(Brand.muted)
-                Button("Stop and retry grouping") { model.cancelSuggestionScan() }
+                if workspace.group == .all {
+                    Text("Choose Main or Review to mark a group move, or move one contact below.")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                } else if workspace.filteredCount > 0 {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) { groupMoveActions(workspace) }
+                        VStack(alignment: .leading, spacing: 10) { groupMoveActions(workspace) }
+                    }
+                }
+            }
+            if model.canUndoGroupMove {
+                Button("Undo last group move") { model.undoContactMove() }
                     .buttonStyle(SecondaryButton())
-            } else if model.totalContacts == 0 {
-                Text("No usable contacts were present in the selected backup.")
+            }
+            DisclosureGroup("About Main and Review") {
+                Text("Main starts with a display name and supported phone number. Review holds missing details or possible organization clues for your decision. One name is enough. These are local suggestions; nothing changes on your phone.")
+                    .font(.custom("Arial", size: 16))
                     .foregroundStyle(Brand.muted)
-            } else {
-                Text("The full contact review is not ready. Retry the local check before selecting or saving.")
-                    .foregroundStyle(Brand.muted)
-                Button("Retry contact check") { model.scanContactSuggestions() }
-                    .buttonStyle(SecondaryButton())
+                    .padding(.top, 8)
             }
-            if model.reviewPending {
-                Text("Reviewing selected metadata…")
-                    .font(.caption)
-                    .foregroundStyle(Brand.muted)
-            }
-            if !model.errorMessage.isEmpty && model.phase == .selecting {
-                Text(model.errorMessage).foregroundStyle(.red).textSelection(.enabled)
-            }
-            Button("Save and continue") {
-                continueAfterBrowserShare = true
-                confirmingBrowserShare = true
-            }
-                .buttonStyle(LimeButton())
-                .disabled(model.selectedIDs.isEmpty || !model.canEditWorkspace)
-                .opacity(model.selectedIDs.isEmpty || !model.canEditWorkspace ? 0.55 : 1)
-            Text(model.accountSaveAwaitingBrowserReceipt
-                 ? "Saving is being finalized. Finish in the browser before changing contacts."
-                 : model.selectionChangePending
-                 ? "Checking that changing contacts won’t interrupt a save… Your reviewed selection is still intact."
-                 : !model.handoffID.isEmpty
-                 ? "This selection is already linked to the account browser. Finish source choices there, or use Change selected contacts in Local review below."
-                 : "Next, confirm the signed-in account and approve each source you choose to save. This button does not save account data by itself.")
-                .font(.caption)
-                .foregroundStyle(Brand.muted)
         }
-        .panel()
-        .onAppear { model.prepareWorkspace() }
     }
 
     @ViewBuilder private func workspaceFilters(_ workspace: ContactWorkspace) -> some View {
@@ -694,28 +863,45 @@ struct ContentView: View {
                 get: { model.selectedIDs.contains(contact.id) },
                 set: { _ in model.toggle(contact.id) }
             )) {
-                Text(contact.name.isEmpty ? "Unnamed contact" : contact.name)
-                    .font(.custom("Arial", size: 15).weight(.bold))
-                    .foregroundStyle(Brand.heading)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(contact.name.isEmpty ? "Unnamed contact" : contact.name)
+                        .font(.custom("Arial", size: 18).weight(.bold))
+                        .foregroundStyle(Brand.heading)
+                    Text(contact.phoneEnds.isEmpty
+                         ? "No supported phone number"
+                         : contact.phoneEnds.map { "•••• \($0)" }.joined(separator: " · "))
+                        .font(.custom("Arial", size: 18))
+                        .foregroundStyle(Brand.muted)
+                }
             }
             .toggleStyle(.checkbox)
+            .accessibilityLabel("Include \(contact.name.isEmpty ? "unnamed contact" : contact.name) in selected contacts")
             .disabled(!model.canEditWorkspace)
-            Text("Group: \(workspace.isInReview(contact.id) ? "Review" : "Main")")
-                .font(.caption)
-                .foregroundStyle(Brand.muted)
-            Text(contact.phoneEnds.isEmpty
-                 ? "No supported phone number"
-                 : contact.phoneEnds.map { "•••• \($0)" }.joined(separator: " · "))
-                .font(.caption)
+            Text(workspace.isInReview(contact.id) ? "Review" : "Main")
+                .font(.custom("Arial", size: 16))
                 .foregroundStyle(Brand.muted)
             if let reason = workspace.reason(for: contact.id) {
-                Text("Review reason: \(reason). This is a local clue, not a relationship judgment.")
-                    .font(.caption)
+                Text(reason)
+                    .font(.custom("Arial", size: 16))
                     .foregroundStyle(Brand.body)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { contactGroupActions(contact, workspace: workspace) }
-                VStack(alignment: .leading, spacing: 10) { contactGroupActions(contact, workspace: workspace) }
+            DisclosureGroup("Source details") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(contact.nameFieldDescription)
+                    if contact.organizationField == true {
+                        Text("Organization field supplied. This is a hint, not verified business identity.")
+                    }
+                }
+                .font(.custom("Arial", size: 16))
+                .foregroundStyle(Brand.muted)
+                .padding(.top, 6)
+            }
+            .font(.custom("Arial", size: 16))
+            if showingGroupTools {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) { contactGroupActions(contact, workspace: workspace) }
+                    VStack(alignment: .leading, spacing: 10) { contactGroupActions(contact, workspace: workspace) }
+                }
             }
         }
         .padding(12)

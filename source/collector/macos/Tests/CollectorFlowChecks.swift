@@ -747,6 +747,8 @@ struct CollectorFlowChecks {
         try require(model.phase == .selecting && model.contacts.count == 200 &&
                     model.totalContacts == 201 && model.nextContactCursor == 200 && model.hasUnsavedReview,
                     "A bounded first preview page must retain exact total and unsaved recovery state")
+        try require(model.statusDetail.hasPrefix("201 contacts,"),
+                    "The status must report all observed contacts, not only the loaded page")
         model.selectedIDs = [7]
         model.loadMoreContacts()
         try require(model.contactSearchPending && model.hasPreviousContactPage,
@@ -759,6 +761,8 @@ struct CollectorFlowChecks {
         try require(model.contacts.count == 1 && model.contacts.last?.id == 201 &&
                     model.currentContactCursor == 200 && model.nextContactCursor == nil && model.selectedIDs == [7],
                     "The next contact page must replace the view without dropping earlier selection")
+        try require(model.statusDetail.hasPrefix("201 contacts,"),
+                    "Paging must not rewrite the observed-contact total as the one-contact page")
         model.receive(try event(#"{"kind":"contacts","contacts":[{"id":999,"name":"Stale","phoneCount":0,"phoneEnds":[]}],"totalContacts":201,"query":"old","cursor":0,"nextCursor":null}"#))
         try require(model.contacts.count == 1 && model.selectedIDs == [7],
                     "A stale query response must not replace the current review")

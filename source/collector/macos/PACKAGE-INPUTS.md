@@ -1,10 +1,10 @@
-# October 12 rc23 package inputs
+# October 13 rc24 package inputs
 
-The published rc22 is `2026.10.12-rc22`, build `26101222`, and remains the
+The published rc23 is `2026.10.12-rc23`, build `26101223`, and remains the
 rollback download. The signed and prepared rc18 package remains sealed and unpublished.
-This source is versioned `2026.10.12-rc23`, build `26101223`;
-it requires a newly signed/notarized app. The frozen Python helper inputs are unchanged
-from rc22 and may be reused only after exact input and signed-bundle custody checks. Existing bundle identifier
+This source is versioned `2026.10.13-rc24`, build `26101324`;
+it requires a newly signed/notarized app and newly frozen Python helper because
+contact-name provenance and available-source parsing changed. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
@@ -103,6 +103,14 @@ cannot replace this local collection approval.
   An unencrypted backup still admits an integrity-checked Calls database when
   present; absent Calls remain Unavailable, never a measured zero. The app does
   not change Finder encryption or claim complete call history.
+- The rc24 guide shows one current setup step, illustrates where to find the
+  iPhone, Backups and encryption setting in Finder, and keeps read-only On, Off
+  and Unknown preparation distinct. Receive and Read show measured local
+  progress without an invented whole-flow percentage. The contact workspace
+  separates page count from whole-set selection, and displays source-backed
+  name-field hints only when present. A missing source field is not inferred.
+  Existing consent, private storage, selected IDs, per-source Save and ACK
+  boundaries are unchanged; physical call coverage remains unproven.
 - Run `sh collector/macos/Tests/check_flow.sh` and the existing
   `sh scripts/test_macos_recovery.sh` against actual model/protocol source.
 - This source pages the local contact preview in 200-row helper events and

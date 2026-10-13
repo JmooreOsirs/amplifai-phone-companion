@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import closing
 
 import asyncio
+import hashlib
 import plistlib
 import sqlite3
 import tempfile
@@ -17,6 +18,7 @@ from amplifai_phone.__main__ import review_snapshot
 from amplifai_phone.ios_backup import (
     BackupEncryptionPreflightError,
     DATABASES,
+    HOME_DOMAIN,
     MAX_PLIST_BYTES,
     IPhoneCapture,
     SelectedPayloadIntegrityError,
@@ -43,6 +45,7 @@ from amplifai_phone.metadata import (
 from amplifai_phone.paged_transfer import PagedTransfer
 from amplifai_phone.record_store import RecordStore
 from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
+from large_backup_probe import archived_entry
 
 
 async def fake_backup_control_files(**kwargs: object) -> None:
@@ -62,6 +65,63 @@ async def fake_snapshot_backup_control_files(**kwargs: object) -> None:
 
 
 class ManifestFixtureIsolationTest(unittest.TestCase):
+    def test_unencrypted_backup_reads_present_calls_and_marks_absent_calls_unavailable(self) -> None:
+        for include_calls in (True, False):
+            with self.subTest(include_calls=include_calls), tempfile.TemporaryDirectory(
+                prefix="amplifai-unencrypted-calls-"
+            ) as temporary:
+                backup_path = Path(temporary) / "backup"
+                backup_path.mkdir()
+                categories = ("contacts", "calls") if include_calls else ("contacts",)
+                with closing(sqlite3.connect(backup_path / "Manifest.db")) as manifest, manifest:
+                    manifest.execute(
+                        "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, "
+                        "flags INTEGER, file BLOB)"
+                    )
+                    for category in categories:
+                        source = Path(temporary) / f"{category}.sqlite3"
+                        with closing(sqlite3.connect(source)) as database, database:
+                            if category == "contacts":
+                                database.executescript(
+                                    "CREATE TABLE ABPerson (First TEXT, Last TEXT);"
+                                    "CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT);"
+                                    "INSERT INTO ABPerson VALUES ('Synthetic', 'Contact');"
+                                    "INSERT INTO ABMultiValue VALUES (1, 3, '+12025550101');"
+                                )
+                            else:
+                                database.executescript(
+                                    "CREATE TABLE ZCALLRECORD (ZDATE REAL, ZDURATION REAL, "
+                                    "ZADDRESS TEXT, ZORIGINATED INTEGER, ZANSWERED INTEGER);"
+                                    "INSERT INTO ZCALLRECORD VALUES "
+                                    "(800000000, 65, '+12025550101', 1, 1);"
+                                )
+                        relative = DATABASES[category]
+                        file_id = hashlib.sha1((HOME_DOMAIN + "-" + relative).encode()).hexdigest()
+                        payload = backup_path / file_id[:2] / file_id
+                        payload.parent.mkdir()
+                        payload.write_bytes(source.read_bytes())
+                        manifest.execute(
+                            "INSERT INTO Files VALUES (?, ?, ?, 1, ?)",
+                            (file_id, HOME_DOMAIN, relative, archived_entry(relative, source.stat().st_size)),
+                        )
+                (backup_path / "Manifest.plist").write_bytes(
+                    plistlib.dumps({"IsEncrypted": False, "Lockdown": {"ProductVersion": "18.0"}})
+                )
+                for name in ("Status.plist", "Info.plist"):
+                    (backup_path / name).write_bytes(plistlib.dumps({}))
+
+                capture = parse_selected_backup(
+                    backup_path, "", now=datetime(2026, 10, 12, tzinfo=UTC)
+                )
+                self.assertEqual(capture.contacts.rows_seen, 1)
+                if include_calls:
+                    self.assertEqual(capture.calls.rows_seen, 1)
+                    self.assertEqual(len(capture.calls.records), 1)
+                    self.assertNotIn("calls", capture.missing_sources)
+                else:
+                    self.assertEqual(capture.calls.rows_seen, 0)
+                    self.assertIn(("calls", "absent"), capture.unavailable_reasons)
+
     def test_large_valid_control_plist_is_read_from_disk_without_old_16m_ceiling(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-large-plist-") as temporary:
             path = Path(temporary) / "Info.plist"

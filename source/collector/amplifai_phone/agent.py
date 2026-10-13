@@ -154,12 +154,17 @@ def _contact_page(
 
 
 def _contact_preview(item: Contact) -> dict[str, object]:
-    return {
+    preview = {
         "id": item.source_id,
         "name": item.name,
         "phoneCount": len(item.phones),
         "phoneEnds": [phone[-4:] for phone in item.phones],
     }
+    if item.name_fields is not None:
+        preview["nameFields"] = item.name_fields
+    if item.organization_field is not None:
+        preview["organizationField"] = item.organization_field
+    return preview
 
 
 def _contact_ids(

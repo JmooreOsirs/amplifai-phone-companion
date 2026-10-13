@@ -280,7 +280,7 @@ class MetadataTest(unittest.TestCase):
         self.assertEqual(result.rows_seen, 2)
         self.assertEqual(
             result.records[0],
-            Contact(1, "Ada Test", ("+15551234567",), ("ada@example.test",)),
+            Contact(1, "Ada Test", ("+15551234567",), ("ada@example.test",), "first_and_last"),
         )
         self.assertEqual(select_people(result, {1}), (result.records[0],))
         with self.assertRaises(ValueError):
@@ -352,7 +352,7 @@ class MetadataTest(unittest.TestCase):
         finally:
             tracemalloc.stop()
         self.assertEqual(
-            result.records, (Contact(1, "Ada Test", ("+15551234567",), ()),)
+            result.records, (Contact(1, "Ada Test", ("+15551234567",), (), "first_and_last"),)
         )
         self.assertEqual((result.rows_seen, result.excluded), (1, 0))
         self.assertLess(peak, 24 * 1024 * 1024)

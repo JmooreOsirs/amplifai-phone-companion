@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+native_root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+native_temp=$(mktemp -d)
+trap 'if [ -f "$native_temp/ContactProvenanceChecks" ]; then unlink "$native_temp/ContactProvenanceChecks"; fi; rmdir "$native_temp"' EXIT
+trap 'exit 130' HUP INT TERM
+swiftc -parse-as-library -target arm64-apple-macos14.0 \
+    "$native_root/collector/macos/Sources/Services/ContactSuggestions.swift" \
+    "$native_root/collector/macos/Sources/Services/ContactWorkspace.swift" \
+    "$native_root/collector/macos/Sources/Models/AgentEvent.swift" \
+    "$native_root/collector/macos/Tests/ContactProvenanceChecks.swift" \
+    -o "$native_temp/ContactProvenanceChecks"
+"$native_temp/ContactProvenanceChecks"

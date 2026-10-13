@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct CollectionStatusPanel: View {
@@ -6,8 +7,15 @@ struct CollectionStatusPanel: View {
     @State private var confirmingDiscard = false
     @State private var copyStatus = ""
     @State private var showingTechnicalDetails = false
+    @State private var cancelHovered = false
 
     private let stages = ["Connect", "Receive", "Read", "Review & save"]
+    // Existing /experience messaging, shown as waiting content rather than collection progress.
+    private let waitingLines = [
+        "The system proposes. You decide.",
+        "Relationship signals, not predictions.",
+        "No new CRM. No starting over."
+    ]
 
     private var activeStage: Int {
         switch model.phase {
@@ -138,8 +146,27 @@ struct CollectionStatusPanel: View {
                     VStack(alignment: .leading, spacing: 12) { activityHeading; elapsedClock(elapsed) }
                 }
                 if model.phase != .completing {
-                    Button("Cancel collection") { model.disconnect() }.buttonStyle(SecondaryButton())
+                    Button("Cancel collection") { model.disconnect() }
+                        .buttonStyle(SecondaryButton())
+                        .frame(minHeight: 44)
+                        .onHover { inside in
+                            guard inside != cancelHovered else { return }
+                            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                            cancelHovered = inside
+                        }
+                        .onDisappear {
+                            if cancelHovered { NSCursor.pop(); cancelHovered = false }
+                        }
                 }
+                HStack(spacing: 10) {
+                    Image(systemName: "iphone.gen3")
+                    Rectangle().fill(Brand.blue).frame(maxWidth: .infinity).frame(height: 2)
+                    Image(systemName: "desktopcomputer")
+                }
+                .font(.system(size: 26))
+                .foregroundStyle(Brand.blue)
+                .padding(.horizontal, 18)
+                .accessibilityLabel("Local iPhone to Mac collection; this illustration is not a progress meter")
                 HStack(spacing: 6) {
                     ForEach(stages.indices, id: \.self) { index in
                         Text(stages[index])
@@ -150,6 +177,7 @@ struct CollectionStatusPanel: View {
                                         in: RoundedRectangle(cornerRadius: 7))
                     }
                 }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: activeStage)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Stage \(activeStage + 1) of \(stages.count): \(stages[activeStage])")
                 if model.phase == .transferring && model.progressIsKnown {
@@ -166,7 +194,7 @@ struct CollectionStatusPanel: View {
                     .accessibilityLabel("iPhone-reported backup transfer")
                     .accessibilityValue("\(Int(model.progress)) percent")
                     Text("\(Int(model.progress))% reported by iPhone · backup transfer only")
-                        .font(.custom("Arial", size: 13).weight(.bold)).foregroundStyle(Brand.heading)
+                        .font(.custom("Arial", size: 16).weight(.bold)).foregroundStyle(Brand.heading)
                 } else if model.phase != .completing {
                     HStack(spacing: 7) {
                         ForEach(0..<3) { index in
@@ -175,30 +203,28 @@ struct CollectionStatusPanel: View {
                                 .frame(width: 7, height: 7)
                         }
                         Text(model.phase == .processing ? "Reading source metadata locally"
-                             : model.phase == .connecting ? "Waiting for iPhone connection" : "Waiting for backup measurement")
+                             : model.phase == .connecting ? "Waiting for iPhone connection"
+                             : model.transferIsKnown ? "Receiving measured backup bytes" : "Waiting for first received byte")
                             .foregroundStyle(Brand.muted)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(model.phase == .processing ? "Reading source metadata locally"
-                                        : model.phase == .connecting ? "Waiting for iPhone connection" : "Waiting for backup measurement")
+                                        : model.phase == .connecting ? "Waiting for iPhone connection"
+                                        : model.transferIsKnown ? "Receiving measured backup bytes" : "Waiting for first received byte")
                 }
                 if model.transferIsKnown && model.phase != .completing {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 10)], spacing: 10) {
+                    HStack(alignment: .top, spacing: 10) {
                         metric("Received", CollectorModel.byteDescription(model.transferBytes))
                         metric("Retained locally", CollectorModel.byteDescription(model.retainedBytes))
-                        metric(model.phase == .processing ? "Parsing copies" : "Average received", model.phase == .processing
-                               ? CollectorModel.byteDescription(model.processedBytes)
-                               : "\(CollectorModel.byteDescription(Int64(model.transferBytesPerSecond)))/s")
                     }
+                    Text(model.phase == .processing
+                         ? "Parsing copies: \(CollectorModel.byteDescription(model.processedBytes))"
+                         : "Average received rate: \(CollectorModel.byteDescription(Int64(model.transferBytesPerSecond)))/s")
+                        .foregroundStyle(Brand.muted)
                 }
-                if model.phase == .transferring {
-                    if let estimate = model.backupRemainingEstimate(at: context.date) {
-                        Text("Observed backup pace suggests ~\(estimate.lowerBound)–\(estimate.upperBound) min remaining if it holds. Parsing, review and account save are additional.")
-                            .foregroundStyle(Brand.body)
-                    } else {
-                        Text("No reliable backup-time estimate yet. Device percentage is not whole-process progress.")
-                            .foregroundStyle(Brand.muted)
-                    }
+                if model.phase == .transferring && !model.transferIsKnown {
+                    Text("No backup bytes measured yet. The elapsed clock is not transfer progress.")
+                        .foregroundStyle(Brand.muted)
                 }
                 if model.phase == .processing && model.processedBytes == 0 {
                     Text("Waiting for the first local parsing measurement.").foregroundStyle(Brand.muted)
@@ -212,10 +238,15 @@ struct CollectionStatusPanel: View {
                     }
                 }
                 Text(nextAction).foregroundStyle(Brand.body)
+                if model.phase == .connecting || model.phase == .transferring || model.phase == .processing {
+                    Text("While you wait · \(waitingLines[reduceMotion ? 0 : max(0, elapsed / 12) % waitingLines.count])")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                }
                 Text("Temporary local bytes are not saved account records.")
                     .font(.custom("Arial", size: 12)).foregroundStyle(Brand.muted)
             }
-            .font(.custom("Arial", size: 13))
+            .font(.custom("Arial", size: 16))
             .padding(18)
             .background(Brand.background.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.border, lineWidth: 1))
@@ -226,7 +257,9 @@ struct CollectionStatusPanel: View {
         VStack(alignment: .leading, spacing: 5) {
             Text("LOCAL PHONE PROCESS · \(activeStage + 1) OF \(stages.count)")
                 .font(.custom("Arial", size: 11).weight(.bold)).tracking(1.2).foregroundStyle(Brand.lime)
-            Text(model.statusTitle)
+            Text(model.phase == .transferring && !model.transferIsKnown
+                 ? "Waiting for the first received byte" : model.phase == .processing && model.processedBytes == 0
+                 ? "Reading available sources" : model.statusTitle)
                 .font(.custom("Arial", size: 23).weight(.bold)).foregroundStyle(Brand.heading)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
@@ -244,7 +277,7 @@ struct CollectionStatusPanel: View {
 
     private func metric(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(label.uppercased()).font(.custom("Arial", size: 10).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
+            Text(label.uppercased()).font(.custom("Arial", size: 12).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
             Text(value).font(.custom("Arial", size: 19).weight(.bold)).monospacedDigit().foregroundStyle(Brand.heading)
                 .minimumScaleFactor(0.8).lineLimit(1)
         }

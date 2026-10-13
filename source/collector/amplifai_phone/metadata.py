@@ -106,6 +106,8 @@ class Contact:
     name: str
     phones: tuple[str, ...]
     emails: tuple[str, ...]
+    name_fields: str | None = None
+    organization_field: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -226,6 +228,9 @@ def read_contacts(
     with (open_connection or _open_readonly)(path) as db:
         _require_columns(db, "ABPerson", {"ROWID", "First", "Last"})
         _require_columns(db, "ABMultiValue", {"record_id", "property", "value"})
+        has_organization = any(
+            row[1].casefold() == "organization" for row in db.execute("PRAGMA table_info(ABPerson)")
+        )
         # The selected database is already inside the app-owned private parsing
         # directory. Keep only normalized metadata in a short-lived disk index;
         # a large ABMultiValue table must not become an unbounded Python map.
@@ -273,7 +278,12 @@ def read_contacts(
                     )
             contacts = []
             row_count = 0
-            rows = db.execute("SELECT ROWID AS source_id, First, Last FROM ABPerson ORDER BY ROWID")
+            contact_query = (
+                "SELECT ROWID AS source_id, First, Last, Organization FROM ABPerson ORDER BY ROWID"
+                if has_organization else
+                "SELECT ROWID AS source_id, First, Last FROM ABPerson ORDER BY ROWID"
+            )
+            rows = db.execute(contact_query)
             for row_count, row in enumerate(rows, 1):
                 if store is None and row_count > MAX_ROWS_PER_SOURCE:
                     raise ContactsCapacityLimit("Contact row limit exceeded")
@@ -295,13 +305,22 @@ def read_contacts(
                         "Private contact metadata scratch is unavailable",
                         code="workspace_unavailable",
                     ) from error
-                name = " ".join(
-                    part.strip()
+                name_parts = tuple(
+                    part.strip() if isinstance(part, str) else ""
                     for part in (row["First"], row["Last"])
-                    if isinstance(part, str) and part.strip()
+                )
+                name = " ".join(part for part in name_parts if part)
+                name_fields = (
+                    "first_and_last" if all(name_parts) else
+                    "first" if name_parts[0] else "last" if name_parts[1] else "missing"
+                )
+                organization_field = (
+                    isinstance(row["Organization"], str) and bool(row["Organization"].strip())
+                    if has_organization else None
                 )
                 if name or phones or emails:
-                    contact = Contact(source_id, name, tuple(phones), tuple(emails))
+                    contact = Contact(source_id, name, tuple(phones), tuple(emails),
+                                      name_fields, organization_field)
                     if store is None:
                         contacts.append(contact)
                     else:

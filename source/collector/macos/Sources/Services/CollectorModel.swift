@@ -463,7 +463,7 @@ final class CollectorModel: ObservableObject {
         let stage = lastErrorStage ?? "connecting"
         let code = lastErrorCode.flatMap { SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
         let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26101223"
+            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26101324"
         return "A1|\(build)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
     }
 
@@ -1905,7 +1905,7 @@ final class CollectorModel: ObservableObject {
         case .processing:
             return "The helper is finishing metadata reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
         case .selecting:
-            return "\(contacts.count) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then review their matching metadata."
+            return "\(totalContacts) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then review their matching metadata."
         case .reviewing:
             if accountSaveAwaitingBrowserReceipt {
                 return "The Mac received the first bound account-save receipt. Keep this review open until the browser confirms the final receipt; an interrupted reply may need account readback."

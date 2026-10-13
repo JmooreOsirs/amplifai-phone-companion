@@ -5,6 +5,28 @@ struct ContactPreview: Decodable, Identifiable {
     let name: String
     let phoneCount: Int
     let phoneEnds: [String]
+    let nameFields: ContactNameFields?
+    let organizationField: Bool?
+
+    var nameFieldDescription: String {
+        switch nameFields {
+        case .firstAndLast: return "Source name: first and last fields filled."
+        case .first: return "Source name: first field filled."
+        case .last: return "Source name: last field filled."
+        case .missing: return "Source name fields are empty."
+        case .unknown, nil: return "Name-field details are unavailable for this display name."
+        }
+    }
+}
+
+enum ContactNameFields: String, Decodable {
+    case firstAndLast = "first_and_last"
+    case first, last, missing, unknown
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: value) ?? .unknown
+    }
 }
 
 struct ResiduePreview: Decodable, Identifiable {
