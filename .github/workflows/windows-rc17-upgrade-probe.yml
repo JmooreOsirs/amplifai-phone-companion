@@ -5,7 +5,7 @@ on:
     branches: [codex/windows-rc17-upgrade-probe-oct13]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   upgrade:
