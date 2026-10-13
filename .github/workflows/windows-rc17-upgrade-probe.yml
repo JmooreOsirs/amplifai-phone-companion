@@ -1,0 +1,77 @@
+name: Windows rc16 to rc17 private upgrade probe
+
+on:
+  push:
+    branches: [codex/windows-rc17-upgrade-probe-oct13]
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: ''
+      - name: Verify public rc16 to private rc17 per-user MSI upgrade
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $old = Join-Path $env:RUNNER_TEMP 'AmplifaiRc16'
+          $new = Join-Path $env:RUNNER_TEMP 'AmplifaiRc17'
+          New-Item -ItemType Directory -Path $old, $new | Out-Null
+          gh release download windows-2026.10.12-rc16-unsigned-test --pattern 'AmplifaiPhone-rc16-unsigned.msi' --dir $old
+          if ($LASTEXITCODE -ne 0) { throw 'Public rc16 MSI download failed' }
+          gh release download windows-rc16-private-1b0553541048 --pattern 'candidate-receipt.json' --dir $old
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned private rc16 receipt download failed' }
+          gh release download windows-rc17-private-a8fe16ee584a --pattern 'AmplifaiPhone-rc17-unsigned.msi' --dir $new
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned private rc17 MSI download failed' }
+          gh release download windows-rc17-private-a8fe16ee584a --pattern 'candidate-receipt.json' --dir $new
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned private rc17 receipt download failed' }
+          $oldMsi = Join-Path $old 'AmplifaiPhone-rc16-unsigned.msi'
+          $newMsi = Join-Path $new 'AmplifaiPhone-rc17-unsigned.msi'
+          $oldReceipt = Join-Path $old 'candidate-receipt.json'
+          $newReceipt = Join-Path $new 'candidate-receipt.json'
+          $oldHash = (Get-FileHash -Algorithm SHA256 $oldMsi).Hash.ToLowerInvariant()
+          $newHash = (Get-FileHash -Algorithm SHA256 $newMsi).Hash.ToLowerInvariant()
+          if ($oldHash -ne '7241eab3b5e9fe886c348bca8eb82c4bcb68b058749f95964d75118b93973d16') { throw 'Public rc16 MSI hash drift' }
+          if ($newHash -ne 'fb3bdff87a55dd89fd46d8659ada291023a12d588ba90fa359849a8687adf8e7') { throw 'Private rc17 MSI hash drift' }
+          if ((Get-Item $oldMsi).Length -ne 41022332 -or (Get-Item $newMsi).Length -ne 41034620) { throw 'MSI size drift' }
+          $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
+          if (Test-Path $installed) { throw 'Runner-user install path is not clean' }
+          $oldLog = Join-Path $old 'install.log'
+          $newLog = Join-Path $new 'upgrade.log'
+          $uninstallLog = Join-Path $new 'uninstall.log'
+          try {
+            $install = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$oldMsi`" /qn /norestart /L*V `"$oldLog`"" -Wait -PassThru
+            if ($install.ExitCode -ne 0) { throw "rc16 install failed: $($install.ExitCode)" }
+            python source/script/verify_windows_install.py --install $installed --receipt $oldReceipt
+            if ($LASTEXITCODE -ne 0) { throw 'Installed rc16 inventory differs from frozen rc16 receipt' }
+            $upgrade = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$newMsi`" /qn /norestart /L*V `"$newLog`"" -Wait -PassThru
+            if ($upgrade.ExitCode -ne 0) { throw "rc17 in-place upgrade failed: $($upgrade.ExitCode)" }
+            python source/script/verify_windows_install.py --install $installed --receipt $newReceipt
+            if ($LASTEXITCODE -ne 0) { throw 'Upgraded inventory differs from frozen rc17 receipt' }
+            $upgradeLog = Get-Content $newLog
+            if (-not ($upgradeLog | Select-String -Pattern 'RemoveExistingProducts' -Quiet)) { throw 'MSI log has no RemoveExistingProducts action' }
+            $uninstall = Start-Process -FilePath msiexec.exe -ArgumentList "/x `"$newMsi`" /qn /norestart /L*V `"$uninstallLog`"" -Wait -PassThru
+            if ($uninstall.ExitCode -ne 0) { throw "rc17 uninstall failed: $($uninstall.ExitCode)" }
+            python source/script/verify_windows_install.py --install $installed --receipt $newReceipt --removed
+            if ($LASTEXITCODE -ne 0) { throw 'Installed files remain after rc17 uninstall' }
+            "UPGRADE_PROBE=PASS old_sha256=$oldHash new_sha256=$newHash source=a8fe16ee584abcd9cbee0de5fde953d9a7a262f6"
+          } finally {
+            foreach ($log in @($oldLog, $newLog, $uninstallLog)) {
+              if (Test-Path $log) {
+                "LOG_TAIL=$log"
+                Get-Content $log -Tail 15 | ForEach-Object { if ($_ -match 'RemoveExistingProducts|Return value|MainEngineThread|Product:') { $_ } }
+              }
+            }
+          }
