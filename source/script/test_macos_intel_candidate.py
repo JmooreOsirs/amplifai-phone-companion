@@ -9,6 +9,13 @@ spec.loader.exec_module(builder)
 
 
 class CandidateIsolationTests(unittest.TestCase):
+    def test_accepted_rc24_source_is_preserved(self):
+        baseline = builder.verify_base_source()
+        self.assertEqual(baseline["release"], "macos-2026.10.13-rc24-release")
+        self.assertEqual(baseline["source_archive_sha256"],
+                         "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3")
+        self.assertEqual(len(baseline["files"]), 108)
+
     def test_arm_update_feed_and_identity_are_not_inherited(self):
         original = {"SUFeedURL": "https://example.invalid/arm.xml", "SUEnableAutomaticChecks": True,
                     "CFBundleIdentifier": "original.production", "CFBundleExecutable": "AmplifaiPhone"}
@@ -20,6 +27,8 @@ class CandidateIsolationTests(unittest.TestCase):
         self.assertNotEqual(info["CFBundleIdentifier"], original["CFBundleIdentifier"])
         self.assertEqual(info["CFBundleExecutable"], "AmplifaiPhone")
         self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
+        self.assertEqual(info["CFBundleShortVersionString"], "2026.10.13-rc24-intel1")
+        self.assertEqual(info["CFBundleVersion"], "261013241")
         self.assertTrue(original["SUEnableAutomaticChecks"])
         self.assertIn("SUFeedURL", original)
 

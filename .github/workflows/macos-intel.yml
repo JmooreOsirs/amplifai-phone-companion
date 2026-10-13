@@ -1,15 +1,9 @@
-name: Intel Mac build and qualification
+name: RC24 Intel Mac build and qualification
 
 on:
   push:
-    branches: [codex/macos-intel-support]
+    branches: [codex/rc24-intel-qualification]
   workflow_dispatch:
-    inputs:
-      keep_candidate:
-        description: Keep the unsigned build as a draft GitHub release (no production publish)
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -20,11 +14,11 @@ concurrency:
 
 jobs:
   intel:
-    # Standard runner on this public fork: no larger/paid runner, no Homebrew.
+    # Standard runner on this public repository: no larger/paid runner, no Homebrew.
     runs-on: macos-15-intel
     timeout-minutes: 90
     permissions:
-      contents: write # fork prerelease, or an explicitly requested draft only
+      contents: write # draft candidate only; no public release
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.0'
       AMPLIFAI_TARGET_ARCH: x86_64
@@ -70,7 +64,7 @@ jobs:
           set -euo pipefail
           python -m unittest discover -s source/script -p 'test_*intel*.py' -v
           python source/script/test_macos_architecture.py -v
-          python -m unittest test_metadata test_ios_backup test_agent test_bridge test_bridge_ack test_sqlite_size_compat test_sqlite_messages_size_compat test_sqlite_encrypted_size_compat test_nonfinite_duration_pipeline test_workspace test_backup_capacity test_backup_stream test_backup_watchdog -v
+          python -m unittest test_metadata test_ios_backup test_agent test_bridge test_bridge_ack test_sqlite_size_compat test_sqlite_messages_size_compat test_sqlite_encrypted_size_compat test_nonfinite_duration_pipeline test_workspace test_backup_capacity test_backup_stream test_backup_watchdog test_contact_provenance -v
       - name: Build complete Intel app and audit every Mach-O component
         shell: bash
         run: |
@@ -84,6 +78,7 @@ jobs:
           set -euo pipefail
           sh source/collector/macos/Tests/check_flow.sh
           sh source/collector/macos/Tests/check_updater.sh
+          sh source/collector/macos/Tests/check_contact_provenance.sh
           helper="$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app/Contents/Resources/helper/amplifai-agent"
           python source/collector/tests/qualify_frozen_encrypted_worker.py --helper "$helper" > "$RUNNER_TEMP/intel-build/frozen-worker-receipt.json"
           python source/script/verify_frozen_metadata.py --helper "$helper" --expected-helper-sha256 "$(shasum -a 256 "$helper" | cut -d ' ' -f 1)" --tests source/collector/tests --capacity-tests > "$RUNNER_TEMP/intel-build/frozen-metadata-receipt.json"
@@ -92,7 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/intel-delivery"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app" "$RUNNER_TEMP/intel-delivery/AMPLIFai-Phone-Intel-rc23-candidate.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app" "$RUNNER_TEMP/intel-delivery/AMPLIFai-Phone-Intel-rc24-candidate.zip"
           cp "$RUNNER_TEMP/intel-build/"*.json "$RUNNER_TEMP/intel-delivery/"
           cp "$RUNNER_TEMP/intel-deps/receipt.json" "$RUNNER_TEMP/intel-delivery/dependency-receipt.json"
           mkdir -p "$RUNNER_TEMP/intel-source"
@@ -102,18 +97,12 @@ jobs:
           tar -czf "$RUNNER_TEMP/intel-delivery/AMPLIFai-Intel-Build-Source.tar.gz" -C "$RUNNER_TEMP" intel-source
           cd "$RUNNER_TEMP/intel-delivery"
           shasum -a 256 ./* > SHA256SUMS
-      - name: Retain candidate without changing production
-        if: github.repository == 'Osirs-io/amplifai-phone-companion' || (github.event_name == 'workflow_dispatch' && inputs.keep_candidate)
+      - name: Retain candidate as an unpublished draft
+        if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/codex/rc24-intel-qualification'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP_AS_DRAFT: ${{ github.repository != 'Osirs-io/amplifai-phone-companion' }}
         run: |
           set -euo pipefail
-          tag="intel-rc23-build-${GITHUB_SHA:0:12}"
-          if [ "$KEEP_AS_DRAFT" = true ]; then
-            release_mode=(--draft)
-          else
-            release_mode=(--prerelease)
-          fi
-          gh release create "$tag" "$RUNNER_TEMP/intel-delivery/"* --target "$GITHUB_SHA" "${release_mode[@]}" --title 'Intel Mac RC23 build for signing and device testing' --notes 'Ad-hoc signed Intel build from published RC23 source. Native Intel build, dependency/architecture/minimum-load-command checks and fictional regression tests passed. Not Developer ID signed or notarized. Physical Intel macOS 14, real iPhone collection and hosted account save/report remain separate acceptance checks. This does not change the official website, ARM release or updater. Corresponding build source and receipts are attached; original third-party source is linked from docs/INTEL-RC23-BASELINE.json.'
+          tag="intel-rc24-candidate-${GITHUB_SHA:0:12}"
+          gh release create "$tag" "$RUNNER_TEMP/intel-delivery/"* --target "$GITHUB_SHA" --draft --title 'Unpublished Intel Mac RC24 candidate for signing and device testing' --notes 'Ad-hoc signed Intel build reconciled to the published RC24 source ZIP. Native Intel build, dependency/architecture/minimum-load-command checks and fictional regression tests passed. Not Developer ID signed or notarized. Physical Intel macOS 14, real iPhone collection and hosted account save/report remain separate acceptance checks. This draft does not change the official website, Apple Silicon release or updater. Corresponding Intel build source and receipts are attached; original third-party source is linked by exact hash in docs/INTEL-RC24-BASELINE.json.'

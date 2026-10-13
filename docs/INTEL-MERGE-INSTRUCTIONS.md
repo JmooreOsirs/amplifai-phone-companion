@@ -1,35 +1,9 @@
-# Import the Intel fix with one command
+# RC24 Intel source reconciliation
 
-This pull request contains the Intel fix and a small ownership/link follow-up. Its comparison base is the published RC23 authored-source baseline. Do not merge the entire fork history into an independently maintained collector.
+The Intel implementation comes from [Osirs-io PR #1](https://github.com/Osirs-io/amplifai-phone-companion/pull/1), base `81ecfb5aaf14571a7879d8bd5964cea4c2096a2c`, focused commits `d42fc39faa380e31592a1ae6fab28e19060b2a4a` and `9719cc230d7d57e5ea42a73c43222e3a83e40434`. The base is the older published RC23 source.
 
-## Import
+For this candidate, the authored `source/` tree was replaced with the SHA-256 verified [published RC24 source ZIP](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-release), then the two focused Intel commits were cherry-picked in order. The Swift `ContentView.swift` changes merged with RC24's newer Finder guide without a conflict. The RC24 Python collector changes, three new provenance tests, and the untouched Python and Swift dependency locks were retained. `INTEL-RC24-BASELINE.json` lists the 108 source-file hashes before the Intel patch; the builder checks all 103 unchanged baseline files before packaging.
 
-Start in the current canonical companion checkout, on the branch containing the RC23 collector or its newer replacement. On 2026-10-12 the public main branch was still RC6; it is not the matching target. The commands below assume the published source/collector layout. If the private checkout uses collector/ at its root, map the paths explicitly rather than replacing its tree.
+The RC23 native CI run and its unsigned candidate are historical evidence. Build this RC24 integration on the standard native Intel runner. The workflow retains its output in an unpublished draft in `JmooreOsirs/amplifai-phone-companion`; it does not alter the Apple Silicon RC24 release, website, or updater.
 
-Run with a clean working tree:
-
-```sh
-git switch -c integrate-intel-mac
-git fetch https://github.com/Osirs-io/amplifai-phone-companion.git codex/intel-rc23-ready
-git cherry-pick 81ecfb5..FETCH_HEAD
-```
-
-This picks the focused Intel fix and ownership follow-up, excluding the source-baseline import. It also omits the unrelated root README replacement. If newer canonical changes conflict, resolve those specific hunks while preserving the newer collector; do not accept the fork's whole files to force a merge. The included patch has been checked against the published RC23 source layout.
-
-Review the changes and merge this integration branch through the canonical repository's normal process.
-
-## Build after import
-
-The native app and collector runtime files are byte-identical to the successfully tested code at 5756202162db8415e37b45f3c38bcca22930bcf6. The ownership follow-up changes only repository links, documentation and the workflow output-owner guard; the builder changes only its embedded source-notice URL. INTEL-VERIFICATION.md links the native Intel run and exact built app.
-
-The workflow output setting makes builds usable after import: in GitHub Actions, choose **Intel Mac build and qualification**, choose **Run workflow**, and enable **Keep the unsigned build as a draft GitHub release**. When running outside our shared OSIRS fork, this creates a draft containing the app, corresponding source and receipts. It does not publish the customer release or change the canonical updater. Without that option the build still tests, but does not retain its outputs. Automatic push builds remain limited to the original development branch; main uses this manual trigger unless you deliberately change that policy.
-
-This uses the standard Intel runner. For a public GitHub repository, standard Actions execution is free; private repositories should check their included Actions allowance before running.
-
-## Finish the release
-
-1. Use the existing authorized Developer ID process to sign/notarize/staple the Intel app and DMG; verify a normal downloaded installation and regenerate final checksums.
-2. Enable the website's Intel installer and setup/pairing path. Keep ARM-only updates blocked for Intel until a compatible signed feed exists. See INTEL-MAC-HANDOFF.md for the exact integration points.
-3. Qualify a real Intel Mac and iPhone through review, account Save acknowledgement, Finalize, report and sign-back-in persistence. Test macOS 14 explicitly before calling that version verified.
-
-The import builds Intel support; merging alone does not sign the app, enable the website or establish real-phone/account qualification.
+Release qualification still requires exact RC24 Intel build/architecture and source receipts, Developer ID signing, notarization, staples, Gatekeeper, public-byte verification after approval, and owner-controlled Intel Mac/iPhone collection through account Save, report, and return login before calling it user-ready.

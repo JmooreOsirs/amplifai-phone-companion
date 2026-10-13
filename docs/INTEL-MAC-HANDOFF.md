@@ -1,8 +1,8 @@
-# Intel Mac support — RC23-based implementation
+# Intel Mac support — RC24 integration
 
 ## What this changes
 
-This branch imports the authored source from Jeff's published `macos-2026.10.12-rc23-release`, then adds a separate Intel build. The upstream `main` branch was older than RC23 when this work began. `INTEL-RC23-BASELINE.json` records the archive URL, verified SHA-256 and every imported source hash. Do not replace the current collector with the older upstream main tree.
+This branch starts from Jeff's published `macos-2026.10.13-rc24-release` source ZIP (SHA-256 `171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3`) and applies the two focused commits from [Brian's Intel PR](https://github.com/Osirs-io/amplifai-phone-companion/pull/1). `INTEL-RC24-BASELINE.json` records every imported authored-source hash. Brian's RC23 native Intel run proves that earlier candidate only; this integration needs its own native build and receipts. The current Apple Silicon rc24 release remains untouched.
 
 The existing app is not fundamentally dependent on Apple silicon. The concrete packaging blockers were host-native Swift/Python builds, an ARM-oriented dependency lock, a cryptography release without an Intel wheel, ARM-only test targets, and one updater feed serving the ARM release.
 
@@ -16,7 +16,7 @@ The new path:
 
 ## Build
 
-Use `.github/workflows/macos-intel.yml` in the fork. For the focused import and manual build/output instructions in Jeff's repository, see `INTEL-MERGE-INSTRUCTIONS.md`. It uses a standard GitHub Intel runner in a public repository, not a paid larger runner. It never accesses signing secrets. Local equivalent on a native Intel Mac:
+Use `.github/workflows/macos-intel.yml` on the isolated RC24 qualification branch in Jeff's public companion repository. It uses a standard GitHub Intel runner, keeps output in an unpublished draft, and never accesses signing secrets. `INTEL-MERGE-INSTRUCTIONS.md` records the exact RC24 reconciliation. Local equivalent on a native Intel Mac:
 
 ```sh
 python3.12 source/script/prepare_intel_dependencies.py --output-dir /new/path/intel-deps
@@ -38,7 +38,7 @@ Supply Rust/Cargo 1.98.0 before preparing dependencies. The workflow pins the In
 
 ## What Jeff needs to finish for ordinary users
 
-1. Review the focused changes after the RC23 import commit. If the canonical collector has advanced, apply these build/updater changes individually to its current source and rerun qualification.
+1. Review this focused Intel diff against the RC24 baseline and qualify its exact build. Do not use Brian's older RC23 binary as the RC24 installer.
 2. Sign the exact Intel app with the existing authorized Developer ID identity, notarize/staple it, package/sign/notarize/staple the Intel DMG, then verify a normal downloaded installation through Gatekeeper. Signing can happen on Jeff's existing Mac; a separate Intel Apple membership or private-key transfer is not required.
 3. Keep the ARM updater feed unavailable to Intel until it is explicitly architecture-aware or a separate signed Intel feed is qualified. Do not remove the compiled updater guard merely to make the button appear enabled.
 4. Add a separate **Mac — Intel** release record on the canonical website, with the exact Intel artifact URL, SHA-256, version and supported macOS floor. Enable its pairing/account route only with the compatible artifact. Preserve Apple-silicon and Windows entries. Check the canonical equivalents of `src/lib/release/phone-companion.ts`, `src/components/phone-setup-state.ts`, and `src/components/phone-connection-setup.tsx`: the existing host allowlists and restored-step normalization only admit `apple-silicon`, not `intel-mac`. Changing only the download link leaves setup blocked. The website/backend source is outside this public companion repository and was not changed here.

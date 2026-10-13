@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the unchanged RC23 dependency versions for a native Intel Mac build.
+"""Prepare the unchanged RC24 dependency versions for a native Intel Mac build.
 
 The upstream cryptography 50.0.1 release has no Intel Mac wheel. Build that
 exact locked source with pinned Rust and a private static OpenSSL, rather than

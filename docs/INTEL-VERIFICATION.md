@@ -1,5 +1,11 @@
 # Intel Mac verification record
 
+## Current RC24 integration — qualification in progress
+
+The accepted Apple Silicon release is `macos-2026.10.13-rc24-release`; its corresponding source ZIP was independently downloaded and SHA-256 matched at `171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3`. `INTEL-RC24-BASELINE.json` identifies 108 authored-source files. The two focused Intel PR commits were applied after that RC24 source in an isolated checkout; this supersedes the RC23 build as the candidate source. RC24 native Intel CI, Developer ID signing, notarization, Gatekeeper and physical/account acceptance are still open at this checkpoint.
+
+## Historical RC23 patch evidence
+
 Recorded **2026-10-12**. This document separates completed local checks from the native Intel build and the remaining user tests. A compiled app is not proof of a completed iPhone import or account save.
 
 ## Source identity

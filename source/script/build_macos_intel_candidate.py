@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build RC23 as a separate, ad-hoc signed Intel candidate; never install it.
+"""Build RC24 as a separate, ad-hoc signed Intel candidate; never install it.
 
 Run with the prepared CPython 3.12 Intel environment. This intentionally does
 not modify the existing ARM release scripts, sign with Developer ID, contact
@@ -21,6 +21,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "source"
 MINIMUM = "14.0"
+BASELINE_PATH = ROOT / "docs/INTEL-RC24-BASELINE.json"
+INTEL_MODIFIED_BASE_FILES = {
+    "source/collector/macos/Sources/Services/CompanionUpdater.swift",
+    "source/collector/macos/Sources/Views/ContentView.swift",
+    "source/collector/macos/Tests/CompanionUpdaterChecks.swift",
+    "source/collector/macos/Tests/check_flow.sh",
+    "source/collector/macos/Tests/check_updater.sh",
+}
 
 
 def run(command: list[str], **kwargs):
@@ -32,13 +40,29 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def verify_base_source() -> dict:
+    baseline = json.loads(BASELINE_PATH.read_text())
+    if baseline.get("release") != "macos-2026.10.13-rc24-release":
+        raise ValueError("Intel build requires the accepted RC24 source baseline")
+    files = baseline["files"]
+    if not INTEL_MODIFIED_BASE_FILES.issubset(files):
+        raise ValueError("RC24 baseline omits a modified Intel source file")
+    for relative, expected in files.items():
+        if relative in INTEL_MODIFIED_BASE_FILES:
+            continue
+        path = ROOT / relative
+        if not path.is_file() or sha256(path) != expected:
+            raise ValueError(f"Source differs from accepted RC24: {relative}")
+    return baseline
+
+
 def candidate_plist(original: dict) -> dict:
     info = dict(original)
     info.update({
         "CFBundleIdentifier": "ai.satoris.amplifai.phone.intel-candidate",
         "CFBundleName": "AMPLIFai Phone Intel Test",
-        "CFBundleShortVersionString": "2026.10.12-rc23-intel1",
-        "CFBundleVersion": "261012231",
+        "CFBundleShortVersionString": "2026.10.13-rc24-intel1",
+        "CFBundleVersion": "261013241",
         "LSMinimumSystemVersion": MINIMUM,
         "SUEnableAutomaticChecks": False,
         "SUAutomaticallyUpdate": False,
@@ -60,6 +84,7 @@ def main() -> int:
         parser.error("Build with an x86_64 macOS Python runtime on an Intel runner.")
     if sys.version_info[:2] != (3, 12):
         parser.error("The release dependency lock requires CPython 3.12.")
+    baseline = verify_base_source()
     receipt_path = args.dependency_receipt.resolve(strict=True)
     dependency_receipt = json.loads(receipt_path.read_text())
     if dependency_receipt.get("status") != "built-and-validated":
@@ -125,9 +150,9 @@ def main() -> int:
                      "and notices. Other Python package versions are unchanged.\n")
     (legal / "SOURCE-README.md").write_text(
         "# Intel candidate corresponding source\n\n"
-        "This is a modified, ad-hoc signed RC23 Intel build. It is not the signed ARM release.\n"
-        "Authored source and build instructions: https://github.com/Osirs-io/amplifai-phone-companion/tree/codex/macos-intel-support\n"
-        "Original RC23 dependencies/source: https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.12-rc23-release\n"
+        "This is a modified, ad-hoc signed RC24 Intel build. It is not the signed ARM release.\n"
+        "Exact authored source is in the accompanying Intel build-source archive.\n"
+        "Original RC24 dependencies/source: " + baseline["source_archive_url"] + "\n"
         "The adjacent Intel dependency receipt identifies rebuilt native dependencies.\n"
         "Use the accompanying build-source archive for this exact candidate and its source inputs.\n")
     manifest = {str(p.relative_to(SOURCE)): sha256(p) for p in sorted(SOURCE.rglob("*"))
@@ -164,6 +189,9 @@ def main() -> int:
         "kind": "macos-intel-candidate", "architecture": "x86_64", "minimum_macos_declared": MINIMUM,
         "build_host_macos": platform.mac_ver()[0], "python": sys.version,
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "base_release": baseline["release"],
+        "base_source_archive_sha256": baseline["source_archive_sha256"],
+        "base_source_files_checked": len(baseline["files"]) - len(INTEL_MODIFIED_BASE_FILES),
         "version": info["CFBundleShortVersionString"], "bundle_id": info["CFBundleIdentifier"],
         "swift_sha256": sha256(contents / "MacOS/AmplifaiPhone"), "helper_sha256": sha256(helper),
         "dependency_receipt_sha256": sha256(receipt_path),

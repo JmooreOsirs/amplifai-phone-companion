@@ -463,5 +463,5 @@
     "itcl4.3.8": "tcl",
     "thread3.0.6": "tcl"
   },
-  "coverage_note": "CPython and the standalone build recipes plus all non-system linked library sources. Tcl/Tk sources are included conservatively even if PyInstaller omits tkinter. macOS system libraries remain supplied by Apple. Python wheel package sources are covered separately by the RC23 source archive and Intel dependency inputs."
+  "coverage_note": "CPython and the standalone build recipes plus all non-system linked library sources. Tcl/Tk sources are included conservatively even if PyInstaller omits tkinter. macOS system libraries remain supplied by Apple. Python wheel package sources are covered separately by the RC24 source archive and Intel dependency inputs."
 }
