@@ -479,6 +479,7 @@ class SizeCompatibilityTests(unittest.TestCase):
         roots=[parent/name/'sessions' for name in
                ('AMPLIFai Phone Intel Test','AMPLIFai Phone Candidate')]
         paths=[]
+        database_bytes=self.database().read_bytes()
         for root in roots:
             root.mkdir(parents=True,mode=0o700)
             (root/'.amplifai-phone-sessions-v1').write_bytes(b'AMPLIFAI_PHONE_SESSIONS_V1\n')
@@ -487,7 +488,7 @@ class SizeCompatibilityTests(unittest.TestCase):
             (session/'.amplifai-owned-session.json').write_text(json.dumps(
                 {'version':1,'session':session.name,'pid':os.getppid(),'created_at':0}))
             path=session/'selected-copy'
-            path.write_bytes(self.database().read_bytes())
+            path.write_bytes(database_bytes)
             paths.append(path)
         with (patch.object(compat.sys,'frozen',True,create=True),
               patch.object(compat.Path,'home',return_value=home),

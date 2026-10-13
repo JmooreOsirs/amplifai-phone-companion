@@ -462,20 +462,43 @@ final class CollectorModel: ObservableObject {
         guard phase == .error, !statusCheckFailureActive, !diagnosticReference.isEmpty else { return "" }
         let stage = lastErrorStage ?? "connecting"
         let code = lastErrorCode.flatMap { SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
-        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
-            .flatMap { $0.range(of: #"^[0-9]{8}$"#, options: .regularExpression) != nil ? $0 : nil } ?? "26101324"
-        return "A1|\(build)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
+        let expectedBuild = SupportDiagnosticReporter.build
+        if let declaredBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           declaredBuild != expectedBuild { return "" }
+        return "A1|\(expectedBuild)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
     }
 
     var workspaceSpaceStatus: String? {
         guard phase == .error, lastErrorCode == "workspace_low_space" else { return nil }
         let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/AMPLIFai Phone Intel Test/sessions", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/\(Self.sessionProductName)/sessions", isDirectory: true)
         guard let attributes = try? FileManager.default.attributesOfFileSystem(forPath: root.path),
               let free = attributes[.systemFreeSize] as? NSNumber else {
             return "The app checks free space on this Mac's Application Support volume, not the iPhone. Current free space could not be measured here. Selected sources, parsing copies and a further 2 GiB reserve must fit."
         }
         return "Current free space on this Mac's Application Support volume: \(Self.byteDescription(free.int64Value)). This is measured now, not at the failed attempt; selected sources, parsing copies and a further 2 GiB reserve must fit."
+    }
+
+    static var sessionProductName: String {
+        #if arch(x86_64)
+        "AMPLIFai Phone Intel Test"
+        #else
+        "AMPLIFai Phone Candidate"
+        #endif
+    }
+
+    static func helperEnvironment(modulePath: String) -> [String: String] {
+        var environment = [
+            "HOME": NSHomeDirectory(),
+            "PATH": "/usr/bin:/bin",
+            "PYTHONPATH": modulePath,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "UV_OFFLINE": "1"
+        ]
+        #if arch(x86_64)
+        environment["AMPLIFAI_INTEL_CANDIDATE"] = "1"
+        #endif
+        return environment
     }
 
     func reportDiagnosticIfNeeded(forceRetry: Bool = false) async {
@@ -1230,14 +1253,7 @@ final class CollectorModel: ObservableObject {
             "python", "-m", "amplifai_phone.agent", mode
         ]
         runner.arguments = requireEncryptedBackup ? arguments + ["--require-encrypted-backup"] : arguments
-        runner.environment = [
-            "HOME": NSHomeDirectory(),
-            "PATH": "/usr/bin:/bin",
-            "PYTHONPATH": module.path,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "UV_OFFLINE": "1",
-            "AMPLIFAI_INTEL_CANDIDATE": "1"
-        ]
+        runner.environment = Self.helperEnvironment(modulePath: module.path)
         runner.standardInput = input
         runner.standardOutput = output
         runner.standardError = FileHandle.nullDevice

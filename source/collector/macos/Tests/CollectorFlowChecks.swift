@@ -31,6 +31,7 @@ struct CollectorFlowChecks {
         catch { FileHandle.standardError.write(Data("macOS flow check failed: \(error)\n".utf8)); Darwin.exit(1) }
     }
     private static func checks() throws {
+        try architecturePreservesSessionNamespace()
         try optionalSourceReasonCopy()
         try boundedSelectedPayloadContext()
         try pagedContactReview()
@@ -117,6 +118,28 @@ struct CollectorFlowChecks {
         changed.receive(try event(#"{"kind":"pairing","pairCode":"0000000000","handoffId":"\#(id)"}"#))
         try require(changed.handoffID.isEmpty && changed.pairCode.isEmpty && !changed.handoffAcknowledged,
                     "Late pairing response cannot revive a selection changed after review")
+    }
+
+    private static func architecturePreservesSessionNamespace() throws {
+        let environment = CollectorModel.helperEnvironment(modulePath: "/synthetic/collector")
+        try require(environment["PYTHONPATH"] == "/synthetic/collector",
+                    "Helper must retain its bundled collector module path")
+        #if arch(x86_64)
+        try require(CollectorModel.sessionProductName == "AMPLIFai Phone Intel Test" &&
+                    environment["AMPLIFAI_INTEL_CANDIDATE"] == "1",
+                    "Intel helper and free-space display must use the isolated Intel sessions")
+        try require(SupportDiagnosticReporter.build == "261013241",
+                    "Intel diagnostics must identify the distinct Intel build")
+        #else
+        try require(CollectorModel.sessionProductName == "AMPLIFai Phone Candidate" &&
+                    environment["AMPLIFAI_INTEL_CANDIDATE"] == nil,
+                    "ARM rebuild must retain the accepted sessions namespace")
+        try require(SupportDiagnosticReporter.build == "26101324",
+                    "ARM diagnostics must retain the accepted build identity")
+        #endif
+        let code = "A1|\(SupportDiagnosticReporter.build)|ABCD1234|connecting|phone_connection|0|0|0|-"
+        try require(SupportDiagnosticReporter.request(for: code) != nil,
+                    "The architecture's diagnostic build must be accepted locally")
     }
 
     private static func boundedSelectedPayloadContext() throws {
