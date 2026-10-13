@@ -126,7 +126,7 @@ def main() -> int:
     (legal / "SOURCE-README.md").write_text(
         "# Intel candidate corresponding source\n\n"
         "This is a modified, ad-hoc signed RC23 Intel build. It is not the signed ARM release.\n"
-        "Authored source and build instructions: https://github.com/bac1876/amplifai-phone-companion/tree/codex/macos-intel-support\n"
+        "Authored source and build instructions: https://github.com/Osirs-io/amplifai-phone-companion/tree/codex/macos-intel-support\n"
         "Original RC23 dependencies/source: https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.12-rc23-release\n"
         "The adjacent Intel dependency receipt identifies rebuilt native dependencies.\n"
         "Use the accompanying build-source archive for this exact candidate and its source inputs.\n")

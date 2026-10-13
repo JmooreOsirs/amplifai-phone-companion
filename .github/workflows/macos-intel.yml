@@ -103,11 +103,11 @@ jobs:
           cd "$RUNNER_TEMP/intel-delivery"
           shasum -a 256 ./* > SHA256SUMS
       - name: Retain candidate without changing production
-        if: github.repository == 'bac1876/amplifai-phone-companion' || (github.event_name == 'workflow_dispatch' && inputs.keep_candidate)
+        if: github.repository == 'Osirs-io/amplifai-phone-companion' || (github.event_name == 'workflow_dispatch' && inputs.keep_candidate)
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP_AS_DRAFT: ${{ github.repository != 'bac1876/amplifai-phone-companion' }}
+          KEEP_AS_DRAFT: ${{ github.repository != 'Osirs-io/amplifai-phone-companion' }}
         run: |
           set -euo pipefail
           tag="intel-rc23-build-${GITHUB_SHA:0:12}"

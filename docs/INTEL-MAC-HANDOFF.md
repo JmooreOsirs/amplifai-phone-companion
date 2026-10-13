@@ -16,7 +16,7 @@ The new path:
 
 ## Build
 
-Use `.github/workflows/macos-intel.yml` in the fork. For the single-commit import and manual build/output instructions in Jeff's repository, see `INTEL-MERGE-INSTRUCTIONS.md`. It uses a standard GitHub Intel runner in a public repository, not a paid larger runner. It never accesses signing secrets. Local equivalent on a native Intel Mac:
+Use `.github/workflows/macos-intel.yml` in the fork. For the focused import and manual build/output instructions in Jeff's repository, see `INTEL-MERGE-INSTRUCTIONS.md`. It uses a standard GitHub Intel runner in a public repository, not a paid larger runner. It never accesses signing secrets. Local equivalent on a native Intel Mac:
 
 ```sh
 python3.12 source/script/prepare_intel_dependencies.py --output-dir /new/path/intel-deps

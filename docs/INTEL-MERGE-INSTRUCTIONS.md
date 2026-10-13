@@ -1,6 +1,6 @@
-# Import the Intel fix as one commit
+# Import the Intel fix with one command
 
-This pull request contains one commit with the Intel changes only. Its parent is the published RC23 authored-source baseline. Do not merge the entire fork history into an independently maintained collector.
+This pull request contains the Intel fix and a small ownership/link follow-up. Its comparison base is the published RC23 authored-source baseline. Do not merge the entire fork history into an independently maintained collector.
 
 ## Import
 
@@ -10,19 +10,19 @@ Run with a clean working tree:
 
 ```sh
 git switch -c integrate-intel-mac
-git fetch https://github.com/bac1876/amplifai-phone-companion.git codex/intel-rc23-ready
-git cherry-pick FETCH_HEAD
+git fetch https://github.com/Osirs-io/amplifai-phone-companion.git codex/intel-rc23-ready
+git cherry-pick 81ecfb5..FETCH_HEAD
 ```
 
-This picks only the single Intel-fix commit, excluding the source-baseline import. It also omits the unrelated root README replacement. If newer canonical changes conflict, resolve those specific hunks while preserving the newer collector; do not accept the fork's whole files to force a merge. The included patch has been checked against the published RC23 source layout.
+This picks the focused Intel fix and ownership follow-up, excluding the source-baseline import. It also omits the unrelated root README replacement. If newer canonical changes conflict, resolve those specific hunks while preserving the newer collector; do not accept the fork's whole files to force a merge. The included patch has been checked against the published RC23 source layout.
 
 Review the changes and merge this integration branch through the canonical repository's normal process.
 
 ## Build after import
 
-The native app and collector files are byte-identical to the successfully tested code at 5756202162db8415e37b45f3c38bcca22930bcf6. INTEL-VERIFICATION.md links the native Intel run and exact built app.
+The native app and collector runtime files are byte-identical to the successfully tested code at 5756202162db8415e37b45f3c38bcca22930bcf6. The ownership follow-up changes only repository links, documentation and the workflow output-owner guard; the builder changes only its embedded source-notice URL. INTEL-VERIFICATION.md links the native Intel run and exact built app.
 
-The only subsequent workflow adjustment makes outputs usable after import: in GitHub Actions, choose **Intel Mac build and qualification**, choose **Run workflow**, and enable **Keep the unsigned build as a draft GitHub release**. When running outside Brian's fork, this creates a draft containing the app, corresponding source and receipts. It does not publish the customer release or change the canonical updater. Without that option the build still tests, but does not retain its outputs. Automatic push builds remain limited to the original development branch; main uses this manual trigger unless you deliberately change that policy.
+The workflow output setting makes builds usable after import: in GitHub Actions, choose **Intel Mac build and qualification**, choose **Run workflow**, and enable **Keep the unsigned build as a draft GitHub release**. When running outside our shared OSIRS fork, this creates a draft containing the app, corresponding source and receipts. It does not publish the customer release or change the canonical updater. Without that option the build still tests, but does not retain its outputs. Automatic push builds remain limited to the original development branch; main uses this manual trigger unless you deliberately change that policy.
 
 This uses the standard Intel runner. For a public GitHub repository, standard Actions execution is free; private repositories should check their included Actions allowance before running.
 

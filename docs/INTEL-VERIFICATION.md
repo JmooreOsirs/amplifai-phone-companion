@@ -46,11 +46,11 @@ These are temporary verification executables, not the packaged Intel candidate o
 
 ## Native Intel CI
 
-Initial run [38321799136](https://github.com/bac1876/amplifai-phone-companion/actions/runs/38321799136), commit `ce59a26e8dc6044c6e1c97dc76c57c883c5538bd`, ran natively on Intel macOS **15.7.9**, Apple Swift **6.1.2** and pinned CPython **3.12.15**. It successfully rebuilt and validated cryptography 50.0.1 with static OpenSSL 3.5.9, collected the matching Python source/notices, passed 12 build guards, 21 architecture fixture tests and **274 collector regressions**, and compiled/packaged/ad-hoc-signed the full app.
+Initial run [38321799136](https://github.com/Osirs-io/amplifai-phone-companion/actions/runs/38321799136), commit `ce59a26e8dc6044c6e1c97dc76c57c883c5538bd`, ran natively on Intel macOS **15.7.9**, Apple Swift **6.1.2** and pinned CPython **3.12.15**. It successfully rebuilt and validated cryptography 50.0.1 with static OpenSSL 3.5.9, collected the matching Python source/notices, passed 12 build guards, 21 architecture fixture tests and **274 collector regressions**, and compiled/packaged/ad-hoc-signed the full app.
 
 That run correctly stopped before publication because the architecture checker rejected the system WebKit framework after resolving Apple's Cryptex relocation. This was a checker defect, not an absent Intel library. Commit `5756202162db8415e37b45f3c38bcca22930bcf6` preserves normalized Apple system install names while retaining external-library and app-symlink rejection. The expanded 24 architecture tests pass locally, including the actual WebKit linkage. The exact Sparkle 2.10.0 framework also passes the complete audit/signing sequence in a local fixture.
 
-Replacement run [38322269335](https://github.com/bac1876/amplifai-phone-companion/actions/runs/38322269335) tested `5756202162db8415e37b45f3c38bcca22930bcf6`. **Result: SUCCESS**, completed 2026-10-12 at approximately 23:42 UTC on native Intel macOS 15.7.9 / Swift 6.1.2. All workflow steps completed, including publication to this separate fork.
+Replacement run [38322269335](https://github.com/Osirs-io/amplifai-phone-companion/actions/runs/38322269335) tested `5756202162db8415e37b45f3c38bcca22930bcf6`. **Result: SUCCESS**, completed 2026-10-12 at approximately 23:42 UTC on native Intel macOS 15.7.9 / Swift 6.1.2. All workflow steps completed, including publication to this separate fork.
 
 | Native Intel check | Observed result |
 | --- | --- |
@@ -65,7 +65,7 @@ Replacement run [38322269335](https://github.com/bac1876/amplifai-phone-companio
 | Actual frozen validation worker | Fictional contacts, calls and messages accepted; altered copy checksum rejected; temporary session cleanup verified. |
 | Exact helper's compiled Python code | 73 metadata/capacity/workspace tests passed, zero failures/errors and no readable engine fallback. The code was extracted from the selected helper and executed with its matching dependency environment; this is separate from frozen-loader or physical-device proof. |
 
-[Download the exact build, source and machine-readable receipts](https://github.com/bac1876/amplifai-phone-companion/releases/tag/intel-rc23-build-5756202162db).
+[Download the exact build, source and machine-readable receipts](https://github.com/Osirs-io/amplifai-phone-companion/releases/tag/intel-rc23-build-5756202162db).
 
 - App ZIP SHA-256: `742ac4736f09bd8b5bec3e21bcf0d420108af98ee5501e91216d4751d63c10d3`.
 - Source archive SHA-256: `ea7abb0e41477b314375ba4958226517c95dc596fb9e229f263bd0f058dc7b5d`.
