@@ -67,7 +67,7 @@ class HelperProcess:
     def start(self, mode: str) -> None:
         if self.process is not None and self.process.poll() is None:
             raise RuntimeError("Owned helper is still running")
-        if mode not in {"connect", "inspect", "clear-residue"}:
+        if mode not in {"connect", "inspect", "clear-residue", "backup-encryption-status"}:
             raise ValueError("Invalid helper mode")
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         environment = os.environ.copy()

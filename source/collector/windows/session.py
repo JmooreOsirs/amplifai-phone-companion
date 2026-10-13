@@ -12,6 +12,7 @@ DISCLOSURE_VERSION = "native-local-collection-v1"
 CONTACT_PAGE_SIZE = 200
 REVIEW_PAGE_SIZE = 1_000
 MAX_CONTACT_QUERY_LENGTH = 120
+BACKUP_CHECK_MODE = "backup-encryption-status"
 WEBSITE_ORIGIN = "https://amplifai-database-engine.vercel.app"
 BRIDGE_PORT = 48751
 OPTIONAL_SOURCES = frozenset({"calls", "messages"})
@@ -53,6 +54,20 @@ def unavailable_detail(source: str, reason: str | None, backup_encrypted: bool |
     return details.get(reason, "reason not available from this helper")
 
 
+def contact_source_details(item: dict) -> str:
+    names = {
+        "first_and_last": "Source name: first and last fields filled.",
+        "first": "Source name: first field filled. One name can be valid.",
+        "last": "Source name: last field filled. One name can be valid.",
+        "missing": "Source first and last fields are empty.",
+    }
+    name = names.get(item.get("nameFields"), "Name-field details are unavailable for this display name.")
+    organization = item.get("organizationField")
+    hint = ("Organization field supplied. This is a hint, not verified business identity." if organization is True else
+            "Organization field is empty." if organization is False else "Organization-field details are unavailable.")
+    return f"{name}\n{hint}\nThese local details do not change the contact, your selection, or account Save approval."
+
+
 class Session:
     def __init__(self) -> None:
         self.phase = "idle"
@@ -76,10 +91,16 @@ class Session:
         self.missing: list[str] = []
         self.unavailable_reasons: dict[str, str] = {}
         self.backup_encrypted: bool | None = None
+        self.checked_backup_setting: bool | None = None
+        self.backup_check_status = "Backup setting: Unknown — no read-only check completed."
+        self._backup_check_received = False
+        self._pending_backup_setting: bool | None = None
         self.source_counts = (0, 0)
         self.transfer_status = "No phone data has been received."
         self.transfer_stage = ""
         self.transfer_bytes = 0
+        self.transfer_elapsed = 0.0
+        self.transfer_rate = 0.0
         self.progress: float | None = None
         self.handoff_id = ""
         self.pair_code = ""
@@ -114,6 +135,44 @@ class Session:
     @property
     def can_connect(self) -> bool:
         return bool(self.approval and self.inspected and not self.needs_inspection and not self.residue and not self.running)
+
+    @property
+    def can_check_backup_setting(self) -> bool:
+        # Never replace the owned helper while a capture, review, Save or cleanup is running.
+        return not self.running and self.inspected and not self.needs_inspection and not self.residue
+
+    @property
+    def activity_stage(self) -> str:
+        if self.mode == BACKUP_CHECK_MODE and self.running:
+            return "Checking the existing backup setting — no backup is started"
+        if self._saved_exit and not self.running and not self.needs_inspection:
+            return "Account save acknowledged · temporary data checked"
+        if self._capture_received and self.running:
+            return "4 of 4 · Review & save — account Save is a separate decision"
+        if self.mode == "connect" and self.running:
+            if self.transfer_stage == "processing" or self.phase == "processing":
+                return "3 of 4 · Read selected sources locally"
+            if self.transfer_stage == "backup":
+                return "2 of 4 · Receive backup bytes locally"
+            return "1 of 4 · Connect iPhone — waiting for the first received byte"
+        return "Connect → Receive → Read → Review & save"
+
+    @property
+    def progress_caption(self) -> str:
+        if self.mode != "connect" or not self.running or self._capture_received:
+            return "Backup progress, browser receipt and account Save are separate."
+        if self.transfer_stage == "processing" or self.phase == "processing":
+            return "Reading measured local bytes. Total reading time is unknown."
+        if self.progress is not None:
+            return f"{self.progress:.0f}% reported by iPhone · backup transfer only"
+        return "No percentage reported. Received bytes appear when measured."
+
+    @property
+    def activity_measurement(self) -> str:
+        if self.transfer_stage != "backup":
+            return ""
+        return (f"Measured receive time: {self.transfer_elapsed:.0f}s · "
+                f"Observed rate: {self.transfer_rate:,.0f} bytes/s. No completion-time estimate.")
 
     @property
     def coverage_status(self) -> str:
@@ -165,10 +224,17 @@ class Session:
         self.approval = str(uuid.uuid4()) if checked and self.inspected and not self.needs_inspection and not self.residue and not self.running else None
 
     def begin(self, mode: str) -> None:
-        if self.running or mode not in {"inspect", "clear-residue", "connect"}:
+        if self.running or mode not in {"inspect", "clear-residue", "connect", BACKUP_CHECK_MODE}:
             raise ProtocolError("An operation is already running or unavailable")
         if mode == "connect" and not self.can_connect:
             raise ProtocolError("Fresh collection agreement and clean inspection required")
+        if mode == BACKUP_CHECK_MODE and not self.can_check_backup_setting:
+            raise ProtocolError("Inspect temporary data before checking the backup setting")
+        if mode == BACKUP_CHECK_MODE:
+            self.checked_backup_setting = None
+            self._pending_backup_setting = None
+            self._backup_check_received = False
+            self.backup_check_status = "Backup setting: checking the currently connected trusted iPhone…"
         if mode == "connect":
             self.contacts = []
             self.total_contacts = 0
@@ -188,6 +254,7 @@ class Session:
             self.transfer_status = "Waiting for the iPhone. No phone data has been received."
             self.transfer_stage = ""
             self.transfer_bytes = 0
+            self.transfer_elapsed = self.transfer_rate = 0.0
             self.handoff_id = self.pair_code = ""
             self._clear_destination()
             self._saved_exit = self._capture_received = False
@@ -207,6 +274,8 @@ class Session:
         self.progress = None
         self.phase = "connecting" if mode == "connect" else "checking"
         self.status = "Connecting to the iPhone. Handle device Trust prompts yourself." if mode == "connect" else "Checking owned temporary data…"
+        if mode == BACKUP_CHECK_MODE:
+            self.status = "Reading the existing iPhone backup setting. No collection, backup or encryption change is requested."
 
     def review(self, ids: list[int]) -> dict:
         if (not self.can_review or not isinstance(ids, list) or not 0 < len(ids) <= self.total_contacts
@@ -493,6 +562,9 @@ class Session:
                     or any(not isinstance(end, str) or not re.fullmatch(r"[0-9]{4}", end)
                            for end in ends)):
                 raise ProtocolError("Invalid contact preview")
+            if ((item.get("nameFields") is not None and not isinstance(item["nameFields"], str)) or
+                    (item.get("organizationField") is not None and type(item["organizationField"]) is not bool)):
+                raise ProtocolError("Invalid contact source details")
             seen.add(item["id"])
         self.contacts = contacts
         self.total_contacts = total
@@ -509,7 +581,13 @@ class Session:
             raise ProtocolError("Invalid helper event kind")
         if self._stopping and kind != "error":
             return None
-        if kind == "progress":
+        if kind == BACKUP_CHECK_MODE:
+            if (self.mode != BACKUP_CHECK_MODE or self._backup_check_received or
+                    set(event) != {"kind", "backupEncrypted"} or type(event.get("backupEncrypted")) is not bool):
+                raise ProtocolError("Invalid backup setting result")
+            self._pending_backup_setting = event["backupEncrypted"]
+            self._backup_check_received = True
+        elif kind == "progress":
             value = event.get("value")
             if type(value) not in {float, int} or not 0 <= value <= 100 or not math.isfinite(value):
                 raise ProtocolError("Invalid progress")
@@ -536,6 +614,7 @@ class Session:
                     raise ProtocolError("Invalid backup counters")
                 self.transfer_status = (f"Receiving backup: {received:,} bytes checked across {files:,} files; "
                                         f"{retained:,} retained locally, {discarded:,} discarded.")
+                self.transfer_elapsed, self.transfer_rate = float(elapsed), float(rate)
             else:
                 if set(event) != {"kind", "stage", "processedBytes"}:
                     raise ProtocolError("Invalid processing progress")
@@ -773,7 +852,21 @@ class Session:
             raise ProtocolError("Invalid helper exit result")
         self.running = False
         self.approval = None
-        if self.mode == "inspect" and code == 0 and self.inspected and not self._failed:
+        if self.mode == BACKUP_CHECK_MODE:
+            valid = code == 0 and self._backup_check_received and not self._failed and not self._stopping
+            self.checked_backup_setting = self._pending_backup_setting if valid else None
+            if self.checked_backup_setting is True:
+                self.backup_check_status = "Last backup-setting check: On. This is not captured-source coverage; Calls are not guaranteed."
+            elif self.checked_backup_setting is False:
+                self.backup_check_status = "Last backup-setting check: Off. Use the guide if you choose to enable encryption yourself; unavailable Calls remain unavailable."
+            else:
+                self.backup_check_status = "Backup setting: Unknown. Connect one unlocked, already trusted iPhone and recheck; no setting was changed."
+            self._pending_backup_setting = None
+            self._backup_check_received = False
+            self.needs_inspection, self.inspected = True, False
+            self.phase = "checking"
+            self.status = "Read-only setting check ended. Inspect temporary data before another operation."
+        elif self.mode == "inspect" and code == 0 and self.inspected and not self._failed:
             self.needs_inspection = False
             self.phase = "completed" if self._saved_exit and not self.residue else "idle"
             self.status = "Account save acknowledged; helper exited and no abandoned temporary sessions were found." if self.phase == "completed" else "Temporary data checked. Review collection agreement to connect." if not self.residue else "Marked temporary phone data remains. Explicitly remove it before another collection."

@@ -10,7 +10,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from helper_process import HelperProcess, bundled_resources
-from session import DISCLOSURE_VERSION, WEBSITE_ORIGIN, ProtocolError, Session
+from session import BACKUP_CHECK_MODE, DISCLOSURE_VERSION, WEBSITE_ORIGIN, ProtocolError, Session, contact_source_details
 
 # Exact values from collector/macos/Sources/Support/Brand.swift.
 BACKGROUND, PANEL, BORDER = "#0f1525", "#141d30", "#263146"
@@ -18,6 +18,12 @@ HEADING, BODY, MUTED = "#edeff3", "#c8cfd9", "#a1a9b5"
 LIME, BLUE = "#a6e63d", "#5c87df"
 GUARANTEE = "Data & Privacy Guarantee: What We Collect, How It's Protected, and Why"
 WINDOW_TITLE = "AMPLIFai Phone · Windows source candidate"
+SETUP_STEPS = (
+    ("Connect your iPhone", "Use a data-capable USB cable and unlock the iPhone. Open Apple Devices on this PC and decide any normal Trust prompt yourself. The read-only check uses an existing trusted connection."),
+    ("Check the backup setting", "Choose Check iPhone setting below. It reads the current encryption setting without starting a backup or changing the phone. On, Off and Unknown describe this check only."),
+    ("Prepare a backup if you choose", "Apple Devices → your iPhone → General → Backups. If you choose Encrypt local backup, keep the password. Confirming can start a separate backup and overwrite older local backups; allow PC storage. AMPLIFai cannot change encryption or reset the password."),
+    ("Finish, then return", "Let any Apple Devices backup finish before collecting here; it is a separate backup stored on this PC. Recheck if needed, then review the collection agreement below. Even encrypted backups may lack older Calls. Captured coverage is shown after collection."),
+)
 
 
 def window_title(state: Session) -> str:
@@ -43,6 +49,13 @@ class PhoneWindow:
         self.contact_query = tk.StringVar(value="")
         self.contact_page = tk.StringVar(value="No contacts loaded.")
         self.destination_status = tk.StringVar(value="Connect from your signed-in account after reviewing contacts.")
+        self.guide_step = 0
+        self.guide_heading = tk.StringVar()
+        self.backup_setting = tk.StringVar(value=self.state.backup_check_status)
+        self.activity_stage = tk.StringVar(value=self.state.activity_stage)
+        self.progress_caption = tk.StringVar(value=self.state.progress_caption)
+        self.activity_measurement = tk.StringVar(value="")
+        self.source_details_window = None
         self._rendering_contacts = False
         self.window.title(WINDOW_TITLE)
         self.window.geometry("920x800")
@@ -97,6 +110,22 @@ class PhoneWindow:
         self.logo = self.logo.subsample(max(1, math.ceil(self.logo.width() / 210)))
         ttk.Label(header, image=self.logo).pack(anchor="w", pady=(0, 12))
         self.label(outer, "Connect. Review. Decide.", heading=True)
+        self.setup_toggle = ttk.Button(outer, text="Hide iPhone setup guide", command=self.toggle_setup_guide)
+        self.setup_toggle.pack(anchor="w", pady=(0, 8))
+        self.setup_guide = ttk.Frame(outer)
+        self.setup_guide.pack(fill="x", pady=(0, 16))
+        ttk.Label(self.setup_guide, textvariable=self.guide_heading, style="Heading.TLabel").pack(anchor="w", pady=(0, 8))
+        self.guide_text = self.readable_text(self.setup_guide, height=5)
+        guide_actions = ttk.Frame(self.setup_guide)
+        guide_actions.pack(fill="x", pady=(8, 8))
+        self.guide_back = ttk.Button(guide_actions, text="Back", command=lambda: self.move_guide(-1))
+        self.guide_back.pack(side="left", padx=(0, 8))
+        self.guide_next = ttk.Button(guide_actions, text="Next", command=lambda: self.move_guide(1))
+        self.guide_next.pack(side="left", padx=(0, 8))
+        self.backup_check = ttk.Button(guide_actions, text="Check iPhone setting", command=lambda: self.start(BACKUP_CHECK_MODE))
+        self.backup_check.pack(side="left")
+        ttk.Label(self.setup_guide, textvariable=self.backup_setting, wraplength=820, justify="left").pack(fill="x")
+        self.render_guide()
         self.label(outer, GUARANTEE)
         self.label(outer, "Selected contact names and numbers, call counterpart/time/direction/duration, and message counterpart/time/direction/channel provide relationship context. Message text, attachments, passwords and backups are never handed to the website.")
         self.label(outer, "An iPhone backup can contain private content locally. Cleanup can leave files after interruption. Trust and device permissions are your decision. Agreement permits collection, not marketing or account saving.")
@@ -118,9 +147,15 @@ class PhoneWindow:
         self.privacy_button = ttk.Button(secondary_actions, text="Full privacy guarantee", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/experience/data-privacy-guarantee"))
         self.privacy_button.pack(side="left")
         ttk.Label(outer, textvariable=self.status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
-        self.progress = ttk.Progressbar(outer, maximum=100)
+        self.activity = ttk.Frame(outer)
+        self.activity.pack(fill="x", pady=(0, 12))
+        ttk.Label(self.activity, textvariable=self.activity_stage, wraplength=820, style="Heading.TLabel").pack(fill="x", pady=(0, 8))
+        self.progress = ttk.Progressbar(self.activity, maximum=100)
         self.progress.pack(fill="x", pady=(0, 12))
-        ttk.Label(outer, textvariable=self.transfer_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
+        self.progress_label = ttk.Label(self.activity, textvariable=self.progress_caption, wraplength=820, justify="left")
+        self.progress_label.pack(fill="x", pady=(0, 8))
+        ttk.Label(self.activity, textvariable=self.transfer_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
+        ttk.Label(self.activity, textvariable=self.activity_measurement, wraplength=820, justify="left").pack(fill="x")
         password_row = ttk.Frame(outer)
         password_row.pack(fill="x", pady=(0, 12))
         self.password = ttk.Entry(password_row, show="•", width=30)
@@ -156,6 +191,8 @@ class PhoneWindow:
         self.contacts.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
+        self.details_button = ttk.Button(outer, text="Source details for focused contact", command=self.show_source_details)
+        self.details_button.pack(anchor="w", pady=(8, 8))
         self.review_button = ttk.Button(outer, text="Review selected metadata", command=self.review)
         self.review_button.pack(anchor="w", pady=(8, 8))
         self.change_selection_button = ttk.Button(outer, text="Change selected contacts", command=self.change_selection)
@@ -180,6 +217,66 @@ class PhoneWindow:
         self.force_button.pack(side="left")
         self.refresh()
 
+    def readable_text(self, parent, *, height: int):
+        value = tk.Text(parent, height=height, wrap="word", background=PANEL, foreground=HEADING,
+                        font=("Arial", 12), relief="flat", padx=10, pady=10, takefocus=True)
+        value.pack(fill="x")
+        value.configure(state="disabled")
+        return value
+
+    def render_guide(self) -> None:
+        title, detail = SETUP_STEPS[self.guide_step]
+        self.guide_heading.set(f"{self.guide_step + 1} of {len(SETUP_STEPS)} · {title}")
+        self.guide_text.configure(state="normal")
+        self.guide_text.delete("1.0", tk.END)
+        self.guide_text.insert("1.0", detail)
+        self.guide_text.configure(state="disabled")
+        self.guide_back.configure(state="normal" if self.guide_step else "disabled")
+        self.guide_next.configure(state="normal" if self.guide_step < len(SETUP_STEPS) - 1 else "disabled")
+
+    def move_guide(self, direction: int) -> None:
+        self.guide_step = max(0, min(len(SETUP_STEPS) - 1, self.guide_step + direction))
+        self.render_guide()
+        self.guide_text.focus_set()
+
+    def toggle_setup_guide(self) -> None:
+        if self.setup_guide.winfo_manager():
+            self.setup_guide.pack_forget()
+            self.setup_toggle.configure(text="Show iPhone setup guide")
+        else:
+            self.setup_guide.pack(fill="x", pady=(0, 16), after=self.setup_toggle)
+            self.setup_toggle.configure(text="Hide iPhone setup guide")
+
+    def show_source_details(self) -> None:
+        if not self.state.contacts or self.state.selecting_all or self.state.pending_contact is not None:
+            return
+        index = self.contacts.index(tk.ACTIVE)
+        if not 0 <= index < len(self.state.contacts):
+            return
+        item = self.state.contacts[index]
+        self.close_source_details()
+        details = tk.Toplevel(self.window)
+        self.source_details_window = details
+        details.title("Contact source details")
+        details.configure(background=BACKGROUND)
+        details.minsize(400, 240)
+        body = ttk.Frame(details, padding=16)
+        body.pack(fill="both", expand=True)
+        self.label(body, item["name"] or "Unnamed contact", heading=True)
+        content = self.readable_text(body, height=7)
+        content.configure(state="normal")
+        content.insert("1.0", contact_source_details(item))
+        content.configure(state="disabled")
+        ttk.Button(body, text="Close details", command=self.close_source_details).pack(anchor="w", pady=(12, 0))
+        details.protocol("WM_DELETE_WINDOW", self.close_source_details)
+        details.bind("<Escape>", lambda _event: self.close_source_details())
+        content.focus_set()
+
+    def close_source_details(self) -> None:
+        if self.source_details_window is not None:
+            self.source_details_window.destroy()
+            self.source_details_window = None
+
     def agree(self) -> None:
         self.state.approve(self.checked.get())
         self.refresh()
@@ -202,6 +299,7 @@ class PhoneWindow:
             return
         self.checked.set(False)
         if mode == "connect":
+            self.close_source_details()
             self.contact_query.set("")
             self.contact_page.set("No contacts loaded.")
             self._rendering_contacts = True
@@ -259,6 +357,7 @@ class PhoneWindow:
         self.refresh()
 
     def render_contacts(self) -> None:
+        self.close_source_details()
         self._rendering_contacts = True
         try:
             self.contacts.configure(state="normal")
@@ -383,6 +482,12 @@ class PhoneWindow:
         self.status.set(state.status)
         self.transfer_status.set(state.transfer_status)
         self.coverage_status.set(state.coverage_status)
+        self.backup_setting.set(state.backup_check_status)
+        self.backup_check.configure(state="normal" if state.can_check_backup_setting else "disabled")
+        self.activity_stage.set(state.activity_stage)
+        self.progress_caption.set(state.progress_caption)
+        self.activity_measurement.set(state.activity_measurement)
+        self.details_button.configure(state="normal" if state.contacts and not state.selecting_all and state.pending_contact is None else "disabled")
         self.approve.configure(state="normal" if self.checked.get() and state.inspected and not state.residue and not state.running else "disabled")
         self.connect.configure(state="normal" if state.can_connect else "disabled")
         self.agreement.configure(state="disabled" if state.running else "normal")
@@ -409,7 +514,13 @@ class PhoneWindow:
         self.clear.configure(state="normal" if state.residue and not state.running else "disabled")
         self.stop_button.configure(state="normal" if state.running and state.phase != "cancelling" else "disabled")
         self.force_button.configure(state="normal" if state.running and state.phase == "cancelling" else "disabled")
-        self.progress.configure(value=state.progress or 0)
+        known_backup_progress = (state.mode == "connect" and state.running and not state._capture_received and
+                                 state.transfer_stage != "processing" and state.phase != "processing" and state.progress is not None)
+        if known_backup_progress:
+            self.progress.configure(value=state.progress)
+            self.progress.pack(fill="x", pady=(0, 12), before=self.progress_label)
+        else:
+            self.progress.pack_forget()
         self.pair_code.set("Temporary recovery code: " + state.pair_code if state.pair_code else "No browser pairing has been created.")
         self.copy_code_button.configure(state="normal" if state.pair_code else "disabled")
         self.destination_status.set(("Server-confirmed destination: " + state.destination_email + " · " + state.destination_course)
@@ -440,8 +551,10 @@ class PhoneWindow:
                         self.send(self.state.decide_destination(approved))
                     if event.get("kind") == "review" and self.state.reviewed:
                         selected, calls, messages = self.state.review_counts
-                        self.state.status += (f" {selected} selected contacts · {calls} matching calls · "
-                                              f"{messages} matching messages. Check source coverage below before account Save.")
+                        calls_summary = "Calls unavailable" if "calls" in self.state.missing else f"{calls} matching calls"
+                        messages_summary = "Messages unavailable" if "messages" in self.state.missing else f"{messages} matching messages"
+                        self.state.status += (f" {selected} selected contacts · {calls_summary} · "
+                                              f"{messages_summary}. Check source coverage below before account Save.")
                     if event.get("kind") == "handoff" and self.state.saved_acknowledged:
                         self.send(self.state.finish())
                     if event.get("kind") == "error" and self.state.phase == "error":

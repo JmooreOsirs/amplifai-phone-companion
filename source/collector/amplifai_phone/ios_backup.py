@@ -452,6 +452,38 @@ def _connection_plan(devices: list[object]) -> object:
     return next((device for device in candidates if device.is_usb), candidates[0])
 
 
+async def _will_encrypt(lockdown: object) -> bool:
+    from pymobiledevice3.exceptions import LockdownError
+
+    try:
+        value = await lockdown.get_value("com.apple.mobile.backup", "WillEncrypt")
+    except LockdownError as exc:
+        raise BackupEncryptionPreflightError("backup_encryption_unknown") from exc
+    if type(value) is not bool:
+        raise BackupEncryptionPreflightError("backup_encryption_unknown")
+    return value
+
+
+async def inspect_backup_encryption(*, sessions_root: Path | None = None) -> bool:
+    """Read the existing trusted iPhone's backup setting without starting a backup."""
+    from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.usbmux import list_devices
+
+    device = _connection_plan(await list_devices())
+    with SessionWorkspace(sessions_root) as root:
+        lockdown = await create_using_usbmux(
+            serial=device.serial,
+            connection_type=device.connection_type,
+            label="AMPLIFai Local Collector",
+            autopair=False,
+            pairing_records_cache_folder=root / "pairing",
+        )
+        async with lockdown:
+            if device.is_network and not lockdown.paired:
+                raise RuntimeError("An existing trusted Wi-Fi pairing is required")
+            return await _will_encrypt(lockdown)
+
+
 async def collect_iphone(
     *,
     password_provider: Callable[[], str],
@@ -470,7 +502,6 @@ async def collect_iphone(
     browser storage, logs, or a URL.
     """
     from pymobiledevice3.lockdown import create_using_usbmux
-    from pymobiledevice3.exceptions import LockdownError
     from pymobiledevice3.services.mobilebackup2 import (
         BackupSelectionRule,
         Mobilebackup2Service,
@@ -504,15 +535,7 @@ async def collect_iphone(
                 nonlocal review_capture
                 async with lockdown, Mobilebackup2Service(lockdown) as service:
                     if require_encrypted_backup:
-                        try:
-                            will_encrypt = await lockdown.get_value(
-                                "com.apple.mobile.backup", "WillEncrypt"
-                            )
-                        except LockdownError as exc:
-                            raise BackupEncryptionPreflightError("backup_encryption_unknown") from exc
-                        if type(will_encrypt) is not bool:
-                            raise BackupEncryptionPreflightError("backup_encryption_unknown")
-                        if not will_encrypt:
+                        if not await _will_encrypt(lockdown):
                             raise BackupEncryptionPreflightError("backup_encryption_disabled")
                     await observe_backup_receives(service, watchdog)
                     bind_streamed_device_link(

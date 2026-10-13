@@ -7,17 +7,17 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from amplifai_phone.agent import run_connect
+from amplifai_phone.agent import run_admin, run_connect
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import Contact, Interaction, SourceResult
 from amplifai_phone.record_store import RecordStore
-from session import ProtocolError, Session
+from session import BACKUP_CHECK_MODE, ProtocolError, Session
 
 REVIEW_ID = "00000000-0000-4000-8000-000000000001"
 
@@ -26,7 +26,8 @@ def engine_review(*, missing: tuple[str, ...] = ()) -> list[dict]:
         store = RecordStore(Path(temporary) / "sanitized.sqlite3")
         for source_id, name, phone in ((1, "Avery Synthetic", "+12025550101"),
                                        (2, "Owen Synthetic", "+12025550102")):
-            store.add("contacts", Contact(source_id, name, (phone,), ()))
+            store.add("contacts", Contact(source_id, name, (phone,), (),
+                                          name_fields="first", organization_field=source_id == 2))
         if "calls" not in missing:
             for index, phone in enumerate(("+12025550101", "+12025550102"), 1):
                 store.add("calls", Interaction(index, "call", "call",
@@ -79,11 +80,28 @@ class EngineWireTests(unittest.TestCase):
         packet = next(event for event in events if event["kind"] == "review")
         self.assertEqual(packet["selected_contacts"], 1)
         state = reviewed_session(events)
+        self.assertEqual(state.contacts[0]["nameFields"], "first")
+        self.assertIs(state.contacts[1]["organizationField"], True)
         self.assertEqual(state.review_counts, (1, 1, 1))
         self.assertTrue(state.can_pair)
         self.assertFalse(state.saved_acknowledged)
         with self.assertRaises(ProtocolError):
             state.finish()
+
+    def test_actual_read_only_admin_output_matches_windows_on_off_unknown(self):
+        for reported in (True, False, 0, 1):
+            state = Session(); state.begin("inspect")
+            state.handle({"kind": "residue", "sessions": []}); state.exited(0)
+            state.begin(BACKUP_CHECK_MODE)
+            sink = io.StringIO()
+            with patch("amplifai_phone.agent.inspect_backup_encryption", new=AsyncMock(return_value=reported)):
+                result = run_admin(BACKUP_CHECK_MODE, sink)
+            for line in sink.getvalue().splitlines(): state.handle(json.loads(line))
+            state.exited(result)
+            self.assertIs(state.checked_backup_setting, reported if type(reported) is bool else None)
+            self.assertIsNone(state.backup_encrypted)
+            self.assertFalse(state._capture_received)
+            self.assertTrue(state.needs_inspection)
 
     def test_actual_engine_missing_sources_remain_visible_and_not_zero_activity(self):
         state = reviewed_session(engine_review(missing=("calls",)))

@@ -7,6 +7,8 @@ def emit(value):
 
 if sys.argv[1] == "inspect":
     emit({"kind": "residue", "sessions": []})
+elif sys.argv[1] == "backup-encryption-status":
+    emit({"kind": "backup-encryption-status", "backupEncrypted": False})
 elif sys.argv[1] == "clear-residue":
     print("not-json", flush=True)
     raise SystemExit(130 if sys.stdin.read() == "" else 1)

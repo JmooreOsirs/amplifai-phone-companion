@@ -38,6 +38,7 @@ class DisabledWidget:
 def source_window():
     toolkit = types.ModuleType("tkinter")
     toolkit.END = "end"
+    toolkit.ACTIVE = "active"
     toolkit.messagebox = Mock()
     toolkit.ttk = types.ModuleType("tkinter.ttk")
     location = Path(__file__).resolve().parents[1] / "app.py"
@@ -54,11 +55,16 @@ def source_window():
     window.state.begin("connect")
     window.helper, window.window = Mock(), Mock()
     window.password = Mock()
+    window.checked = Mock()
     window.events = queue.Queue()
     window.refresh = Mock()
     window.contact_query = Mock()
     window.contact_page = Mock()
     window._rendering_contacts = False
+    window.source_details_window = None
+    for name in ("backup_setting", "backup_check", "activity_stage", "progress_caption", "activity_measurement",
+                 "details_button", "progress_label"):
+        setattr(window, name, Mock())
     return window
 
 

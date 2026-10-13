@@ -31,7 +31,10 @@ from .backup_watchdog import (
 )
 from .bridge import BridgeError, BridgeServer
 from .capture_runtime import run_local_capture
-from .ios_backup import BackupEncryptionPreflightError, IPhoneCapture, collect_iphone
+from .ios_backup import (
+    BackupEncryptionPreflightError, IPhoneCapture, collect_iphone,
+    inspect_backup_encryption,
+)
 from .metadata import (
     MAX_SELECTED_CONTACTS,
     BackupControlInvalid,
@@ -151,12 +154,17 @@ def _contact_page(
 
 
 def _contact_preview(item: Contact) -> dict[str, object]:
-    return {
+    preview = {
         "id": item.source_id,
         "name": item.name,
         "phoneCount": len(item.phones),
         "phoneEnds": [phone[-4:] for phone in item.phones],
     }
+    if item.name_fields is not None:
+        preview["nameFields"] = item.name_fields
+    if item.organization_field is not None:
+        preview["organizationField"] = item.organization_field
+    return preview
 
 
 def _contact_ids(
@@ -575,6 +583,11 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
                 list_devices,
             )
             _emit(sink, {"kind": "runtime", "ready": True})
+        elif mode == "backup-encryption-status":
+            encrypted = run_local_capture(inspect_backup_encryption(sessions_root=root))
+            if type(encrypted) is not bool:
+                raise BackupEncryptionPreflightError("backup_encryption_unknown")
+            _emit(sink, {"kind": "backup-encryption-status", "backupEncrypted": encrypted})
         else:
             raise ValueError("Unsupported mode")
         return 0
@@ -587,12 +600,17 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
     except OSError:
         _emit(sink, {"kind": "error", "code": "workspace_unavailable"})
         return 1
+    except Exception as exc:
+        if mode != "backup-encryption-status":
+            raise
+        _emit(sink, _error_event(exc))
+        return 1
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "mode", choices=("connect", "inspect", "clear-residue", "runtime-check")
+        "mode", choices=("connect", "inspect", "clear-residue", "runtime-check", "backup-encryption-status")
     )
     parser.add_argument("--require-encrypted-backup", action="store_true")
     args = parser.parse_args()

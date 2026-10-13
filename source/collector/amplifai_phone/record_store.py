@@ -62,6 +62,10 @@ class RecordStore:
         if isinstance(record, Contact) and category == "contacts":
             value = {"source_id": record.source_id, "name": record.name,
                      "phones": record.phones, "emails": record.emails}
+            if record.name_fields is not None:
+                value["name_fields"] = record.name_fields
+            if record.organization_field is not None:
+                value["organization_field"] = record.organization_field
             phones = record.phones
             name = record.name.casefold()
         elif isinstance(record, Interaction) and category in ("calls", "messages"):
@@ -187,7 +191,8 @@ class RecordCollection(Sequence):
 
         data = json.loads(value)
         if self.category == "contacts":
-            return Contact(data["source_id"], data["name"], tuple(data["phones"]), tuple(data["emails"]))
+            return Contact(data["source_id"], data["name"], tuple(data["phones"]), tuple(data["emails"]),
+                           data.get("name_fields"), data.get("organization_field"))
         return Interaction(data["source_id"], data["kind"], data["transport"], data["occurred_at"],
                            data["direction"], tuple(data["participants"]), data["duration_seconds"])
 
