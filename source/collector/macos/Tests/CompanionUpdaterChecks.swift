@@ -55,6 +55,7 @@ struct CompanionUpdaterChecks {
         precondition(CompanionUpdater.noUpdateState(NSError(domain: NSURLErrorDomain, code: 1001)) == .failed)
         print("Mac updater deferral, install-on-quit and no-update reason checks passed")
         await statusProcessChecks()
+        await closedStatusPipeCannotTerminateWrapper()
     }
 
     static func qualifiedInformation(architecture requestedArchitecture: String? = nil) -> [String: Any] {
@@ -145,7 +146,7 @@ struct CompanionUpdaterChecks {
     }
 
     private static func statusProcessChecks() async {
-        guard CommandLine.arguments.count == 2 else { preconditionFailure("Status checks require their isolated helper fixture") }
+        guard CommandLine.arguments.count == 3 else { preconditionFailure("Status checks require their isolated helper fixtures") }
         let model = CollectorModel()
         let updater = CompanionUpdater(bundleInformation: qualifiedInformation())
         updater.bind(model: model)
@@ -185,6 +186,19 @@ struct CompanionUpdaterChecks {
                 precondition(completed, "Status child did not become ready")
             }
         }
+    }
+
+    private static func closedStatusPipeCannotTerminateWrapper() async {
+        let model = CollectorModel()
+        let updater = CompanionUpdater(bundleInformation: qualifiedInformation())
+        let service = CompanionStatusService()
+        service.startIfNeeded(model: model, updater: updater,
+                              helperURL: URL(fileURLWithPath: CommandLine.arguments[2]))
+        await waitForStatus(.unavailable, model: model)
+        precondition(!model.canPrepareCollection && !model.canInstallUpdate,
+                     "A failed status pipe must leave collection and installation gated")
+        service.stop()
+        print("Actual closed-status-stdin subprocess survived without SIGPIPE and blocked collection")
     }
 
     private static func disabledUpdatesCannotContactFeedOrInstall() {

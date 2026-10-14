@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Darwin
 
 @MainActor
 final class CompanionStatusService: ObservableObject {
@@ -28,6 +29,10 @@ final class CompanionStatusService: ObservableObject {
         }
         let runner = Process()
         let stdin = Pipe()
+        guard fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            model.setCompanionStatus(.unavailable)
+            return
+        }
         let stdout = Pipe()
         runner.executableURL = helper
         runner.arguments = ["companion-status", "--platform", "macos", "--architecture", CompanionUpdater.architecture,

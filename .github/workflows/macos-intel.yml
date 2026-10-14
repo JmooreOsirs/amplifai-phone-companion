@@ -1,8 +1,6 @@
 name: RC25 Intel Mac bootstrap and qualification
 
 on:
-  push:
-    branches: [codex/desktop-updates-oct14]
   workflow_dispatch:
 
 permissions:
