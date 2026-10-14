@@ -6,26 +6,30 @@ Choose the Mac build by **Apple silicon or Intel** using
 [the official phone setup](https://amplifai.satoris.ai/phone). Check the Mac's
 chip in **Apple menu → About This Mac**.
 
-- **Apple silicon Mac:** [signed, notarized rc24](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-release),
-  build `26101324`. Download the DMG manually; the in-app update feed is
-  unavailable.
-- **Intel Mac:** [signed, notarized rc24-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-intel1-test),
-  build `261013241`. This is a separate **Test prerelease** app without an
-  updater feed; real Intel iPhone collection and report Save/return-login
-  acceptance remain unverified.
+- **Apple silicon Mac:** [signed, notarized rc25](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-release),
+  build `26101425`. The signed update feed is live; the app checks on launch
+  and defers installation while collection, review or Save/ACK is unresolved.
+- **Intel Mac:** [signed, notarized rc25-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-intel1-test),
+  build `261014251`. This separate **Test prerelease** now supports its own
+  signed update feed. The prior feed-disabled Intel Test needs one manual
+  bootstrap. Physical Intel/iPhone/account acceptance remains unverified.
 - **Android:** [signed rc10](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.13-rc10).
-- **Windows:** [rc17 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.13-rc17-unsigned-test),
-  not a signed consumer release.
+- **Windows:** [rc18 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.14-rc18-unsigned-test),
+  MSI `1.0.18`. Signed manifests authenticate the exact installer bytes, but
+  the MSI is **not Authenticode signed**. Installation requires explicit local
+  approval and normal Windows Installer. Prior rc17 needs one manual bootstrap.
 
-Complete any active Mac collection, review, and account save before replacing
-an installed app; an unfinished local review does not migrate. Run only one Mac
-companion at a time. A signed download is not proof of collection or account
-Save on the owner's device.
+Complete active collection, review and account Save before manually replacing
+an app; unfinished review does not migrate. Older local Mac test builds need a
+manual official install. Run one companion at a time. The website can identify a reachable running app, not inventory installed copies.
+A published package or runner upgrade test does not establish owner-device
+collection, account Save/readback or return-login acceptance.
 
 **Source boundary:** `main` retains the historical `2026.10.08-rc6` Mac source
 snapshot below. For a current installer, use the corresponding source and
 checksum file attached to its release, not this branch's older build
-instructions.
+instructions. Windows build/source/qualification commit identities are
+explicitly distinguished in its release notes and source receipts.
 
 ## Historical rc6 source snapshot
 
