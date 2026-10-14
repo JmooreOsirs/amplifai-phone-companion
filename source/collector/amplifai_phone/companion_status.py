@@ -251,7 +251,12 @@ class CompanionStatusServer:
                 if state["busy"]:
                     self._reply(409, {"deferred": True})
                     return
-                if owner.request_update_check() is False:
+                try:
+                    accepted = owner.request_update_check()
+                except (OSError, RuntimeError):
+                    self._reply(503)
+                    return
+                if accepted is False:
                     self._reply(409, {"deferred": True})
                     return
                 self._reply(202, {"checking": True})

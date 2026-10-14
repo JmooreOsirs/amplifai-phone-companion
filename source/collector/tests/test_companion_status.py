@@ -138,6 +138,15 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(self.post(token)[0], 503)
         self.assertEqual(self.checks, 0)
 
+    def test_failed_native_dispatch_is_unavailable_and_consumes_capability(self):
+        def unavailable():
+            raise OSError("Test-owned parent pipe closed")
+
+        self.server.request_update_check = unavailable
+        token = self.token()
+        self.assertEqual(self.post(token)[0], 503)
+        self.assertEqual(self.post(token)[0], 403)
+
     def test_capability_storage_and_listener_ownership_are_bounded(self):
         for _ in range(MAX_TOKENS + 5):
             self.token()
