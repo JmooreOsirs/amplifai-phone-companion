@@ -8,6 +8,7 @@ import json
 import re
 import secrets
 import signal
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -85,10 +86,18 @@ class _BoundedHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
     request_queue_size = 8
+    allow_reuse_port = False
 
     def __init__(self, *args: object, **kwargs: object):
         self._slots = threading.BoundedSemaphore(8)
         super().__init__(*args, **kwargs)
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            # Windows SO_REUSEADDR permits another listener to take this port.
+            self.allow_reuse_address = False
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def process_request(self, request: object, client_address: object) -> None:
         if not self._slots.acquire(blocking=False):

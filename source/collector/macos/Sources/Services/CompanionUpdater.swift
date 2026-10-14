@@ -242,10 +242,6 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         return true
     }
 
-    func updaterShouldRelaunchApplication(_ updater: SPUUpdater) -> Bool {
-        model?.canTerminateForUpdate == true
-    }
-
     func scheduleInstallOnQuit(version: String, handler: @escaping () -> Void) {
         _ = postponeInstallIfNeeded(version: version, handler: handler)
     }

@@ -111,7 +111,9 @@ struct CompanionUpdaterChecks {
             updater.updater(controller.updater, didFinishUpdateCycleFor: .updates, error: error)
             precondition(updater.state == .deferred(nil))
         }
-        precondition(!updater.updaterShouldRelaunchApplication(controller.updater))
+        precondition(!model.canTerminateForUpdate)
+        precondition(!updater.responds(to: NSSelectorFromString("updaterShouldRelaunchApplication:")),
+                     "A relaunch veto runs before Sparkle's deferral callback and must not discard it")
         var calls = 0
         precondition(updater.updater(controller.updater, shouldPostponeRelaunchForUpdate: item, untilInvokingBlock: { calls += 1 }))
         precondition(calls == 0)
@@ -119,11 +121,11 @@ struct CompanionUpdaterChecks {
         updater.resumeIfSafe()
         updater.resumeIfSafe()
         precondition(calls == 1 && model.updateInstallationInProgress)
-        precondition(updater.updaterShouldRelaunchApplication(controller.updater))
+        precondition(model.canTerminateForUpdate)
         model.endUpdateInstallation()
         model.phase = .reviewing
         precondition(updater.updater(controller.updater, willInstallUpdateOnQuit: item, immediateInstallationBlock: { calls += 1 }))
-        precondition(calls == 1 && !updater.updaterShouldRelaunchApplication(controller.updater))
+        precondition(calls == 1 && !model.canTerminateForUpdate)
         model.phase = .completed
         updater.resumeIfSafe()
         precondition(calls == 2 && model.updateInstallationInProgress)

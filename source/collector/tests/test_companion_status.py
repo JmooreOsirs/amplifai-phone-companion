@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -165,6 +166,14 @@ class StatusTests(unittest.TestCase):
                 CompanionIdentity(**{**vars(IDENTITY), **change})
         with self.assertRaises(ValueError):
             validated_status({**self.state, "availableVersion": "2026.10.14-rc25"})
+
+    @unittest.skipUnless(hasattr(socket, "SO_EXCLUSIVEADDRUSE"), "Windows exclusive socket ownership")
+    def test_windows_reuse_socket_cannot_take_running_companion_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as other:
+            other.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            with self.assertRaises(OSError):
+                other.bind(("127.0.0.1", self.server.port))
+        self.assertEqual(self.request()[0], 200)
 
 
 class HelperEntryTests(unittest.TestCase):

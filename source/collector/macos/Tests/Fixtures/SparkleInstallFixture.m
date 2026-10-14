@@ -80,7 +80,7 @@
     return YES;
 }
 
-- (BOOL)updaterShouldRelaunchApplication:(SPUUpdater *)updater { return _installReleased; }
+- (BOOL)updaterShouldRelaunchApplication:(SPUUpdater *)updater { return YES; }
 - (BOOL)updater:(SPUUpdater *)updater shouldDownloadReleaseNotesForUpdate:(SUAppcastItem *)item { return NO; }
 - (void)updater:(SPUUpdater *)updater didFindValidUpdate:(SUAppcastItem *)item {
     [self record:@{@"event": @"signed_update_found", @"build": item.versionString}];
