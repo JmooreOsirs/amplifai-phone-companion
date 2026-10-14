@@ -4,6 +4,10 @@ import sys
 
 
 def main():
+    if sys.argv[1:2] == ['companion-status']:
+        from amplifai_phone.companion_status import main as status_main
+
+        return status_main(sys.argv[2:])
     # Handle the bounded, session-confined worker before importing device SDKs.
     if sys.argv[1:] == ['--internal-contacts-size-validation']:
         from amplifai_phone.sqlite_size_compat import worker_main
