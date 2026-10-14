@@ -183,6 +183,11 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify bounded Pillow source evidence export
+        shell: pwsh
+        run: |
+          python -m unittest test_windows_pillow_evidence -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Download only fixed unpublished rc18 draft fixture assets
         shell: pwsh
         env:
@@ -210,4 +215,6 @@ jobs:
           name: windows-rc18-handoff-qualification
           retention-days: 7
           if-no-files-found: warn
-          path: ${{ runner.temp }}/AmplifaiHandoffFixture/handoff-receipt.json
+          path: |
+            ${{ runner.temp }}/AmplifaiHandoffFixture/handoff-receipt.json
+            ${{ runner.temp }}/AmplifaiHandoffFixture/native-source-evidence/*

@@ -19,6 +19,7 @@ import time
 
 from amplifai_phone.workspace import ROOT_MARKER, SessionWorkspace, default_sessions_root
 from build_windows_candidate import clean_child_environment, file_records
+from export_windows_pillow_evidence import export as export_pillow_evidence
 from installer_guard import InstallerReadGuard
 from updater import BUILD, INSTALLER_VERSION, MAX_MANIFEST_BYTES, PUBLIC_KEY, VERSION, PreparedUpdate, parse_manifest, verify_installer
 from update_installer import READY, RuntimeReadGuard
@@ -130,6 +131,8 @@ def qualify(args) -> dict:
     try:
         runner_msi(args.msi)
         verify(installed, args.candidate_receipt, removed=False)
+        pillow_evidence = export_pillow_evidence(installed, args.candidate_receipt,
+                                                args.output.parent / "native-source-evidence", manifest.sha256)
         source = installed / "resources/phone-helper"
         records = file_records(source)
         source_guard = RuntimeReadGuard(source, records); source_guard.open()
@@ -213,6 +216,7 @@ def qualify(args) -> dict:
                 "normalInstallerUi": True, "immutableMsiAndDirectory": True, "sessionFixturePreserved": True,
                 "installedAppStatus": observed_identity, "installedAppRelaunched": True,
                 "retiredCacheCleanedOnRelaunch": not prepared.directory.exists(),
+                "pillowNativeFilesMatched": len(pillow_evidence["nativeFiles"]),
                 "elapsedSeconds": round(time.monotonic() - started, 3),
                 "consumerPcOrPhoneAccountProved": False}
     finally:
