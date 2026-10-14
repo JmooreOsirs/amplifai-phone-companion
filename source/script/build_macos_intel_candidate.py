@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build RC24 as a separate, ad-hoc signed Intel candidate; never install it.
+"""Build RC25 as a separate, ad-hoc signed Intel candidate; never install it.
 
 Run with the prepared CPython 3.12 Intel environment. This intentionally does
 not modify the existing ARM release scripts, sign with Developer ID, contact
@@ -24,6 +24,12 @@ MINIMUM = "14.0"
 BASELINE_PATH = ROOT / "docs/INTEL-RC24-BASELINE.json"
 INTEL_MODIFIED_BASE_FILES = {
     "source/collector/macos/Sources/Services/CompanionUpdater.swift",
+    "source/collector/macos/Info.plist",
+    "source/collector/macos/PACKAGE-INPUTS.md",
+    "source/collector/macos/Sources/App/AmplifaiPhoneApp.swift",
+    "source/collector/agent_entry.py",
+    "source/script/build_portable_candidate.sh",
+    "source/script/package_macos_dmg.sh",
     "source/collector/macos/Sources/Views/ContentView.swift",
     "source/collector/macos/Tests/CompanionUpdaterChecks.swift",
     "source/collector/macos/Tests/check_flow.sh",
@@ -65,21 +71,26 @@ def verify_base_source() -> dict:
     return baseline
 
 
-def candidate_plist(original: dict) -> dict:
+def candidate_plist(original: dict, *, enable_published_updates: bool = False) -> dict:
     info = dict(original)
     info.update({
         "CFBundleIdentifier": "ai.satoris.amplifai.phone.intel-candidate",
         "CFBundleName": "AMPLIFai Phone Intel Test",
-        "CFBundleShortVersionString": "2026.10.13-rc24-intel1",
-        "CFBundleVersion": "261013241",
+        "CFBundleShortVersionString": "2026.10.14-rc25-intel1",
+        "CFBundleVersion": "261014251",
         "LSMinimumSystemVersion": MINIMUM,
-        "SUEnableAutomaticChecks": False,
-        "SUAutomaticallyUpdate": False,
-        "SUAllowsAutomaticUpdates": False,
+        "SUEnableAutomaticChecks": enable_published_updates,
+        "SUAutomaticallyUpdate": enable_published_updates,
+        "SUAllowsAutomaticUpdates": enable_published_updates,
+        "AMPLIFaiQualifiedUpdateFeed": enable_published_updates,
     })
-    # Defense in depth: compiled x86_64 updater refuses all checks, and this
-    # artifact does not carry the ARM appcast URL at all.
     info.pop("SUFeedURL", None)
+    if enable_published_updates:
+        if (info.get("SUPublicEDKey") != "vtvaNfb6+dVMP4tz6PeLMXTeVQH7lK7o1zzy4WeqUGs="
+                or info.get("SURequireSignedFeed") is not True
+                or info.get("SUVerifyUpdateBeforeExtraction") is not True):
+            raise ValueError("Intel updates require the retained signed-feed trust configuration")
+        info["SUFeedURL"] = "https://amplifai-database-engine.vercel.app/phone/macos/intel-appcast.xml"
     return info
 
 
@@ -88,6 +99,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--dependency-receipt", type=Path, required=True)
     parser.add_argument("--python-sources", type=Path, required=True)
+    parser.add_argument("--enable-published-updates", action="store_true",
+                        help="Prepare the fixed Intel update channel; final signed feed/archive qualification remains a release gate.")
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "x86_64":
         parser.error("Build with an x86_64 macOS Python runtime on an Intel runner.")
@@ -123,9 +136,12 @@ def main() -> int:
     (contents / "Frameworks").mkdir()
     resources.mkdir()
     shutil.copy2(binary_dir / "AmplifaiPhone", contents / "MacOS/AmplifaiPhone")
+    with (output / "wrapper-rpath-receipt.json").open("w") as wrapper_receipt:
+        run([sys.executable, SOURCE / "script/normalize_macos_wrapper.py", contents / "MacOS/AmplifaiPhone",
+             "--architecture", "x86_64"], stdout=wrapper_receipt)
     run(["ditto", binary_dir / "Sparkle.framework", contents / "Frameworks/Sparkle.framework"])
     with (package / "Info.plist").open("rb") as stream:
-        info = candidate_plist(plistlib.load(stream))
+        info = candidate_plist(plistlib.load(stream), enable_published_updates=args.enable_published_updates)
     with (contents / "Info.plist").open("wb") as stream:
         plistlib.dump(info, stream)
     shutil.copy2(SOURCE / "public/brand/amplifai-by-nexus-original.png", resources / "amplifai-logo.png")
@@ -159,7 +175,7 @@ def main() -> int:
                      "and notices. Other Python package versions are unchanged.\n")
     (legal / "SOURCE-README.md").write_text(
         "# Intel candidate corresponding source\n\n"
-        "This is a modified, ad-hoc signed RC24 Intel build. It is not the signed ARM release.\n"
+        "This is a modified, ad-hoc signed RC25 Intel build derived from RC24.\n"
         "Exact authored source is in the accompanying Intel build-source archive.\n"
         "Original RC24 dependencies/source: " + baseline["source_archive_url"] + "\n"
         "The adjacent Intel dependency receipt identifies rebuilt native dependencies.\n"
@@ -188,12 +204,12 @@ def main() -> int:
          "--arch", "x86_64", "--minimum-macos", MINIMUM,
          "--output", output / "architecture-receipt.json"])
     helper = resources / "helper/amplifai-agent"
-    probe_home = output / "probe-home"
-    probe_home.mkdir()
-    probe_env = dict(env, HOME=str(probe_home))
-    for command in ("inspect", "runtime-check"):
-        result = subprocess.run([str(helper), command], env=probe_env, text=True, capture_output=True, check=True)
-        (output / f"helper-{command}.json").write_text(result.stdout)
+    with (output / "status-receipt.json").open("w") as status_receipt:
+        run([sys.executable, SOURCE / "script/verify_frozen_companion_status.py", "--helper", helper,
+             "--architecture", "x86_64", "--version", info["CFBundleShortVersionString"],
+             "--build", info["CFBundleVersion"]], stdout=status_receipt)
+    result = subprocess.run([str(helper), "runtime-check"], env=env, text=True, capture_output=True, check=True)
+    (output / "helper-runtime-check.json").write_text(result.stdout)
     receipt = {
         "kind": "macos-intel-candidate", "architecture": "x86_64", "minimum_macos_declared": MINIMUM,
         "build_host_macos": platform.mac_ver()[0], "python": sys.version,
@@ -207,7 +223,9 @@ def main() -> int:
         "python_source_receipt_sha256": sha256(python_sources / "receipt.json"),
         "developer_id_signed": False, "notarized": False, "physical_iphone_tested": False,
         "account_save_report_tested": False, "oldest_os_tested": False,
-        "account_origin": "https://amplifai-database-engine.vercel.app", "updater_enabled": False,
+        "account_origin": "https://amplifai-database-engine.vercel.app", "updater_enabled": args.enable_published_updates,
+        "update_feed": info.get("SUFeedURL"), "update_channel": "macos-intel-test",
+        "build": info["CFBundleVersion"], "final_feed_archive_qualified": False,
     }
     (output / "candidate-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(app)

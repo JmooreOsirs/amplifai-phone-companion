@@ -11,9 +11,9 @@
   <key>CFBundleIconFile</key>
   <string>AmplifaiPhone.icns</string>
   <key>CFBundleShortVersionString</key>
-  <string>2026.10.13-rc24</string>
+  <string>2026.10.14-rc25</string>
   <key>CFBundleVersion</key>
-  <string>26101324</string>
+  <string>26101425</string>
   <key>SUFeedURL</key>
   <string>https://amplifai-database-engine.vercel.app/phone/macos/appcast.xml</string>
   <key>SUPublicEDKey</key>
@@ -21,9 +21,9 @@
   <key>SUEnableAutomaticChecks</key>
   <true/>
   <key>SUAutomaticallyUpdate</key>
-  <false/>
+  <true/>
   <key>SUAllowsAutomaticUpdates</key>
-  <false/>
+  <true/>
   <key>SUVerifyUpdateBeforeExtraction</key>
   <true/>
   <key>SURequireSignedFeed</key>

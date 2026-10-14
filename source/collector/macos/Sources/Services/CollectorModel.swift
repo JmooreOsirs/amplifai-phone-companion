@@ -115,6 +115,8 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var settingCheckAfterCollectionFailure = false
     @Published private(set) var diagnosticDelivery: DiagnosticDelivery = .idle
     @Published private(set) var updateInstallationInProgress = false
+    enum CompanionStatus: Equatable { case notStarted, starting, ready, anotherAppRunning, unavailable }
+    @Published private(set) var companionStatus: CompanionStatus = .notStarted
 
     private var process: Process?
     private var activeHelperMode: String?
@@ -189,8 +191,14 @@ final class CollectorModel: ObservableObject {
     private var commandReady: Bool { helperRunning || commandWriter != nil }
 
     var canPrepareCollection: Bool {
-        !updateInstallationInProgress && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty && !hasUnsavedReview &&
+        companionStatusAllowsWork && !updateInstallationInProgress && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty && !hasUnsavedReview &&
             (phase == .idle || phase == .error || phase == .completed)
+    }
+
+    private var companionStatusAllowsWork: Bool { companionStatus == .notStarted || companionStatus == .ready }
+
+    func setCompanionStatus(_ status: CompanionStatus) {
+        if companionStatus != status { companionStatus = status }
     }
 
     private var hasCurrentCollectionApproval: Bool {
@@ -382,7 +390,8 @@ final class CollectorModel: ObservableObject {
             !hasUnsavedReview && !reviewPending && !pairingRequested &&
             (handoffID.isEmpty || handoffAcknowledged)
     }
-    var canInstallUpdate: Bool { canTerminateForUpdate && !updateInstallationInProgress }
+    var canInstallUpdate: Bool { companionStatusAllowsWork && canTerminateForUpdate && !updateInstallationInProgress }
+    var canCheckForUpdatesInBackground: Bool { companionStatusAllowsWork && !updateInstallationInProgress }
 
     @discardableResult
     func beginUpdateInstallation() -> Bool {
@@ -1211,7 +1220,7 @@ final class CollectorModel: ObservableObject {
         let id: UUID
         let requireEncryptedBackup: Bool
         if mode == "connect" {
-            guard phase == .connecting, !needsStorageReview, residues.isEmpty, !hasUnsavedReview,
+            guard companionStatusAllowsWork, phase == .connecting, !needsStorageReview, residues.isEmpty, !hasUnsavedReview,
                   hasCurrentCollectionApproval, let approval = localCollectionApproval else {
                 fail("Review and explicitly agree to this local collection before connecting.")
                 return

@@ -24,6 +24,7 @@ struct ContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
+                if model.companionStatus == .anotherAppRunning || model.companionStatus == .unavailable { companionStatusNotice }
                 if !model.residues.isEmpty { residueNotice }
                 if model.phase == .error || (model.phase == .idle && model.needsStorageReview) { statusPanel }
                 if (!model.helperRunning || model.backupSettingCheckInProgress) &&
@@ -178,6 +179,20 @@ struct ContentView: View {
         .panel()
     }
 
+    private var companionStatusNotice: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(model.companionStatus == .anotherAppRunning ? "Another AMPLIFai Phone app is running" : "App connection is unavailable")
+                .font(.custom("Arial", size: 18).weight(.bold))
+                .foregroundStyle(Brand.heading)
+            Text(model.companionStatus == .anotherAppRunning
+                 ? "Close the other AMPLIFai Phone app, then reopen this one. Collection stays paused while the other app owns the local connection."
+                 : "Reopen this app to restore its local connection before collecting. If this continues, reinstall the matching Mac companion from the download guide.")
+                .font(.custom("Arial", size: 16))
+                .foregroundStyle(Brand.body)
+        }
+        .panel()
+    }
+
     private var updateNeedsAttention: Bool {
         switch updater.state {
         case .available, .deferred: return true
@@ -187,12 +202,12 @@ struct ContentView: View {
 
     private var updateStatus: String {
         switch updater.state {
-        case .updatesDisabled: return "Updates are not available for this Intel test build. Ask the person running your test for an Intel-compatible update."
+        case .updatesDisabled: return "Automatic updates are unavailable for this build. Use the Mac download guide for a compatible installer."
         case .manualOnly: return "Automatic update checks are off. Keep using this version, or use the signed Mac download guide when ready."
         case .checking: return "Checking the signed update feed. Your current app remains available."
         case .current: return "No newer compatible update was found."
         case .unavailable: return "The available update does not support this Mac or macOS version. Keep using this version."
-        case .available(let version): return "Version \(version) is available. Choose Check for updates when you are ready to install."
+        case .available(let version): return "Version \(version) is available. Automatic updates install after local work finishes when enabled in your update settings. Choose Check for updates to review it now."
         case .deferred(let version):
             let label = version.map { "Version \($0)" } ?? "Update checking"
             return "\(label) is deferred until local collection and any unsaved review are finished."
@@ -200,7 +215,6 @@ struct ContentView: View {
         case .failed: return "The signed update feed could not be checked. Keep using this version. When local work is finished, use the signed Mac download guide for the current installer."
         }
     }
-
     private var residueNotice: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Previous temporary backup needs attention")

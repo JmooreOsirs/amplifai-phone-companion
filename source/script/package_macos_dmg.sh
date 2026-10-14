@@ -28,6 +28,11 @@ fi
 
 APP="$1"
 OUTPUT="$2"
+APP_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$APP/Contents/Info.plist")
+case "$APP_NAME" in
+  'AMPLIFai Phone'|'AMPLIFai Phone Intel Test') ;;
+  *) echo "unsupported Mac companion name" >&2; exit 2 ;;
+esac
 check_legal "$APP"
 codesign --verify --deep --strict "$APP"
 xcrun stapler validate "$APP"
@@ -35,12 +40,12 @@ spctl --assess --type execute "$APP"
 
 STAGING="$(mktemp -d -t amplifai-dmg.XXXXXX)"
 trap 'rm -rf -- "$STAGING"' EXIT
-ditto "$APP" "$STAGING/AMPLIFai Phone.app"
+ditto "$APP" "$STAGING/$APP_NAME.app"
 ln -s /Applications "$STAGING/Applications"
 if diskutil image create from --help >/dev/null 2>&1; then
-  diskutil image create from --volumeName "AMPLIFai Phone" --format UDZO "$STAGING" "$OUTPUT"
+  diskutil image create from --volumeName "$APP_NAME" --format UDZO "$STAGING" "$OUTPUT"
 else
-  hdiutil create -volname "AMPLIFai Phone" -srcfolder "$STAGING" -format UDZO "$OUTPUT"
+  hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING" -format UDZO "$OUTPUT"
 fi
 hdiutil verify "$OUTPUT"
 echo "DMG created; its own Developer ID signature, notarization, staple and assessment are separate release gates."

@@ -1,10 +1,10 @@
-# October 13 rc24 package inputs
+# October 14 rc25 package inputs
 
-The published rc23 is `2026.10.12-rc23`, build `26101223`, and remains the
-rollback download. The signed and prepared rc18 package remains sealed and unpublished.
-This source is versioned `2026.10.13-rc24`, build `26101324`;
+The accepted source baseline is rc24; `docs/DESKTOP-UPDATE-SOURCE-PINS.json`
+records the released source archives and planned platform identities.
+This ARM source is versioned `2026.10.14-rc25`, build `26101425`;
 it requires a newly signed/notarized app and newly frozen Python helper because
-contact-name provenance and available-source parsing changed. Existing bundle identifier
+the updater and independent running-app status protocol changed. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
@@ -95,8 +95,7 @@ cannot replace this local collection approval.
   collection and unsaved review, while idle shows the current version and
   signed Mac download guide. Feed failures stay collapsed with an accurate
   manual-install fallback. Existing safe-install guards still refuse a relaunch
-  until local work and its matching account receipt have settled. The current
-  public Sparkle feed is unavailable; no in-app update success is claimed.
+  until local work and its matching account receipt have settled.
 - The rc23 setup keeps one active Prepare, Consent, or Connect card and moves
   Finder guidance and technical detail behind explicit help. The unchecked
   local disclosure and each later account-source approval remain separate.
@@ -111,6 +110,38 @@ cannot replace this local collection approval.
   name-field hints only when present. A missing source field is not inferred.
   Existing consent, private storage, selected IDs, per-source Save and ACK
   boundaries are unchanged; physical call coverage remains unproven.
+- The rc25 updater retains the signed ARM feed/key and uses a separate qualified
+  Intel feed and bundle identity. Intel packaging remains disabled without its
+  explicit new-build opt-in; its earlier disabled package requires one manual
+  bootstrap. Info.plist enables automatic download/install defaults while
+  Sparkle preserves saved user choices. Actual scheduled-check, relaunch and
+  install-on-quit delegates retain the live idle/review/pairing/ACK installation
+  gate. Once status ownership is ready, signed automatic checks/downloads may
+  proceed during local work; manual dialogs and installation remain deferred.
+  A separately owned frozen helper process serves bounded status on port 48752;
+  an occupied port prevents this app from collecting and never takes over the
+  other listener. Status mode does not read a workspace or collect phone data.
+  New notices reuse the existing Arial sizes, Brand colors, VStack spacing and
+  `.panel()` surface; this change introduces no new native visual primitives.
+
+### Native update/status reference mapping
+
+| Changed element | Existing rc24 primitive |
+| --- | --- |
+| Update header and status copy | Existing Arial 16 bold/regular, `Brand.heading` / `Brand.body` |
+| Conflict/unavailable notice heading | Existing residue-notice Arial 18 bold and `Brand.heading` |
+| Notice body and vertical rhythm | Existing update-panel Arial 16 regular and `VStack(spacing: 10)` |
+| Check/download controls | Existing `SecondaryButton`: Arial 14 bold, 18 horizontal padding, 40 minimum height, 8 corner radius |
+| Panels | Existing `.panel()`: 20 padding, `Brand.panel`, 12 corner radius, 1-point `Brand.border` |
+| Overall layout | Existing 24 outer padding/stack spacing and 880 maximum content width |
+
+`script/render_macos_update_acceptance.py` renders the actual current and pinned
+rc24 `ContentView` offscreen at matched 375/820 widths with synthetic model/event
+inputs. It creates no window, starts no controller or collection, and reads no
+owner workspace. Current/manual states retain their collapsed panel; busy
+deferred work retains its hidden update panel. Those six rendered PNG pairs
+must be byte-identical. Available-copy wrapping and the new instance notice
+are the intentional visual changes; shared Brand/panel/button source must match.
 - Run `sh collector/macos/Tests/check_flow.sh` and the existing
   `sh scripts/test_macos_recovery.sh` against actual model/protocol source.
 - This source pages the local contact preview in 200-row helper events and

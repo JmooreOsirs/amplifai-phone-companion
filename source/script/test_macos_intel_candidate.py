@@ -16,6 +16,20 @@ class CandidateIsolationTests(unittest.TestCase):
                          "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3")
         self.assertEqual(len(baseline["files"]), 108)
 
+    def test_qualified_updates_keep_the_intel_channel_separate(self):
+        original = {"SUPublicEDKey": "vtvaNfb6+dVMP4tz6PeLMXTeVQH7lK7o1zzy4WeqUGs=",
+                    "SURequireSignedFeed": True, "SUVerifyUpdateBeforeExtraction": True,
+                    "SUFeedURL": "https://example.invalid/arm.xml"}
+        info = builder.candidate_plist(original, enable_published_updates=True)
+        self.assertEqual(info["SUFeedURL"], "https://amplifai-database-engine.vercel.app/phone/macos/intel-appcast.xml")
+        self.assertTrue(info["AMPLIFaiQualifiedUpdateFeed"])
+        self.assertTrue(info["SUEnableAutomaticChecks"])
+        self.assertTrue(info["SUAutomaticallyUpdate"])
+        self.assertTrue(info["SUAllowsAutomaticUpdates"])
+        self.assertEqual(original["SUFeedURL"], "https://example.invalid/arm.xml")
+        with self.assertRaises(ValueError):
+            builder.candidate_plist({"SUPublicEDKey": "wrong-key"}, enable_published_updates=True)
+
     def test_arm_update_feed_and_identity_are_not_inherited(self):
         original = {"SUFeedURL": "https://example.invalid/arm.xml", "SUEnableAutomaticChecks": True,
                     "CFBundleIdentifier": "original.production", "CFBundleExecutable": "AmplifaiPhone"}
@@ -27,8 +41,8 @@ class CandidateIsolationTests(unittest.TestCase):
         self.assertNotEqual(info["CFBundleIdentifier"], original["CFBundleIdentifier"])
         self.assertEqual(info["CFBundleExecutable"], "AmplifaiPhone")
         self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
-        self.assertEqual(info["CFBundleShortVersionString"], "2026.10.13-rc24-intel1")
-        self.assertEqual(info["CFBundleVersion"], "261013241")
+        self.assertEqual(info["CFBundleShortVersionString"], "2026.10.14-rc25-intel1")
+        self.assertEqual(info["CFBundleVersion"], "261014251")
         self.assertTrue(original["SUEnableAutomaticChecks"])
         self.assertIn("SUFeedURL", original)
 

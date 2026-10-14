@@ -3,6 +3,7 @@ import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: CollectorModel?
+    weak var statusService: CompanionStatusService?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -15,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         model?.canTerminateForUpdate == false ? .terminateCancel : .terminateNow
     }
+
+    func applicationWillTerminate(_ notification: Notification) { statusService?.stop() }
 }
 
 @main
@@ -22,6 +25,7 @@ struct AmplifaiPhoneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = CollectorModel()
     @StateObject private var updater = CompanionUpdater()
+    @StateObject private var statusService = CompanionStatusService()
 
     var body: some Scene {
         WindowGroup("AMPLIFai Phone", id: "collector") {
@@ -29,6 +33,8 @@ struct AmplifaiPhoneApp: App {
                 .frame(minWidth: 375, minHeight: 600)
                 .onAppear {
                     delegate.model = model
+                    delegate.statusService = statusService
+                    statusService.startIfNeeded(model: model, updater: updater)
                     model.inspectResidue()
                     updater.startIfNeeded(model: model)
                 }
