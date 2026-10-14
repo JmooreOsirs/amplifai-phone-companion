@@ -9,19 +9,6 @@ on:
         default: build
         type: choice
         options: [build, handoff]
-  push:
-    branches: [codex/desktop-updates-oct14]
-    paths:
-      - 'source/collector/windows/**'
-      - 'source/collector/windows-requirements*'
-      - 'source/collector/amplifai_phone/**'
-      - 'source/collector/agent_entry.py'
-      - 'source/collector/tests/test_companion_status.py'
-      - 'source/script/*windows*'
-      - '.github/workflows/windows-rc18-updates.yml'
-      - 'COPYRIGHT'
-      - 'LICENSE'
-      - 'THIRD-PARTY-NOTICES.txt'
 
 permissions:
   contents: read
@@ -38,9 +25,18 @@ jobs:
     env:
       PYTHONPATH: source/collector;source/collector/tests;source/collector/windows;source/collector/windows/tests;source/script
     steps:
+      - name: Preserve exact committed source bytes on Windows
+        shell: pwsh
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Verify fixed lock bytes before environment setup
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash source/collector/windows-requirements.lock -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne 'aa8ee933827681ebda483c2a889dc6156f7d9de906fe21d90f055fd06939c95d') { throw 'Windows checkout changed the exact locked dependency bytes' }
+          "WINDOWS_LOCK_SHA256=$hash"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12.10'
@@ -160,9 +156,18 @@ jobs:
     env:
       PYTHONPATH: source/collector;source/collector/windows;source/script
     steps:
+      - name: Preserve exact committed source bytes on Windows
+        shell: pwsh
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+      - name: Verify fixed lock bytes before environment setup
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash source/collector/windows-requirements.lock -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne 'aa8ee933827681ebda483c2a889dc6156f7d9de906fe21d90f055fd06939c95d') { throw 'Windows checkout changed the exact locked dependency bytes' }
+          "WINDOWS_LOCK_SHA256=$hash"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12.10'

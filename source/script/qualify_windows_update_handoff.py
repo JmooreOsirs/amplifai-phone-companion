@@ -196,14 +196,16 @@ def qualify(args) -> dict:
             verify(installed, args.candidate_receipt, removed=False)
             if hashlib.sha256(sentinel.read_bytes()).hexdigest() != sentinel_hash:
                 raise ValueError("MSI handoff changed the existing session fixture")
-            new_app = subprocess.Popen([str(installed / "AmplifaiPhone.exe")], cwd=str(installed),
-                                       env=clean_child_environment(), stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
-            wait_idle(new_app)
-            observed_identity = installed_status()
-            close_normally(new_app.pid)
-            if new_app.wait(timeout=30) != 0:
-                raise ValueError("Relaunched companion did not close normally")
+        if fixture.exists():
+            raise ValueError("Test-owned session did not finish cleanup before the clean relaunch check")
+        new_app = subprocess.Popen([str(installed / "AmplifaiPhone.exe")], cwd=str(installed),
+                                   env=clean_child_environment(), stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
+        wait_idle(new_app)
+        observed_identity = installed_status()
+        close_normally(new_app.pid)
+        if new_app.wait(timeout=30) != 0:
+            raise ValueError("Relaunched companion did not close normally")
         return {"status": "actual-windows-frozen-helper-running-rc17-to-rc18-handoff", "schema": 1,
                 "msiSha256": manifest.sha256, "version": manifest.version, "build": manifest.build,
                 "installerVersion": manifest.installer_version, "readyWhileOldAppRunning": True,
