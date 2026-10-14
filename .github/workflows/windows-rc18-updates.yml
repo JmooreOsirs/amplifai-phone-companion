@@ -150,6 +150,9 @@ jobs:
             ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log
 
   handoff:
+    permissions:
+      contents: read
+      actions: read
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'handoff'
     runs-on: windows-2025
     timeout-minutes: 20
@@ -188,19 +191,59 @@ jobs:
         run: |
           python -m unittest test_windows_pillow_evidence -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Download only fixed unpublished rc18 draft fixture assets
+      - name: Fetch only pinned build artifact and signed qualification fixture
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = 'windows-2026.10.14-rc18-unsigned-test'
+          # Draft releases are not visible to this read-only token. Reuse the exact
+          # successful build artifact and committed public signature bytes instead.
           $repository = 'JmooreOsirs/amplifai-phone-companion'
-          $draft = gh release view $tag --repo $repository --json isDraft --jq '.isDraft'
-          if ($LASTEXITCODE -ne 0 -or $draft.Trim() -ne 'true') { throw 'Expected fixed unpublished rc18 fixture draft' }
+          $artifactId = 11929148386
+          $artifact = gh api "repos/$repository/actions/artifacts/$artifactId" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $artifact.id -ne $artifactId -or $artifact.name -ne 'windows-rc18-qualification' -or $artifact.expired -ne $false -or $artifact.workflow_run.id -ne 38638633877 -or $artifact.size_in_bytes -ne 44321734 -or $artifact.digest -ne 'sha256:7cff6a60d5a8b1dd09eb22cad7d519fbcf968d437ae40789e85a2191305ebb38') { throw 'Fixed rc18 build artifact metadata differs' }
+          $build = gh api "repos/$repository/actions/runs/38638633877" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $build.head_sha -ne '6075bdeb47becfbbadad3c07e44cb7cfb3fdd6af' -or $build.status -ne 'completed' -or $build.conclusion -ne 'success') { throw 'Fixed rc18 build qualification differs' }
           $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
           New-Item -ItemType Directory -Path $fixture | Out-Null
-          gh release download $tag --repo $repository --dir $fixture --pattern 'AmplifaiPhone-rc18-unsigned.msi' --pattern 'candidate-receipt.json' --pattern 'update-v1.json' --pattern 'update-v1.json.sig'
+          $archive = Join-Path $fixture 'qualified-build.zip'
+          @'
+          import subprocess, sys
+          with open(sys.argv[1], 'xb') as target:
+              subprocess.run(['gh', 'api', 'repos/JmooreOsirs/amplifai-phone-companion/actions/artifacts/11929148386/zip'], stdout=target, check=True, timeout=180)
+          '@ | python - $archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-Item $archive).Length -ne 44321734 -or (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '7cff6a60d5a8b1dd09eb22cad7d519fbcf968d437ae40789e85a2191305ebb38') { throw 'Fixed rc18 artifact ZIP bytes differ' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+          try {
+            $expected = @(
+              @{entry='AmplifaiPhoneInstaller/AmplifaiPhone-rc18-unsigned.msi'; name='AmplifaiPhone-rc18-unsigned.msi'; bytes=41928026; sha='295b9940988e21dd71069f7dfe7c6407188c5c0213d61233af8d773a59aef1c9'},
+              @{entry='AmplifaiPhoneCandidate/candidate-receipt.json'; name='candidate-receipt.json'; bytes=1665048; sha='eab6bdba85b58a1328c7391f1bc2f8c571fb557f147bafa7d1a84dcc3bda8308'}
+            )
+            foreach ($record in $expected) {
+              $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $record.entry })
+              if ($entries.Count -ne 1 -or $entries[0].Length -ne $record.bytes) { throw 'Fixed artifact member differs' }
+              $destination = Join-Path $fixture $record.name
+              $inputStream = $entries[0].Open()
+              try {
+                $outputStream = [IO.File]::Open($destination, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+                try { $inputStream.CopyTo($outputStream) } finally { $outputStream.Dispose() }
+              } finally { $inputStream.Dispose() }
+              if ((Get-Item $destination).Length -ne $record.bytes -or (Get-FileHash $destination -Algorithm SHA256).Hash.ToLowerInvariant() -ne $record.sha) { throw 'Fixed artifact member bytes differ' }
+            }
+          } finally { $zip.Dispose() }
+          Remove-Item -LiteralPath $archive
+          $signed = 'source/collector/windows/tests/fixtures/release-qualification/rc18'
+          $signedFiles = @(
+            @{name='update-v1.json'; bytes=581; sha='cea90ce923ac363562835eddd184e4ab4a6ed47db9785311bb97fd7a077fd42d'},
+            @{name='update-v1.json.sig'; bytes=89; sha='75bb721232f6fecc3e0fa2149768a6bf64411edae1a6a3cfe148b4b81978f18e'}
+          )
+          foreach ($record in $signedFiles) {
+            $source = Join-Path $signed $record.name
+            if ((Get-Item $source).Length -ne $record.bytes -or (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $record.sha) { throw 'Fixed signed qualification fixture differs' }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $fixture $record.name)
+          }
           Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.13-rc17-unsigned-test/AmplifaiPhone-rc17-unsigned.msi' -OutFile (Join-Path $fixture 'AmplifaiPhone-rc17-unsigned.msi') -TimeoutSec 180
       - name: Qualify copied frozen helper readiness and running-old-app replacement
         shell: pwsh
