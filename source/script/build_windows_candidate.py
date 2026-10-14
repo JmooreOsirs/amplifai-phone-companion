@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
 import stat
 import struct
@@ -17,6 +18,11 @@ GUI_FILES = (
     "collector/windows/app.py",
     "collector/windows/session.py",
     "collector/windows/helper_process.py",
+    "collector/windows/updater.py",
+    "collector/windows/installer_guard.py",
+    "collector/windows/update_installer.py",
+    "collector/amplifai_phone/companion_status.py",
+    "collector/amplifai_phone/windows_storage.py",
 )
 LOGO = "public/brand/amplifai-by-nexus-original.png"
 LOCK = "collector/windows-requirements.lock"
@@ -91,7 +97,11 @@ def freezer_command(*, python: Path, source: Path, build: Path, window: bool) ->
         str(python), "-m", "PyInstaller", "--noconfirm", "--clean",
         "--onedir", "--contents-directory", "_internal",
         "--windowed" if window else "--console", "--noupx", "--name", name,
-        "--paths", str(source / ("collector/windows" if window else "collector")),
+        "--paths", str(source / "collector"),
+        "--paths", str(source / "collector/windows"),
+        *(["--paths", str(build / "wrapper-generated")] if window else []),
+        "--hidden-import", "_windows_update_bootstrap" if window else "update_installer",
+        *([] if window else ["--exclude-module", "_windows_update_bootstrap"]),
         "--distpath", str(build / f"{part}-dist"),
         "--workpath", str(build / f"{part}-work"),
         "--specpath", str(build / f"{part}-spec"),
@@ -159,8 +169,8 @@ def _run(command: list[str], *, cwd: Path, log: Path | None, timeout_seconds: in
 
 
 def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Path) -> dict:
-    if sys.platform != "win32" or sys.version_info[:2] != (3, 12) or struct.calcsize("P") != 8:
-        raise RuntimeError("candidate build requires Windows x64 CPython 3.12")
+    if sys.platform != "win32" or sys.version_info[:3] != (3, 12, 10) or platform.python_implementation() != "CPython" or struct.calcsize("P") != 8:
+        raise RuntimeError("candidate build requires Windows x64 CPython 3.12.10")
     source = source.absolute()
     python = python.absolute()
     output = output.absolute()
@@ -180,8 +190,15 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
     if _sha256(lock) != EXPECTED_LOCK_SHA256:
         raise ValueError("Windows requirements bytes differ from the hash-pinned package input")
     output.mkdir()
+    helper = output / "helper-dist/AmplifaiPhoneHelper"
     for window in (False, True):
         part = "wrapper" if window else "helper"
+        if window:
+            generated = output / "wrapper-generated"
+            generated.mkdir()
+            records = file_records(helper)
+            (generated / "_windows_update_bootstrap.py").write_text(
+                "HELPER_RECORDS = " + repr(records) + "\n", encoding="utf-8")
         _run(
             freezer_command(python=python, source=source, build=output, window=window),
             cwd=source, log=output / f"{part}-freeze.log",
@@ -223,7 +240,11 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
     ).hexdigest()
     receipt = {
         "status": "disposable-windows-candidate-not-a-release",
+        "python_version": platform.python_version(), "python_build": platform.python_build(),
+        "python_implementation": platform.python_implementation(),
         "gui_source_sha256": source_digest,
+        "version": "2026.10.14-rc18", "build": "26101418",
+        "channel": "windows-x64-test", "installer_trust": "unsigned-test",
         "entry_sha256": _sha256(source / ENTRY),
         "lock_sha256": EXPECTED_LOCK_SHA256,
         "logo_sha256": EXPECTED_LOGO_SHA256,

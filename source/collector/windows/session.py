@@ -118,6 +118,7 @@ class Session:
         self._selection_change_pending = False
         self._retired_handoff_id = ""
         self._capture_received = False
+        self.review_discarded = False
         self.selecting_all = False
         self.select_all_visited = 0
         self._select_all_ids: set[int] = set()
@@ -131,6 +132,13 @@ class Session:
         self.destination_approved = False
         self._failure_status = ""
         self._completed = self._saved_exit = self._stopping = self._failed = False
+
+    @property
+    def can_update(self) -> bool:
+        return bool(self.inspected and not self.needs_inspection and not self.running and not self.residue
+                    and not self.save_receipt_pending and not self._pairing and not self._polling
+                    and not self._finishing and not self._selection_change_pending
+                    and (not self._capture_received or self.saved_acknowledged or self.review_discarded))
 
     @property
     def can_connect(self) -> bool:
@@ -258,6 +266,7 @@ class Session:
             self.handoff_id = self.pair_code = ""
             self._clear_destination()
             self._saved_exit = self._capture_received = False
+            self.review_discarded = False
         self.approval = None
         self._completed = self._stopping = self._failed = False
         self._polling = self._pairing = self._finishing = self._pairing_invalidated = False

@@ -4,10 +4,14 @@ from __future__ import annotations
 import math
 import queue
 import sys
+import threading
 import tkinter as tk
 import webbrowser
 from pathlib import Path
 from tkinter import messagebox, ttk
+
+from amplifai_phone.companion_status import CompanionIdentity, CompanionStatusServer
+from updater import BUNDLE_ID, BUILD, CHANNEL, VERSION, PreparedUpdate, UpdateError, check_update, cleanup_owned_updates
 
 from helper_process import HelperProcess, bundled_resources
 from session import BACKUP_CHECK_MODE, DISCLOSURE_VERSION, WEBSITE_ORIGIN, ProtocolError, Session, contact_source_details
@@ -17,7 +21,7 @@ BACKGROUND, PANEL, BORDER = "#0f1525", "#141d30", "#263146"
 HEADING, BODY, MUTED = "#edeff3", "#c8cfd9", "#a1a9b5"
 LIME, BLUE = "#a6e63d", "#5c87df"
 GUARANTEE = "Data & Privacy Guarantee: What We Collect, How It's Protected, and Why"
-WINDOW_TITLE = "AMPLIFai Phone · Windows source candidate"
+WINDOW_TITLE = "AMPLIFai Phone · Windows unsigned TEST · " + VERSION
 SETUP_STEPS = (
     ("Connect your iPhone", "Use a data-capable USB cable and unlock the iPhone. Open Apple Devices on this PC and decide any normal Trust prompt yourself. The read-only check uses an existing trusted connection."),
     ("Check the backup setting", "Choose Check iPhone setting below. It reads the current encryption setting without starting a backup or changing the phone. On, Off and Unknown describe this check only."),
@@ -57,6 +61,21 @@ class PhoneWindow:
         self.activity_measurement = tk.StringVar(value="")
         self.source_details_window = None
         self._rendering_contacts = False
+        self.update_events: queue.Queue = queue.Queue(maxsize=8)
+        self.update_cancelled = threading.Event()
+        self.update_lock = threading.Lock()
+        self.update_state = "deferred"
+        self.update_message = tk.StringVar(value="Updates are checked after temporary data inspection. This is an unsigned Windows TEST.")
+        self.prepared_update: PreparedUpdate | None = None
+        self.handoff_preparing = False
+        self.status_owned = True
+        self._startup_update_pending = True
+        self._queued_update_check = False
+        self._status_snapshot = {"busy": True, "updateState": "deferred", "availableVersion": None, "availableBuild": None}
+        self.status_server = CompanionStatusServer(
+            CompanionIdentity("windows", "x86_64", CHANNEL, BUNDLE_ID, VERSION, BUILD),
+            status=lambda: dict(self._status_snapshot), request_update_check=self.enqueue_update_check,
+        )
         self.window.title(WINDOW_TITLE)
         self.window.geometry("920x800")
         self.window.minsize(680, 680)
@@ -65,7 +84,17 @@ class PhoneWindow:
         self._style()
         self._layout(logo)
         self.window.after(100, self.pump)
-        self.start("inspect")
+        try:
+            self.status_server.start()
+        except OSError:
+            self.status_owned = False
+            self.state.status = "Another companion owns the local status port. Close it, then relaunch this app before collecting."
+            self.update_message.set("Another companion is running. Collection and updates are paused in this window.")
+            self.update_state = "deferred"
+            self.refresh()
+        else:
+            cleanup_owned_updates()
+            self.start("inspect")
 
     def _style(self) -> None:
         style = ttk.Style(self.window)
@@ -110,6 +139,13 @@ class PhoneWindow:
         self.logo = self.logo.subsample(max(1, math.ceil(self.logo.width() / 210)))
         ttk.Label(header, image=self.logo).pack(anchor="w", pady=(0, 12))
         self.label(outer, "Connect. Review. Decide.", heading=True)
+        ttk.Label(outer, textvariable=self.update_message, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
+        update_actions = ttk.Frame(outer)
+        update_actions.pack(fill="x", pady=(0, 16))
+        self.check_update_button = ttk.Button(update_actions, text="Check for updates", command=self.request_update_check)
+        self.check_update_button.pack(side="left", padx=(0, 8))
+        self.install_update_button = ttk.Button(update_actions, text="Open verified update installer", command=self.install_update)
+        self.install_update_button.pack(side="left")
         self.setup_toggle = ttk.Button(outer, text="Hide iPhone setup guide", command=self.toggle_setup_guide)
         self.setup_toggle.pack(anchor="w", pady=(0, 8))
         self.setup_guide = ttk.Frame(outer)
@@ -291,6 +327,10 @@ class PhoneWindow:
         self.refresh()
 
     def start(self, mode: str) -> None:
+        if not getattr(self, "status_owned", True) or getattr(self, "update_state", "") == "installing":
+            self.state.status = "Collection is paused while another companion or Windows Installer owns this operation."
+            self.refresh()
+            return
         try:
             self.state.begin(mode)
         except ProtocolError:
@@ -449,6 +489,7 @@ class PhoneWindow:
         if self.state._capture_received and not self.state.saved_acknowledged:
             if not messagebox.askyesno("Discard local phone review?", "Request stop discards the local reviewed import after the helper exits. Account parts may already be saved, while their final browser receipt may still be pending. Keep this window open and finish in the browser if you want to complete that save. Stop anyway?"):
                 return
+        self.state.review_discarded = self.state._capture_received and not self.state.saved_acknowledged
         self.send(self.state.request_stop())
         self.clear_password()
         self.helper.close_input()
@@ -472,24 +513,32 @@ class PhoneWindow:
             messagebox.showinfo("Keep recovery visible", "Request stop first. Keep this window open until the owned helper exits, then inspect temporary data. Force stop does not confirm cleanup.")
         elif self.state._capture_received and not self.state.saved_acknowledged:
             if messagebox.askyesno("Discard unsaved local review?", "Browser received is not saved. Closing discards the private local review, not account records or temporary backup files. Close anyway?"):
-                self.window.destroy()
+                self.shutdown()
         else:
-            self.window.destroy()
+            self.shutdown()
 
     def refresh(self) -> None:
         state = self.state
+        if hasattr(self, "update_message"):
+            busy = not state.can_update or not self.status_owned or self.update_state == "installing"
+            manifest = self.prepared_update.manifest if self.prepared_update else None
+            self._status_snapshot = {"busy": busy, "updateState": self.update_state,
+                                     "availableVersion": manifest.version if manifest else None,
+                                     "availableBuild": manifest.build if manifest else None}
+            self.check_update_button.configure(state="normal" if self.status_owned and not busy and self.update_state != "checking" else "disabled")
+            self.install_update_button.configure(state="normal" if manifest and not busy and self.update_state in {"available", "deferred"} else "disabled")
         self.window.title(window_title(state))
         self.status.set(state.status)
         self.transfer_status.set(state.transfer_status)
         self.coverage_status.set(state.coverage_status)
         self.backup_setting.set(state.backup_check_status)
-        self.backup_check.configure(state="normal" if state.can_check_backup_setting else "disabled")
+        self.backup_check.configure(state="normal" if state.can_check_backup_setting and getattr(self, "status_owned", True) and getattr(self, "update_state", "") != "installing" else "disabled")
         self.activity_stage.set(state.activity_stage)
         self.progress_caption.set(state.progress_caption)
         self.activity_measurement.set(state.activity_measurement)
         self.details_button.configure(state="normal" if state.contacts and not state.selecting_all and state.pending_contact is None else "disabled")
         self.approve.configure(state="normal" if self.checked.get() and state.inspected and not state.residue and not state.running else "disabled")
-        self.connect.configure(state="normal" if state.can_connect else "disabled")
+        self.connect.configure(state="normal" if state.can_connect and getattr(self, "status_owned", True) and getattr(self, "update_state", "") != "installing" else "disabled")
         self.agreement.configure(state="disabled" if state.running else "normal")
         self.decline_button.configure(state="disabled" if state.running else "normal")
         self.contacts.configure(state="normal" if state.can_select and not state.selecting_all else "disabled")
@@ -526,7 +575,149 @@ class PhoneWindow:
         self.destination_status.set(("Server-confirmed destination: " + state.destination_email + " · " + state.destination_course)
                                     if state.destination_intent_id else "Connect from your signed-in account after reviewing contacts.")
 
+    def enqueue_update_check(self) -> bool:
+        with self.update_lock:
+            if self.update_cancelled.is_set() or self._queued_update_check:
+                return False
+            try:
+                self.update_events.put_nowait({"kind": "check"})
+            except queue.Full:
+                return False
+            self._queued_update_check = True
+            return True
+
+    def request_update_check(self) -> None:
+        if not self.status_owned or not self.state.can_update or self.update_state in {"checking", "installing"}:
+            if self.update_state not in {"checking", "installing"}:
+                self.update_state = "deferred"
+                self.update_message.set("Update check deferred. Finish collection, local review, account Save and temporary data inspection first.")
+            self.refresh()
+            return
+        self._startup_update_pending = False
+        self.update_state = "checking"
+        self.update_message.set("Checking for a compatible Windows update…")
+        self.refresh()
+        threading.Thread(target=self.prepare_update, daemon=True, name="signed-update-check").start()
+
+    def prepare_update(self) -> None:
+        try:
+            manifest = check_update(cancelled=self.update_cancelled)
+            prepared = PreparedUpdate(manifest, cancelled=self.update_cancelled) if int(manifest.build) > int(BUILD) else None
+            with self.update_lock:
+                if self.update_cancelled.is_set():
+                    if prepared:
+                        prepared.cleanup()
+                    return
+                self.update_events.put_nowait({"kind": "prepared", "update": prepared})
+        except (UpdateError, OSError) as error:
+            message = str(error) if isinstance(error, UpdateError) else "Verified update could not be prepared locally. Check again later."
+            with self.update_lock:
+                if not self.update_cancelled.is_set():
+                    self.update_events.put_nowait({"kind": "failed", "message": message})
+
+    def pump_updates(self) -> bool:
+        while not self.update_events.empty():
+            event = self.update_events.get_nowait()
+            if event["kind"] == "check":
+                with self.update_lock:
+                    self._queued_update_check = False
+                self.request_update_check()
+            elif event["kind"] == "failed":
+                self.update_state = "failed"
+                self.update_message.set(event["message"] + " The installed app remains usable.")
+            elif event["kind"] == "handoff_failed":
+                self.handoff_preparing = False
+                self.update_state = "failed"
+                self.update_message.set("The verified copied updater could not prepare. This companion remains open; check for updates again.")
+            elif event["kind"] == "handoff_ready":
+                self.handoff_preparing = False
+                handoff = event["handoff"]
+                if event["prepared"] is not self.prepared_update or not self.status_owned or not self.state.can_update:
+                    handoff.abort()
+                    self.update_state = "deferred"
+                    self.update_message.set("Installation deferred because local work changed. Finish it, then check for updates again.")
+                else:
+                    try:
+                        handoff.commit()
+                    except OSError:
+                        handoff.abort()
+                        self.update_state = "failed"
+                        self.update_message.set("Updater commit failed. The companion remains open; check again.")
+                    else:
+                        self.prepared_update = None
+                        self.shutdown()
+                        return True
+            elif event["kind"] == "prepared":
+                if self.prepared_update:
+                    self.prepared_update.cleanup()
+                self.prepared_update = event["update"]
+                if self.prepared_update:
+                    manifest = self.prepared_update.manifest
+                    self.update_state = "available" if self.state.can_update else "deferred"
+                    label = "unsigned Windows TEST" if manifest.trust == "unsigned-test" else "Windows update"
+                    self.update_message.set(f"Verified {manifest.version} {label} is ready. Open its installer when collection and unsaved work are finished.")
+                else:
+                    self.update_state = "current"
+                    self.update_message.set(f"{VERSION} is current for the signed Windows x64 Test feed. This app is an unsigned TEST.")
+        if self._startup_update_pending and self.status_owned and self.state.can_update:
+            self.request_update_check()
+        return False
+
+    def install_update(self) -> None:
+        prepared = self.prepared_update
+        if not prepared or not self.status_owned or not self.state.can_update or self.update_state not in {"available", "deferred"}:
+            return
+        trust = "This is an unsigned Windows TEST. Windows security may warn or refuse it." if prepared.manifest.trust == "unsigned-test" else "Windows Installer and Windows security control this installation."
+        if not messagebox.askyesno("Open verified Windows update?", f"Install {prepared.manifest.version}?\n\n{trust}\nThis app will close, then Windows Installer will open. Reopen AMPLIFai Phone after installation finishes."):
+            return
+        # Tk dialogs process events; collection may have started during the decision.
+        if prepared is not self.prepared_update or not self.status_owned or not self.state.can_update or self.update_state not in {"available", "deferred"}:
+            self.update_message.set("Installation deferred because local work changed. Finish it, then select the installer again.")
+            self.refresh()
+            return
+        self.handoff_preparing = True
+        self.update_state = "installing"
+        self.update_message.set("Preparing the verified update. This app will close when Windows Installer is ready.")
+        self.refresh()
+        helper = Path(self.helper.command[0])
+        threading.Thread(target=self.prepare_handoff, args=(prepared, helper), daemon=True, name="verified-update-handoff").start()
+
+    def prepare_handoff(self, prepared: PreparedUpdate, helper: Path) -> None:
+        try:
+            handoff = prepared.launch(helper)
+            with self.update_lock:
+                if self.update_cancelled.is_set():
+                    handoff.abort()
+                    return
+                self.update_events.put_nowait({"kind": "handoff_ready", "handoff": handoff, "prepared": prepared})
+        except (OSError, ValueError):
+            with self.update_lock:
+                if not self.update_cancelled.is_set():
+                    self.update_events.put_nowait({"kind": "handoff_failed"})
+
+    def shutdown(self) -> None:
+        if hasattr(self, "status_server"):
+            with self.update_lock:
+                self.update_cancelled.set()
+                while not self.update_events.empty():
+                    pending = self.update_events.get_nowait()
+                    if pending["kind"] == "prepared" and pending["update"]:
+                        pending["update"].cleanup()
+                    elif pending["kind"] == "handoff_ready":
+                        pending["handoff"].abort()
+            self.status_server.stop()
+            if self.prepared_update and not self.handoff_preparing:
+                self.prepared_update.cleanup()
+        self.window.destroy()
+
     def pump(self) -> None:
+        if hasattr(self, "update_events"):
+            try:
+                if self.pump_updates():
+                    return
+            except (OSError, UpdateError):
+                self.update_state = "failed"
+                self.update_message.set("Update preparation or verified download cleanup failed. Current collection and review remain open; check again later.")
         try:
             while not self.events.empty():
                 event = self.events.get_nowait()

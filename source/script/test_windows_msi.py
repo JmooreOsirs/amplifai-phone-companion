@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from build_windows_candidate import file_records
-from build_windows_msi import NS, VERSION, author_xml, checked_records
+from build_windows_msi import NS, UPGRADE_CODE, VERSION, author_xml, checked_records
 
 
 class InstallerAuthoringTests(unittest.TestCase):
@@ -44,7 +44,10 @@ class InstallerAuthoringTests(unittest.TestCase):
         _, records = checked_records(self.package, self.receipt)
         tree = author_xml(records, self.package)
         ns = {"w": NS}
-        self.assertEqual(VERSION, "1.0.17")
+        self.assertEqual(VERSION, "1.0.18")
+        self.assertEqual(tree.find(".//w:Product", ns).attrib["UpgradeCode"], UPGRADE_CODE)
+        self.assertEqual(UPGRADE_CODE, "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871")
+        self.assertIsNotNone(tree.find(".//w:MajorUpgrade", ns))
         self.assertEqual(tree.find(".//w:Product", ns).attrib["Version"], VERSION)
         package = tree.find(".//w:Package", ns)
         self.assertEqual(package.attrib["InstallScope"], "perUser")

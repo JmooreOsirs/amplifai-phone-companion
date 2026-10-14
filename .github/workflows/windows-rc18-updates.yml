@@ -1,0 +1,208 @@
+name: Windows rc18 signed update qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: Fixed rc18 qualification phase
+        required: true
+        default: build
+        type: choice
+        options: [build, handoff]
+  push:
+    branches: [codex/desktop-updates-oct14]
+    paths:
+      - 'source/collector/windows/**'
+      - 'source/collector/windows-requirements*'
+      - 'source/collector/amplifai_phone/**'
+      - 'source/collector/agent_entry.py'
+      - 'source/collector/tests/test_companion_status.py'
+      - 'source/script/*windows*'
+      - '.github/workflows/windows-rc18-updates.yml'
+      - 'COPYRIGHT'
+      - 'LICENSE'
+      - 'THIRD-PARTY-NOTICES.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-rc18-updates
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    if: github.event_name != 'workflow_dispatch' || inputs.phase == 'build'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      PYTHONPATH: source/collector;source/collector/tests;source/collector/windows;source/collector/windows/tests;source/script
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+          cache: ''
+      - name: Assert accepted exact Windows Python runtime
+        shell: pwsh
+        run: |
+          python -c "import platform,sys; assert platform.python_implementation() == 'CPython' and sys.version_info[:3] == (3,12,10); print(platform.python_version())"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install exact locked Windows runtime
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify update verifier, session gates and status protocol
+        shell: pwsh
+        run: |
+          python -m unittest test_updater test_update_handoff test_session test_gui_guards test_video_parity test_companion_status test_windows_candidate test_windows_msi -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Render changed update states using existing Tk style
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiUpdateRender'
+          python source/collector/windows/tests/render_update_acceptance.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Freeze rc18 wrapper and matching shared helper
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          python source/script/build_windows_candidate.py --source source --python (Get-Command python).Source --output $output --legal-root .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $render = Get-Content (Join-Path $env:RUNNER_TEMP 'AmplifaiUpdateRender\render-update-receipt.json') -Raw | ConvertFrom-Json
+          $frozen = Get-Content (Join-Path $output 'candidate-receipt.json') -Raw | ConvertFrom-Json
+          if ($render.guiSourceSha256 -ne $frozen.gui_source_sha256) { throw 'Rendered update source differs from frozen wrapper' }
+      - name: Build rc18 per-user MSI with unchanged UpgradeCode
+        shell: pwsh
+        run: |
+          $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
+          $candle = Join-Path $wixBin 'candle.exe'
+          $light = Join-Path $wixBin 'light.exe'
+          if (-not (Test-Path $candle) -or -not (Test-Path $light)) { throw 'Existing standard-runner WiX 3.14 missing' }
+          if ((Get-Item $candle).VersionInfo.FileVersion -notlike '3.14.*' -or (Get-Item $light).VersionInfo.FileVersion -notlike '3.14.*') { throw 'Unexpected WiX version' }
+          $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
+          python source/script/build_windows_msi.py --package (Join-Path $candidate 'wrapper-dist\AmplifaiPhone') --receipt (Join-Path $candidate 'candidate-receipt.json') --output $installer --candle $candle --light $light
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify in-place released rc17 to rc18 upgrade under runner user
+        shell: pwsh
+        run: |
+          # These unattended commands qualify MSI replacement on the disposable runner only.
+          # The app invokes only normal msiexec /i UI after explicit local approval.
+          $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
+          $baseline = Join-Path $installer 'AmplifaiPhone-rc17-unsigned.msi'
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.13-rc17-unsigned-test/AmplifaiPhone-rc17-unsigned.msi' -OutFile $baseline -TimeoutSec 180
+          if ((Get-Item $baseline).Length -ne 41034620 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'fb3bdff87a55dd89fd46d8659ada291023a12d588ba90fa359849a8687adf8e7') { throw 'Released rc17 MSI bytes differ from fixed baseline' }
+          $msi = Join-Path $installer 'AmplifaiPhone-rc18-unsigned.msi'
+          $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
+          $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
+          $dataRoot = Join-Path $env:LOCALAPPDATA 'AMPLIFai Phone Candidate'
+          if ((Test-Path $installed) -or (Test-Path $dataRoot)) { throw 'Qualification paths must be clean runner-owned paths' }
+          $sessionRoot = Join-Path $dataRoot 'sessions'
+          New-Item -ItemType Directory -Path $sessionRoot | Out-Null
+          $sentinel = Join-Path $sessionRoot 'ci-upgrade-sentinel.txt'
+          [IO.File]::WriteAllText($sentinel, 'runner-only update data preservation')
+          $sentinelHash = (Get-FileHash $sentinel -Algorithm SHA256).Hash
+          try {
+            foreach ($package in @($baseline, $msi)) {
+              $log = Join-Path $installer ((Split-Path $package -Leaf) + '.install.log')
+              $operation = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$package`" /qn /norestart /L*V `"$log`"" -Wait -PassThru
+              if ($operation.ExitCode -ne 0) { throw "Runner MSI installation failed: $($operation.ExitCode)" }
+              if (-not (Test-Path $sentinel) -or (Get-FileHash $sentinel -Algorithm SHA256).Hash -ne $sentinelHash) { throw 'Existing session data changed during MSI replacement' }
+            }
+            python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json')
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $receipt = [ordered]@{status='runner-user-rc17-to-rc18-in-place-upgrade'; oldInstallerSha256='fb3bdff87a55dd89fd46d8659ada291023a12d588ba90fa359849a8687adf8e7'; version='1.0.18'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
+            $receipt | ConvertTo-Json | Set-Content (Join-Path $installer 'upgrade-receipt.json') -Encoding utf8
+            Get-Content (Join-Path $installer 'upgrade-receipt.json')
+          } finally {
+            $remove = Start-Process -FilePath msiexec.exe -ArgumentList "/x `"$msi`" /qn /norestart" -Wait -PassThru
+            if ($remove.ExitCode -ne 0) { throw "Runner MSI cleanup failed: $($remove.ExitCode)" }
+            python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json') --removed
+            if ($LASTEXITCODE -ne 0) { throw 'Runner uninstall left package files' }
+            if (-not (Test-Path $sentinel) -or (Get-FileHash $sentinel -Algorithm SHA256).Hash -ne $sentinelHash) { throw 'Uninstall touched session data' }
+            Remove-Item -LiteralPath $sentinel
+            Remove-Item -LiteralPath $sessionRoot
+            Remove-Item -LiteralPath $dataRoot
+          }
+      - name: Show bounded build diagnostics on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($directory in @('AmplifaiPhoneCandidate', 'AmplifaiPhoneInstaller')) {
+            $path = Join-Path $env:RUNNER_TEMP $directory
+            if (Test-Path $path) { Get-ChildItem -LiteralPath $path -Filter '*.log' | ForEach-Object { Get-Content $_.FullName -Tail 25 } }
+          }
+      - name: Retain bounded qualification receipts and rendered states
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-rc18-qualification
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/AmplifaiUpdateRender/*.png
+            ${{ runner.temp }}/AmplifaiUpdateRender/render-update-receipt.json
+            ${{ runner.temp }}/AmplifaiPhoneCandidate/candidate-receipt.json
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc18-unsigned.msi
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/msi-receipt.json
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/upgrade-receipt.json
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log
+
+  handoff:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'handoff'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source/collector;source/collector/windows;source/script
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+          cache: ''
+      - name: Assert accepted exact Windows Python runtime
+        shell: pwsh
+        run: |
+          python -c "import platform,sys; assert platform.python_implementation() == 'CPython' and sys.version_info[:3] == (3,12,10); print(platform.python_version())"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install existing exact locked runtime
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Download only fixed unpublished rc18 draft fixture assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = 'windows-2026.10.14-rc18-unsigned-test'
+          $repository = 'JmooreOsirs/amplifai-phone-companion'
+          $draft = gh release view $tag --repo $repository --json isDraft --jq '.isDraft'
+          if ($LASTEXITCODE -ne 0 -or $draft.Trim() -ne 'true') { throw 'Expected fixed unpublished rc18 fixture draft' }
+          $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
+          New-Item -ItemType Directory -Path $fixture | Out-Null
+          gh release download $tag --repo $repository --dir $fixture --pattern 'AmplifaiPhone-rc18-unsigned.msi' --pattern 'candidate-receipt.json' --pattern 'update-v1.json' --pattern 'update-v1.json.sig'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.13-rc17-unsigned-test/AmplifaiPhone-rc17-unsigned.msi' -OutFile (Join-Path $fixture 'AmplifaiPhone-rc17-unsigned.msi') -TimeoutSec 180
+      - name: Qualify copied frozen helper readiness and running-old-app replacement
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
+          python source/script/qualify_windows_update_handoff.py --msi (Join-Path $fixture 'AmplifaiPhone-rc18-unsigned.msi') --baseline (Join-Path $fixture 'AmplifaiPhone-rc17-unsigned.msi') --manifest (Join-Path $fixture 'update-v1.json') --signature (Join-Path $fixture 'update-v1.json.sig') --candidate-receipt (Join-Path $fixture 'candidate-receipt.json') --output (Join-Path $fixture 'handoff-receipt.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain actual frozen handoff receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-rc18-handoff-qualification
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/AmplifaiHandoffFixture/handoff-receipt.json

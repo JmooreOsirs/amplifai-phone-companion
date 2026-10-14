@@ -175,6 +175,15 @@ class StatusTests(unittest.TestCase):
                 other.bind(("127.0.0.1", self.server.port))
         self.assertEqual(self.request()[0], 200)
 
+    @unittest.skipUnless(hasattr(socket, "SO_EXCLUSIVEADDRUSE"), "Windows immediate status restart")
+    def test_windows_status_port_reopens_after_serving_a_request(self):
+        self.assertEqual(self.request()[0], 200)
+        port = self.server.port
+        self.server.stop()
+        self.server = CompanionStatusServer(IDENTITY, lambda: self.state, self.check, port=port)
+        self.server.start()
+        self.assertEqual(self.request()[0], 200)
+
 
 class HelperEntryTests(unittest.TestCase):
     @unittest.skipIf(sys.platform == "win32", "Non-Windows entry refusal")
