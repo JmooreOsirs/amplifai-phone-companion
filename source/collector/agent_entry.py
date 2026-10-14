@@ -4,6 +4,12 @@ import sys
 
 
 def main():
+    if sys.argv[1:2] == ['install-verified-update']:
+        if sys.platform != 'win32':
+            return 2
+        from importlib import import_module
+
+        return import_module('update_installer').main(sys.argv[2:])
     if sys.argv[1:2] == ['companion-status']:
         from amplifai_phone.companion_status import main as status_main
 

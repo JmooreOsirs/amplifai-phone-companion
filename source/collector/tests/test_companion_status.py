@@ -168,6 +168,14 @@ class StatusTests(unittest.TestCase):
 
 
 class HelperEntryTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "Non-Windows entry refusal")
+    def test_windows_installer_mode_refuses_other_platform_without_device_imports(self):
+        collector = Path(__file__).resolve().parents[1]
+        result = subprocess.run([sys.executable, "-S", str(collector / "agent_entry.py"),
+                                 "install-verified-update"], capture_output=True, text=True,
+                                env={**os.environ, "PYTHONPATH": str(collector)}, timeout=5)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (2, "", ""))
+
     def test_status_entrypoint_needs_no_device_sdk_and_stops_on_stdin_close(self):
         collector = Path(__file__).resolve().parents[1]
         environment = {**os.environ, "PYTHONPATH": str(collector)}
