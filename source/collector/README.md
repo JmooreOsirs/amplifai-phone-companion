@@ -5,21 +5,26 @@
 Use [the official phone setup](https://amplifai.satoris.ai/phone) to choose the
 Mac installer for the chip shown in **Apple menu → About This Mac**:
 
-- **Apple silicon:** [signed/notarized Mac rc24](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-release),
-  build `26101324`; manual DMG download because the appcast is unavailable.
-- **Intel:** [signed/notarized rc24-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-intel1-test),
-  build `261013241`; distinct Test prerelease app with no updater feed or
-  unfinished-review migration. Run one Mac companion at a time.
+- **Apple silicon:** [signed/notarized Mac rc25](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-release),
+  build `26101425`; signed launch-time updates defer while local work is busy.
+- **Intel:** [signed/notarized rc25-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-intel1-test),
+  build `261014251`; distinct Test app and signed feed. The prior feed-disabled
+  Intel Test requires a manual bootstrap. Physical acceptance remains open.
 - **Android:** [signed rc10](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.13-rc10).
-- **Windows:** [rc17 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.13-rc17-unsigned-test).
+- **Windows:** [rc18 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.14-rc18-unsigned-test),
+  MSI `1.0.18`; authenticated update manifest and installer bytes, explicit local
+  approval, normal Installer UI. The MSI has no Authenticode signature. Prior
+  rc17 requires a manual bootstrap.
 
-Each current release has its own attached corresponding source and checksums.
-This `main` branch still contains the historical rc6 Mac source snapshot,
-**not** the rc24 app/helper source. None of these downloads establishes physical
-iPhone collection, explicit account Save/ACK, report readback, or return-login
-persistence. Android-specific behavior is in
-[`android/README.md`](android/README.md); `/pilot` remains a secondary
-manual-file importer.
+Finish collection/review/Save before manual replacement; unfinished review does
+not migrate. Older local Mac test builds need a manual official install. Run
+one companion at a time. Each release has its own attached corresponding source
+and checksums. This `main` branch contains the historical
+rc6 Mac source snapshot, **not** the current app/helper source. Published bytes
+and disposable runner upgrades do not establish physical iPhone collection,
+explicit account Save/ACK, report readback or return-login persistence.
+Android-specific behavior is in [`android/README.md`](android/README.md);
+`/pilot` remains a secondary manual-file importer.
 
 ## Historical source and verification notes
 
