@@ -1,26 +1,31 @@
 # AMPLIFai phone collectors
 
-The public `/phone` and `/phone/account` setup links offer the signed Android
-`2026.10.08-rc4` APK and signed, notarized Mac `2026.10.08-rc5` build `26100805`.
-This tree contains the unpublished `2026.10.08-rc6` processing-repair candidate;
-its source checks do not sign, notarize or update that public download.
-The prior `2026.10.08-rc4-ack2` Mac distribution remains a rollback;
-its contained About/build metadata says rc4/26100804. Neither platform has
-universal physical-device acceptance. Exact
-public source, notices, checksums and release
-receipts are in `PROJECT_PLAN.md`; Android-specific behavior is in
-[`android/README.md`](android/README.md). `/pilot` is a secondary manual-file
-importer, not the normal direct-phone path. No Windows or Intel Mac release exists.
+## Current public distribution — October 14, 2026
 
-October 1 Windows software qualification used a standard public-repository
-Windows Server 2025 x64 VM, Python 3.12.10 and the exact hash-pinned Windows
-dependency lock, without cache/artifact storage or paid runners. Run
-`36897819582` on companion-only source `4a9214e` installed those dependencies,
-but Windows private-directory ACL creation was rejected; a cancellation
-fixture then waited indefinitely for startup until the 15-minute job limit.
-This is a failed qualification, not Windows companion/installer readiness.
-Native Windows UI, safe cancellation, installer/signing, Apple USB prerequisites,
-browser transfer and physical-device acceptance remain separate gates.
+Use [the official phone setup](https://amplifai.satoris.ai/phone) to choose the
+Mac installer for the chip shown in **Apple menu → About This Mac**:
+
+- **Apple silicon:** [signed/notarized Mac rc24](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-release),
+  build `26101324`; manual DMG download because the appcast is unavailable.
+- **Intel:** [signed/notarized rc24-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-intel1-test),
+  build `261013241`; distinct Test prerelease app with no updater feed or
+  unfinished-review migration. Run one Mac companion at a time.
+- **Android:** [signed rc10](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.13-rc10).
+- **Windows:** [rc17 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.13-rc17-unsigned-test).
+
+Each current release has its own attached corresponding source and checksums.
+This `main` branch still contains the historical rc6 Mac source snapshot,
+**not** the rc24 app/helper source. None of these downloads establishes physical
+iPhone collection, explicit account Save/ACK, report readback, or return-login
+persistence. Android-specific behavior is in
+[`android/README.md`](android/README.md); `/pilot` remains a secondary
+manual-file importer.
+
+## Historical source and verification notes
+
+The following implementation notes describe the older Mac collector source in
+this branch. Earlier rc4/rc5 and Windows qualification results are not current
+download guidance.
 
 The long-backup and saved-ACK repairs are present in the public Mac ACK2
 owner-test package. Normal physical install,
@@ -38,9 +43,10 @@ delivery succeeded. The rc5 public package was independently verified, but
 synthetic coverage does not replace a normal
 owner-operated iPhone retry. A subsequent build `26100804` owner run completed
 the transfer but stopped in processing with `unsupported_schema`; the rc5
-parser is unchanged from that build. The local rc6 candidate narrows safe
-failure categories and isolates a missing optional selected payload, but has
-not been exercised on the owner's iPhone or published.
+parser is unchanged from that build. The rc6 source snapshot narrows safe
+failure categories and isolates a missing optional selected payload; that
+source-level result alone did not establish an owner iPhone or account-save
+result.
 
 Build the host-specific macOS app without opening or connecting to a phone:
 
@@ -185,13 +191,12 @@ waive dependency obligations. The ordinary build-script output is ad-hoc signed 
 and the in-app browser has not proven the public HTTPS-to-loopback handoff;
 its Local Network Access permission is still `prompt` on a separate test page.
 See [ADR 0003](../docs/decisions/0003-local-phone-collection-candidate.md).
-Jeff's owner-test acceptance now requires a fresh public download and normal
-install; an already-local developer build is not sufficient. A valid Developer
-ID identity and Apple-accepted previous candidate are recorded in
-`PROJECT_PLAN.md`, but the changed collector source needs a new release
-candidate. Do not publish it as a consumer download or bypass Gatekeeper.
-The collection interface
-is from [pymobiledevice3](https://github.com/doronz88/pymobiledevice3), its
+Owner-test acceptance requires a fresh public download and normal install; an
+already-local developer build is insufficient. This historical checkout is not
+the signed current installer or its corresponding source archive. Do not
+publish its ad-hoc build as a consumer download or bypass Gatekeeper.
+The collection interface is from
+[pymobiledevice3](https://github.com/doronz88/pymobiledevice3), its
 [backup2 CLI](https://doronz88.github.io/pymobiledevice3/cli/backup2/), and
 the backup paths selected by its source. SQLite metadata columns are grounded
 in [iLEAPP call](https://github.com/abrignoni/iLEAPP/blob/main/scripts/artifacts/callHistory.py)

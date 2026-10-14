@@ -1,9 +1,38 @@
-# AMPLIFai Phone 2026.10.08-rc6 companion source
+# AMPLIFai Phone companion source
 
-This package is prepared for the matching `2026.10.08-rc6` Mac app, build
-`26100806`; publication and binary checksums are separate release steps. The
-filtered receiver drains unselected full-backup bytes, while every retained
-write and parsing copy checks real Mac storage with a further 2 GiB reserve.
+## Current downloads — October 14, 2026
+
+Choose the Mac build by **Apple silicon or Intel** using
+[the official phone setup](https://amplifai.satoris.ai/phone). Check the Mac's
+chip in **Apple menu → About This Mac**.
+
+- **Apple silicon Mac:** [signed, notarized rc24](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-release),
+  build `26101324`. Download the DMG manually; the in-app update feed is
+  unavailable.
+- **Intel Mac:** [signed, notarized rc24-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.13-rc24-intel1-test),
+  build `261013241`. This is a separate **Test prerelease** app without an
+  updater feed; real Intel iPhone collection and report Save/return-login
+  acceptance remain unverified.
+- **Android:** [signed rc10](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.13-rc10).
+- **Windows:** [rc17 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.13-rc17-unsigned-test),
+  not a signed consumer release.
+
+Complete any active Mac collection, review, and account save before replacing
+an installed app; an unfinished local review does not migrate. Run only one Mac
+companion at a time. A signed download is not proof of collection or account
+Save on the owner's device.
+
+**Source boundary:** `main` retains the historical `2026.10.08-rc6` Mac source
+snapshot below. For a current installer, use the corresponding source and
+checksum file attached to its release, not this branch's older build
+instructions.
+
+## Historical rc6 source snapshot
+
+This branch's package was prepared for the matching `2026.10.08-rc6` Mac app,
+build `26100806`. The filtered receiver drains unselected full-backup bytes,
+while every retained write and parsing copy checks real Mac storage with a
+further 2 GiB reserve.
 It distinguishes an early host-space refusal from generic collection failure
 and does not report a zero-byte preflight as backup file progress. A bounded
 safe failure code can be sent automatically to the AMPLIFai diagnostics route
