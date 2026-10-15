@@ -1,18 +1,18 @@
 # AMPLIFai phone collectors
 
-## Current public distribution — October 14, 2026
+## Current public distribution — October 15, 2026
 
 Use [the official phone setup](https://amplifai.satoris.ai/phone) to choose the
 Mac installer for the chip shown in **Apple menu → About This Mac**:
 
-- **Apple silicon:** [signed/notarized Mac rc25](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-release),
-  build `26101425`; signed launch-time updates defer while local work is busy.
-- **Intel:** [signed/notarized rc25-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-intel1-test),
-  build `261014251`; distinct Test app and signed feed. The prior feed-disabled
+- **Apple silicon:** [signed/notarized Mac rc26](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.15-rc26-release),
+  build `26101526`; signed launch-time updates defer while local work is busy.
+- **Intel:** [signed/notarized rc26-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.15-rc26-intel1-test),
+  build `261015261`; distinct Test app and signed feed. The prior feed-disabled
   Intel Test requires a manual bootstrap. Physical acceptance remains open.
 - **Android:** [signed rc10](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.13-rc10).
-- **Windows:** [rc18 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.14-rc18-unsigned-test),
-  MSI `1.0.18`; authenticated update manifest and installer bytes, explicit local
+- **Windows:** [rc19 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.15-rc19-unsigned-test),
+  MSI `1.0.19`; authenticated update manifest and installer bytes, explicit local
   approval, normal Installer UI. The MSI has no Authenticode signature. Prior
   rc17 requires a manual bootstrap.
 
@@ -20,8 +20,12 @@ Finish collection/review/Save before manual replacement; unfinished review does
 not migrate. Older local Mac test builds need a manual official install. Run
 one companion at a time. Each release has its own attached corresponding source
 and checksums. This `main` branch contains the historical
-rc6 Mac source snapshot, **not** the current app/helper source. Published bytes
-and disposable runner upgrades do not establish physical iPhone collection,
+rc6 Mac source snapshot, **not** the current app/helper source. macOS rc26 uses
+source/build commit `257748fcb2d6aef758766314f4e3817c8d30c372`; Windows rc19
+uses `d82bf65977a607026878019864e2e91a77bb5b1b`, which adds only a Windows
+test-fixture repair with production files unchanged. Release receipts distinguish
+later qualification-only commits. Published bytes and disposable runner upgrades
+do not establish physical iPhone collection,
 explicit account Save/ACK, report readback or return-login persistence.
 Android-specific behavior is in [`android/README.md`](android/README.md);
 `/pilot` remains a secondary manual-file importer.
