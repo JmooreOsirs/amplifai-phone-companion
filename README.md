@@ -1,21 +1,21 @@
 # AMPLIFai Phone companion source
 
-## Current downloads — October 14, 2026
+## Current downloads — October 15, 2026
 
 Choose the Mac build by **Apple silicon or Intel** using
 [the official phone setup](https://amplifai.satoris.ai/phone). Check the Mac's
 chip in **Apple menu → About This Mac**.
 
-- **Apple silicon Mac:** [signed, notarized rc25](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-release),
-  build `26101425`. The signed update feed is live; the app checks on launch
+- **Apple silicon Mac:** [signed, notarized rc26](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.15-rc26-release),
+  build `26101526`. The app checks its signed update feed on launch
   and defers installation while collection, review or Save/ACK is unresolved.
-- **Intel Mac:** [signed, notarized rc25-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.14-rc25-intel1-test),
-  build `261014251`. This separate **Test prerelease** now supports its own
+- **Intel Mac:** [signed, notarized rc26-intel1 Intel Test](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.10.15-rc26-intel1-test),
+  build `261015261`. This separate **Test prerelease** supports its own
   signed update feed. The prior feed-disabled Intel Test needs one manual
   bootstrap. Physical Intel/iPhone/account acceptance remains unverified.
 - **Android:** [signed rc10](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/android-2026.10.13-rc10).
-- **Windows:** [rc18 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.14-rc18-unsigned-test),
-  MSI `1.0.18`. Signed manifests authenticate the exact installer bytes, but
+- **Windows:** [rc19 unsigned x64 TEST](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.15-rc19-unsigned-test),
+  MSI `1.0.19`. Signed manifests authenticate the exact installer bytes, but
   the MSI is **not Authenticode signed**. Installation requires explicit local
   approval and normal Windows Installer. Prior rc17 needs one manual bootstrap.
 
@@ -28,8 +28,11 @@ collection, account Save/readback or return-login acceptance.
 **Source boundary:** `main` retains the historical `2026.10.08-rc6` Mac source
 snapshot below. For a current installer, use the corresponding source and
 checksum file attached to its release, not this branch's older build
-instructions. Windows build/source/qualification commit identities are
-explicitly distinguished in its release notes and source receipts.
+instructions. The macOS rc26 authored/build source is commit
+`257748fcb2d6aef758766314f4e3817c8d30c372`. Windows rc19 build/source commit
+`d82bf65977a607026878019864e2e91a77bb5b1b` adds only a Windows test-fixture
+repair; its production files match that macOS source. Later qualification-only
+commits are identified separately in the release notes and source receipts.
 
 ## Historical rc6 source snapshot
 
