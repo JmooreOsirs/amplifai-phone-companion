@@ -23,6 +23,9 @@ jobs:
     env:
       AMPLIFAI_TARGET_ARCH: arm64
       PYTHONNOUSERSITE: '1'
+      # The runner's preinstalled CPython lacks SQLite extension loading; use uv's
+      # standalone CPython, matching the pinned standalone Python of the Intel build.
+      UV_PYTHON_PREFERENCE: only-managed
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -46,6 +49,7 @@ jobs:
           uv --version
           uv venv --python 3.12 "$RUNNER_TEMP/test-venv"
           uv pip sync --require-hashes --python "$RUNNER_TEMP/test-venv/bin/python" source/collector/portable-requirements.lock
+          "$RUNNER_TEMP/test-venv/bin/python" -c 'import sqlite3, sys; print(sys.version, sys.base_prefix); print("sqlite", sqlite3.sqlite_version, "load_extension", hasattr(sqlite3.Connection, "enable_load_extension"))'
       - name: Run collector and bridge tests
         shell: bash
         env:
