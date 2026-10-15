@@ -8,7 +8,7 @@ import threading
 import unittest
 from uuid import UUID
 
-from amplifai_phone.bridge import BridgeServer
+from amplifai_phone.bridge import PILOT_ORIGIN, BridgeServer
 from test_bridge import fixture
 
 
@@ -45,7 +45,7 @@ class SavedAcknowledgementTest(unittest.TestCase):
 
     def request(self, bridge, path, body=None, token=None, origin=None):
         connection = http.client.HTTPConnection("127.0.0.1", bridge.port, timeout=2)
-        headers = {"Host": f"127.0.0.1:{bridge.port}", "Origin": origin or bridge.origin}
+        headers = {"Host": f"127.0.0.1:{bridge.port}", "Origin": origin or PILOT_ORIGIN}
         if body is not None:
             headers["Content-Type"] = "application/json"
         if token is not None:

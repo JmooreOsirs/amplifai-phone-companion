@@ -24,6 +24,10 @@ from .paged_transfer import PagedTransfer
 from .record_store import SelectionSnapshot
 
 PILOT_ORIGIN = "https://amplifai-database-engine.vercel.app"
+ACCOUNT_ORIGIN = "https://amplifai.satoris.ai"
+# The website serves accounts on its custom domain and still answers the older
+# Vercel alias. Each transfer binds to the first exact origin that pairs or connects.
+BROWSER_ORIGINS = frozenset({ACCOUNT_ORIGIN, PILOT_ORIGIN})
 BRIDGE_PORT = 48751
 MAX_REQUEST_BYTES = 1024
 MAX_TRANSFER_BYTES = 32 * 1024 * 1024
@@ -138,7 +142,7 @@ class BridgeServer:
         ids: set[int] | SelectionSnapshot,
         *,
         port: int = BRIDGE_PORT,
-        origin: str = PILOT_ORIGIN,
+        origins: frozenset[str] = BROWSER_ORIGINS,
         now: Any = time.monotonic,
         account_proof: Any = verify_account_intent,
     ):
@@ -154,7 +158,8 @@ class BridgeServer:
         self.payload_sha256 = self.transfer.sha256 if self.transfer is not None else hashlib.sha256(self.payload).hexdigest()
         self.acknowledged_saved = False
         self.browser_confirmed_saved = False
-        self.origin = origin
+        self.origins = frozenset(origins)
+        self.bound_origin: str | None = None
         self.now = now
         self.account_proof = account_proof
         self.expires_at = now() + PAIR_SECONDS
@@ -187,12 +192,18 @@ class BridgeServer:
             def log_message(self, _format: str, *_args: object) -> None:
                 return
 
+            def _request_origin(self) -> str | None:
+                """One allowed Origin; after pairing or connecting, only the bound one."""
+                origins = self.headers.get_all("Origin")
+                if (self.client_address[0] != "127.0.0.1"
+                        or self.headers.get_all("Host") != [f"127.0.0.1:{bridge.port}"]
+                        or origins is None or len(origins) != 1 or origins[0] not in bridge.origins
+                        or bridge.bound_origin not in (None, origins[0])):
+                    return None
+                return origins[0]
+
             def _authorized_origin(self) -> bool:
-                return (
-                    self.client_address[0] == "127.0.0.1"
-                    and self.headers.get_all("Host") == [f"127.0.0.1:{bridge.port}"]
-                    and self.headers.get_all("Origin") == [bridge.origin]
-                )
+                return self._request_origin() is not None
 
             def _reply(self, status: int, body: bytes = b"{}") -> None:
                 self.send_response(status)
@@ -200,8 +211,9 @@ class BridgeServer:
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
                 self.send_header("X-Content-Type-Options", "nosniff")
-                if self._authorized_origin():
-                    self.send_header("Access-Control-Allow-Origin", bridge.origin)
+                origin = self._request_origin()
+                if origin is not None:
+                    self.send_header("Access-Control-Allow-Origin", origin)
                     self.send_header("Vary", "Origin")
                 self.end_headers()
                 self.wfile.write(body)
@@ -209,7 +221,8 @@ class BridgeServer:
             def do_OPTIONS(self) -> None:
                 metadata_path = re.fullmatch(r"/v1/metadata(?:\?cursor=(0|[1-9][0-9]{0,3}))?", self.path)
                 source_path = re.fullmatch(r"/v2/source/(contacts|calls|messages)\?cursor=(0|[1-9][0-9]{0,9})", self.path)
-                if not self._authorized_origin() or (self.path not in ("/v1/pair", "/v1/complete", "/v1/acknowledge-save", "/v1/confirm-ack-received", "/v2/decline", "/v2/keepalive", "/v3/discover", "/v3/status", "/v3/connect", "/v3/release") and metadata_path is None and source_path is None):
+                origin = self._request_origin()
+                if origin is None or (self.path not in ("/v1/pair", "/v1/complete", "/v1/acknowledge-save", "/v1/confirm-ack-received", "/v2/decline", "/v2/keepalive", "/v3/discover", "/v3/status", "/v3/connect", "/v3/release") and metadata_path is None and source_path is None):
                     self._reply(403)
                     return
                 expected_method = "GET" if metadata_path is not None or source_path is not None or self.path in ("/v3/discover", "/v3/status") else "POST"
@@ -219,7 +232,7 @@ class BridgeServer:
                     self._reply(403)
                     return
                 self.send_response(204)
-                self.send_header("Access-Control-Allow-Origin", bridge.origin)
+                self.send_header("Access-Control-Allow-Origin", origin)
                 self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 self.send_header(
                     "Access-Control-Allow-Headers", "Authorization, Content-Type"
@@ -288,6 +301,10 @@ class BridgeServer:
                     self._reply(400)
                     return
                 with bridge.lock:
+                    origin = self._request_origin()
+                    if origin is None:
+                        self._reply(403)
+                        return
                     if (
                         bridge.now() >= bridge.expires_at
                         or bridge.used
@@ -304,6 +321,7 @@ class BridgeServer:
                     ):
                         self._reply(403)
                         return
+                    bridge.bound_origin = origin
                     bridge.token = secrets.token_urlsafe(32)
                     bridge.transfer_expires_at = bridge.now() + TRANSFER_SECONDS
                     body = json.dumps(bridge._pair_response(), separators=(",", ":")).encode()
@@ -333,6 +351,10 @@ class BridgeServer:
                     self._reply(400)
                     return
                 with bridge.lock:
+                    origin = self._request_origin()
+                    if origin is None:
+                        self._reply(403)
+                        return
                     if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None or bridge.used:
                         self._reply(410)
                         return
@@ -358,6 +380,7 @@ class BridgeServer:
                             any(ord(char) < 32 for char in email + course)):
                         self._reply(409)
                         return
+                    bridge.bound_origin = origin
                     bridge.destination = {**command, "email": email, "course": course}
                     bridge.destination_state = "pending"
                 self._reply(200, b'{"pending":true}')
