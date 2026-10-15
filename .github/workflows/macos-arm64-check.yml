@@ -1,0 +1,75 @@
+name: RC27 Apple Silicon build-only check
+
+# Compiles, tests and assembles the ad-hoc signed Apple Silicon app on the runner.
+# Nothing is signed with a Developer ID, notarized, uploaded, released or published.
+on:
+  push:
+    branches: [codex/brian-rc27-account-origin]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-arm64-check-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  arm64:
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/codex/brian-rc27-account-origin'
+    # Standard Apple Silicon runner on this public repository.
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      AMPLIFAI_TARGET_ARCH: arm64
+      PYTHONNOUSERSITE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify Apple Silicon runner and install pinned uv
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          sw_vers
+          swift --version
+          mkdir -p "$RUNNER_TEMP/uv"
+          curl --fail --location --retry 3 'https://github.com/astral-sh/uv/releases/download/0.12.19/uv-aarch64-apple-darwin.tar.gz' -o "$RUNNER_TEMP/uv/uv.tar.gz"
+          echo "a9a8df1eedeb192f2e47e40e2faabfb387db4b850209118786d42f89dde3e0ba  $RUNNER_TEMP/uv/uv.tar.gz" | shasum -a 256 --check
+          tar -xzf "$RUNNER_TEMP/uv/uv.tar.gz" -C "$RUNNER_TEMP/uv"
+          echo "$RUNNER_TEMP/uv/uv-aarch64-apple-darwin" >> "$GITHUB_PATH"
+      - name: Install hash-locked Python test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv --version
+          uv venv --python 3.12 "$RUNNER_TEMP/test-venv"
+          uv pip sync --require-hashes --python "$RUNNER_TEMP/test-venv/bin/python" source/collector/portable-requirements.lock
+      - name: Run collector and bridge tests
+        shell: bash
+        env:
+          PYTHONPATH: source/collector:source/collector/tests:source/script
+        run: |
+          set -euo pipefail
+          python="$RUNNER_TEMP/test-venv/bin/python"
+          "$python" source/script/test_macos_architecture.py -v
+          "$python" source/script/test_macos_wrapper.py -v
+          "$python" -m unittest test_metadata test_ios_backup test_agent test_bridge test_bridge_ack test_multiyear test_sqlite_size_compat test_sqlite_messages_size_compat test_sqlite_encrypted_size_compat test_nonfinite_duration_pipeline test_workspace test_backup_capacity test_backup_stream test_backup_watchdog test_contact_provenance test_companion_status test_filtered_journal_cleanup test_source_diagnostics test_source_diagnostic_flow -v
+      - name: Run native arm64 Swift checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh source/collector/macos/Tests/check_flow.sh
+          sh source/collector/macos/Tests/check_updater.sh
+          sh source/collector/macos/Tests/check_contact_provenance.sh
+      - name: Build ad-hoc signed Apple Silicon app on the runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash source/script/build_portable_candidate.sh --isolated 2>&1 | tee "$RUNNER_TEMP/arm64-build.log"
+          app="$(tail -n 1 "$RUNNER_TEMP/arm64-build.log")"
+          test -d "$app"
+          lipo -archs "$app/Contents/MacOS/AmplifaiPhone"
+          codesign --display --verbose=2 "$app" 2>&1 | grep -E '^(Identifier|Signature|TeamIdentifier)='
+          cat "$(dirname "$app")/architecture-receipt.json" "$(dirname "$app")/status-receipt.json"
