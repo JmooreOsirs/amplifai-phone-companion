@@ -1,8 +1,8 @@
-# October 15 rc26 package inputs
+# October 15 rc27 package inputs
 
 The accepted source baseline is rc24; `docs/DESKTOP-UPDATE-SOURCE-PINS.json`
 records the released source archives and planned platform identities.
-This ARM source is versioned `2026.10.15-rc26`, build `26101526`;
+This ARM source is versioned `2026.10.15-rc27`, build `26101527`;
 it requires a newly signed/notarized app and newly frozen Python helper because
 the updater and independent running-app status protocol changed. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
