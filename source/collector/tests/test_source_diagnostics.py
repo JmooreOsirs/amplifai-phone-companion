@@ -206,7 +206,11 @@ class DiagnosticHistoryTests(unittest.TestCase):
 
     def test_crash_temporary_is_not_promoted_and_history_remains_available(self):
         before=self.history.record(self.identity,[record()])
-        path=self.history.root/diagnostics._TEMPORARY;path.write_bytes(b'{partial crash bytes');path.chmod(0o600)
+        path=self.history.root/diagnostics._TEMPORARY
+        guard=diagnostics._windows_directory if os.name=='nt' else diagnostics._posix_directory
+        with guard(self.history.root,False) as directory:
+            with os.fdopen(directory.open(diagnostics._TEMPORARY,create=True,writable=True),'wb') as stream:
+                stream.write(b'{partial crash bytes')
         self.assertEqual(before,diagnostics.DiagnosticHistory(self.sessions).load())
         self.assertFalse(path.exists())
 
@@ -324,6 +328,16 @@ class DiagnosticHistoryTests(unittest.TestCase):
         self.assertEqual(payload,path.read_bytes())
         self.assert_storage_error(lambda:self.history.record(str(uuid4()),[record('calls')]))
         self.assertEqual(payload,path.read_bytes())
+
+    @unittest.skipUnless(os.name=='nt','actual Windows protected temporary-file DACL readback required')
+    def test_windows_inherited_crash_temporary_is_refused_without_touching_history(self):
+        self.history.record(self.identity,[record()])
+        payload=(self.history.root/diagnostics._HISTORY).read_bytes()
+        path=self.history.root/diagnostics._TEMPORARY;partial=b'{unprotected crash bytes'
+        path.write_bytes(partial)
+        self.assert_storage_error(self.history.load)
+        self.assertEqual(payload,(self.history.root/diagnostics._HISTORY).read_bytes())
+        self.assertEqual(partial,path.read_bytes())
 
     def test_cross_process_busy_writer_fails_safely_then_relaunch_loads(self):
         before=self.history.record(self.identity,[record()])
