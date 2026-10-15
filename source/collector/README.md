@@ -99,7 +99,9 @@ app and does not read keychain credentials.
 
 After reviewing a selected set, the native window can explicitly open a
 five-minute loopback pairing candidate. It binds only `127.0.0.1:48751`,
-requires the exact pilot HTTPS Origin and Host, a one-time ten-digit code,
+requires exact Host and one exact HTTPS Origin, either
+`https://amplifai.satoris.ai` or `https://amplifai-database-engine.vercel.app`,
+fixed to whichever first pairs or connects, a one-time ten-digit code,
 and a one-use bearer token. It hands off only selected contact names/phones
 and matching call/message metadata; message bodies, source backups and
 passwords never enter the bridge. Requests and payloads are bounded. The

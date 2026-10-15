@@ -77,7 +77,7 @@ struct ContentView: View {
         }
         .onChange(of: model.accountNavigationID) { _, request in
             guard request != nil,
-                  let url = URL(string: "https://amplifai-database-engine.vercel.app/phone/account?continue=reviewed") else { return }
+                  let url = URL(string: "https://amplifai.satoris.ai/phone/account?continue=reviewed") else { return }
             if !NSWorkspace.shared.open(url) { model.accountNavigationFailed() }
         }
         .onChange(of: model.canInstallUpdate) { _, safe in
@@ -175,7 +175,7 @@ struct ContentView: View {
                     .font(.custom("Arial", size: 16))
                     .foregroundStyle(Brand.body)
                 if updater.publishedUpdatesEnabled {
-                    Link("Open signed Mac download guide", destination: URL(string: "https://amplifai-database-engine.vercel.app/phone")!)
+                    Link("Open signed Mac download guide", destination: URL(string: "https://amplifai.satoris.ai/phone")!)
                         .buttonStyle(SecondaryButton())
                     Button("Check for updates") { updater.checkNow() }
                         .buttonStyle(SecondaryButton())
@@ -1098,7 +1098,7 @@ struct ContentView: View {
                     NSPasteboard.general.setString(model.pairCode, forType: .string)
                 }
                 .buttonStyle(SecondaryButton())
-                Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai-database-engine.vercel.app/phone/account")!)
+                Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
                     .buttonStyle(SecondaryButton())
             }
         }

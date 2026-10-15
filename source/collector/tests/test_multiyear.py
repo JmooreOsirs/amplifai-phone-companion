@@ -12,7 +12,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from amplifai_phone.bridge import BridgeServer, selected_metadata
+from amplifai_phone.bridge import PILOT_ORIGIN, BridgeServer, selected_metadata
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import (
     RETAINED_HISTORY_START,
@@ -88,7 +88,7 @@ class MultiYearPhoneTest(unittest.TestCase):
                 def request(method: str, path: str, body: bytes | None = None,
                             token: str | None = None) -> tuple[int, bytes]:
                     connection = http.client.HTTPConnection("127.0.0.1", bridge.port, timeout=5)
-                    headers = {"Origin": bridge.origin, "Host": f"127.0.0.1:{bridge.port}"}
+                    headers = {"Origin": PILOT_ORIGIN, "Host": f"127.0.0.1:{bridge.port}"}
                     if body is not None:
                         headers["Content-Type"] = "application/json"
                     if token is not None:
