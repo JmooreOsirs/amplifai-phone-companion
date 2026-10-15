@@ -1,4 +1,4 @@
-"""Qualify exact signed rc18 bytes against a normally closed running rc17 app on CI."""
+"""Qualify exact signed rc19 bytes against a normally closed running rc18 app on CI."""
 from __future__ import annotations
 
 import argparse
@@ -21,11 +21,12 @@ from amplifai_phone.workspace import ROOT_MARKER, SessionWorkspace, default_sess
 from build_windows_candidate import clean_child_environment, file_records
 from export_windows_pillow_evidence import export as export_pillow_evidence
 from installer_guard import InstallerReadGuard
-from updater import BUILD, INSTALLER_VERSION, MAX_MANIFEST_BYTES, PUBLIC_KEY, VERSION, PreparedUpdate, parse_manifest, verify_installer
+from updater import BUILD, INSTALLER_VERSION, MAX_MANIFEST_BYTES, PUBLIC_KEY, VERSION, PreparedUpdate, cached_manifest, parse_manifest, verify_installer
 from update_installer import READY, RuntimeReadGuard
 from verify_windows_install import verify
 
-BASELINE_SHA256 = "fb3bdff87a55dd89fd46d8659ada291023a12d588ba90fa359849a8687adf8e7"
+BASELINE_BYTES = 41928026
+BASELINE_SHA256 = "295b9940988e21dd71069f7dfe7c6407188c5c0213d61233af8d773a59aef1c9"
 FIXED_DATA_NAME = "AMPLIFai Phone Candidate"
 
 
@@ -77,7 +78,7 @@ def installed_status() -> dict:
         status = json.loads(data)
         expected = {"platform": "windows", "architecture": "x86_64", "channel": "windows-x64-test", "version": VERSION, "build": BUILD}
         if any(status.get(key) != value for key, value in expected.items()):
-            raise ValueError("Relaunched companion identity differs from the signed rc18 candidate")
+            raise ValueError("Relaunched companion identity differs from the signed rc19 candidate")
         return expected
     finally:
         connection.close()
@@ -105,12 +106,12 @@ def qualify(args) -> dict:
         signature_bytes = source.read(129)
     manifest = parse_manifest(manifest_bytes, signature_bytes)
     if (manifest.version, manifest.build, manifest.installer_version) != (VERSION, BUILD, INSTALLER_VERSION):
-        raise ValueError("Signed fixture is not the exact rc18 candidate identity")
+        raise ValueError("Signed fixture is not the exact rc19 candidate identity")
     if args.msi.stat().st_size != manifest.size:
-        raise ValueError("Signed rc18 MSI byte count differs from local fixture")
+        raise ValueError("Signed rc19 MSI byte count differs from local fixture")
     package_bytes = args.msi.read_bytes(); verify_installer(package_bytes, manifest)
-    if args.baseline.stat().st_size != 41034620 or hashlib.sha256(args.baseline.read_bytes()).hexdigest() != BASELINE_SHA256:
-        raise ValueError("Released rc17 MSI differs from the pinned baseline")
+    if args.baseline.stat().st_size != BASELINE_BYTES or hashlib.sha256(args.baseline.read_bytes()).hexdigest() != BASELINE_SHA256:
+        raise ValueError("Released rc18 MSI differs from the pinned baseline")
     installed = Path(os.environ["LOCALAPPDATA"]) / "AMPLIFaiPhone"
     sessions = default_sessions_root(); data_root = sessions.parent
     if data_root.name != FIXED_DATA_NAME or installed.exists() or data_root.exists():
@@ -172,8 +173,11 @@ def qualify(args) -> dict:
                     helper.stdout.close()
             threading.Thread(target=readiness, daemon=True).start()
             line = received.get(timeout=90)
-            if len(line) > 256 or json.loads(line) != READY or old_app.poll() is not None:
+            if len(line) > 256 or not line.endswith(b"\n") or json.loads(line) != READY or old_app.poll() is not None or helper.poll() is not None:
                 raise ValueError("Copied frozen helper did not ready while the old app was running")
+            # Probe only the frozen helper's guards, after releasing qualifier handles.
+            runtime_guard.close(); runtime_guard = None
+            cache_guard.close(); cache_guard = None
             try:
                 with prepared.path.open("wb") as target:
                     target.write(b"guard test: invalid MSI")
@@ -188,8 +192,16 @@ def qualify(args) -> dict:
             else:
                 raise ValueError("Ready helper did not prevent cache directory replacement")
             helper.stdin.write(b'{"schema":1,"action":"commit"}\n'); helper.stdin.flush(); helper.stdin.close()
-            runtime_guard.close(); runtime_guard = None
-            cache_guard.close(); cache_guard = None
+            parent_wait_started = time.monotonic()
+            while time.monotonic() - parent_wait_started < 1.0:
+                if old_app.poll() is not None or helper.poll() is not None:
+                    raise ValueError("Parent or helper exited before the parent-wait observation")
+                marker, _manifest = cached_manifest(prepared.directory)
+                if (marker["ownerPid"] != old_app.pid or marker["helperPid"] != helper.pid
+                        or not marker["installing"] or marker["installerPid"] is not None):
+                    raise ValueError("Installer advanced before the running old companion closed")
+                threading.Event().wait(0.05)
+            parent_wait_seconds = round(time.monotonic() - parent_wait_started, 3)
             close_normally(old_app.pid)
             if old_app.wait(timeout=30) != 0:
                 raise ValueError("Old companion did not close normally")
@@ -209,11 +221,13 @@ def qualify(args) -> dict:
         close_normally(new_app.pid)
         if new_app.wait(timeout=30) != 0:
             raise ValueError("Relaunched companion did not close normally")
-        return {"status": "actual-windows-frozen-helper-running-rc17-to-rc18-handoff", "schema": 1,
+        return {"status": "actual-windows-frozen-helper-running-rc18-to-rc19-handoff", "schema": 1,
                 "msiSha256": manifest.sha256, "version": manifest.version, "build": manifest.build,
                 "installerVersion": manifest.installer_version, "readyWhileOldAppRunning": True,
                 "oldAppClosedNormally": True, "installerWaitedForParentExit": True,
-                "normalInstallerUi": True, "immutableMsiAndDirectory": True, "sessionFixturePreserved": True,
+                "normalInstallerUi": True, "immutableMsiAndDirectory": True,
+                "immutableGuardsOwnedByFrozenHelper": True, "parentAliveAfterCommitSeconds": parent_wait_seconds,
+                "sessionFixturePreserved": True,
                 "installedAppStatus": observed_identity, "installedAppRelaunched": True,
                 "retiredCacheCleanedOnRelaunch": not prepared.directory.exists(),
                 "pillowNativeFilesMatched": len(pillow_evidence["nativeFiles"]),
