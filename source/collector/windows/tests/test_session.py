@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from session import Session, ProtocolError
+from session import WEBSITE_ORIGIN, Session, ProtocolError
 from helper_process import HelperProcess
+from amplifai_phone.bridge import ACCOUNT_ORIGIN, BROWSER_ORIGINS
 
 BINDING = "11111111-1111-4111-8111-111111111111"
 
@@ -55,6 +56,10 @@ def paired():
 
 
 class SessionTests(unittest.TestCase):
+    def test_account_links_open_the_canonical_origin_the_bridge_accepts(self):
+        self.assertEqual(WEBSITE_ORIGIN, ACCOUNT_ORIGIN)
+        self.assertIn(WEBSITE_ORIGIN, BROWSER_ORIGINS)
+
     def test_real_backup_and_processing_transfer_events_remain_truthful(self):
         state = inspected()
         state.approve(True)
