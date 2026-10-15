@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "task": "brian-messages-diagnostics-2026-10-15",
+  "task": "brian-rc27-account-origin-2026-10-15",
   "macosBaseCommit": "f8c38a5217ad7c356abefd95264762a9c9afe478",
   "macosArmSourceArchiveSha256": "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3",
   "macosIntelSourceArchiveSha256": "2d3c228561e3e69b8cc51e5753b1f1d69045b6c023e9cddbcf0114d1bc18483b",
@@ -9,8 +9,8 @@
   "reconciliation": "Preserve released rc25/rc18 updater, collection, explicit review/Save/ACK and platform identity boundaries. Apply bounded Brian protocol-journal fix and durable strict source diagnostics. Older local history never enters a new capture or Save. No Android or Fable redesign changes.",
   "plannedBuilds": {
     "macos-arm64": {
-      "version": "2026.10.15-rc26",
-      "build": "26101526",
+      "version": "2026.10.15-rc27",
+      "build": "26101527",
       "bundleId": "ai.satoris.amplifai.phone.candidate"
     },
     "macos-intel-test": {
