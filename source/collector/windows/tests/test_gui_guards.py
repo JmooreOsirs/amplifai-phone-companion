@@ -63,7 +63,7 @@ def source_window():
     window._rendering_contacts = False
     window.source_details_window = None
     for name in ("backup_setting", "backup_check", "activity_stage", "progress_caption", "activity_measurement",
-                 "details_button", "progress_label"):
+                 "details_button", "diagnostic_details_button", "progress_label"):
         setattr(window, name, Mock())
     return window
 

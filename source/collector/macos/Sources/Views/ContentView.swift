@@ -26,6 +26,13 @@ struct ContentView: View {
                 header
                 if model.companionStatus == .anotherAppRunning || model.companionStatus == .unavailable { companionStatusNotice }
                 if !model.residues.isEmpty { residueNotice }
+                if model.diagnosticRetention == .failed {
+                    Text("Safe source details could not be retained or restored on this Mac. Copy any current source details before closing.")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.body)
+                        .panel()
+                }
+                if !model.sourceDiagnosticHistory.isEmpty { previousSourceDetails }
                 if model.phase == .error || (model.phase == .idle && model.needsStorageReview) { statusPanel }
                 if (!model.helperRunning || model.backupSettingCheckInProgress) &&
                     (model.phase == .idle || model.phase == .error || model.phase == .completed) {
@@ -637,6 +644,7 @@ struct ContentView: View {
 
     private var contactPanel: some View {
         VStack(alignment: .leading, spacing: 20) {
+            currentSourceDetails
             if let workspace = model.workspace {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
@@ -667,6 +675,58 @@ struct ContentView: View {
         .foregroundStyle(Brand.body)
         .panel()
         .onAppear { model.prepareWorkspace() }
+    }
+
+    @ViewBuilder private var currentSourceDetails: some View {
+        if !model.missingSources.isEmpty || !model.currentSourceDiagnostics.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(["calls", "messages"], id: \.self) { category in
+                    if model.missingSources.contains(category) {
+                        Text(model.unavailableDescription(category))
+                            .foregroundStyle(Brand.muted)
+                    }
+                }
+                if !model.currentSourceDiagnostics.isEmpty {
+                    DisclosureGroup("Source details for this run") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(model.currentSourceDiagnostics) { record in
+                                Text(record.detail).textSelection(.enabled)
+                            }
+                            if model.diagnosticRetention == .retained {
+                                Text("These safe source details were retained on this Mac.")
+                            }
+                        }
+                        .foregroundStyle(Brand.muted)
+                        .padding(.top, 6)
+                    }
+                    .font(.custom("Arial", size: 16))
+                }
+            }
+        }
+    }
+
+    private var previousSourceDetails: some View {
+        DisclosureGroup("Previous run source details") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Saved on this Mac for support. These previous results are not part of this collection or its account save.")
+                    .foregroundStyle(Brand.muted)
+                ForEach(model.sourceDiagnosticHistory) { attempt in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Previous run · \(attempt.dateLabel)")
+                            .font(.custom("Arial", size: 16).weight(.bold))
+                            .foregroundStyle(Brand.heading)
+                        ForEach(attempt.sourceDiagnostics) { record in
+                            Text(record.detail)
+                                .foregroundStyle(Brand.muted)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 6)
+        }
+        .font(.custom("Arial", size: 16))
+        .panel()
     }
 
     private var contactSelectionSummary: some View {
@@ -970,14 +1030,7 @@ struct ContentView: View {
             Text("Observed messages: \(model.missingSources.contains("messages") ? "unavailable" : dateRange(model.observedMessageEarliest, model.observedMessageLatest)).")
                 .font(.caption)
                 .foregroundStyle(Brand.muted)
-            if !model.missingSources.isEmpty {
-                ForEach(["calls", "messages"], id: \.self) { category in
-                    if model.missingSources.contains(category) {
-                        Text(model.unavailableDescription(category))
-                            .foregroundStyle(Brand.muted)
-                    }
-                }
-            }
+            currentSourceDetails
             Text("A local preview is not an account save. Keep this recovery copy until the browser confirms the matching save. Disconnect or closing after confirmation discards this private local review.")
                 .foregroundStyle(Brand.muted)
             Button(model.pairCode.isEmpty ? "Create local browser pairing" : "Reconnect current reviewed selection") {

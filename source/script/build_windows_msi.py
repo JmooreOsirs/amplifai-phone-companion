@@ -16,7 +16,7 @@ from build_windows_candidate import file_records
 NS = "http://schemas.microsoft.com/wix/2006/wi"
 ET.register_namespace("", NS)
 UPGRADE_CODE = "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871"
-VERSION = "1.0.18"
+VERSION = "1.0.19"
 
 
 def tag(name: str) -> str:
@@ -159,7 +159,7 @@ def build(package: Path, receipt_path: Path, output: Path, candle: Path, light: 
     xml_path = output / "AmplifaiPhone.wxs"
     author_xml(records, package).write(xml_path, encoding="utf-8", xml_declaration=True)
     object_path = output / "AmplifaiPhone.wixobj"
-    msi_path = output / "AmplifaiPhone-rc18-unsigned.msi"
+    msi_path = output / "AmplifaiPhone-rc19-unsigned.msi"
     for command, label in (
         ([str(candle), "-nologo", "-arch", "x64", "-out", str(object_path), str(xml_path)], "compile"),
         ([str(light), "-nologo", "-out", str(msi_path), str(object_path)], "link"),
@@ -172,7 +172,7 @@ def build(package: Path, receipt_path: Path, output: Path, candle: Path, light: 
     result = {
         "status": "private-unsigned-per-user-candidate",
         "installerVersion": VERSION, "upgradeCode": UPGRADE_CODE,
-        "version": "2026.10.14-rc18", "build": "26101418",
+        "version": "2026.10.15-rc19", "build": "26101519",
         "channel": "windows-x64-test", "installerTrust": "unsigned-test",
         "msi_sha256": sha256(msi_path), "msi_bytes": msi_path.stat().st_size,
         "wxs_sha256": sha256(xml_path),

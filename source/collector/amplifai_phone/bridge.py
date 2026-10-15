@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from uuid import uuid4
 
-from .ios_backup import IPhoneCapture
+from .ios_backup import IPhoneCapture, capture_source_diagnostics
 from .metadata import interactions_for_contacts, select_people
 from .paged_transfer import PagedTransfer
 from .record_store import SelectionSnapshot
@@ -120,6 +120,9 @@ def selected_metadata(capture: IPhoneCapture, ids: set[int]) -> bytes:
             for item in interactions
         ],
     }
+    diagnostics = capture_source_diagnostics(capture)
+    if diagnostics:
+        payload["sourceDiagnostics"] = diagnostics
     encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
     if len(encoded) > MAX_TRANSFER_BYTES:
         raise BridgeError("Selected metadata exceeds the local handoff limit")

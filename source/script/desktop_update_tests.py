@@ -148,7 +148,7 @@ class UpdateReleaseTests(unittest.TestCase):
     def test_mac_tamper_wrong_cpu_channel_bundle_and_build(self):
         data = self.signed_feed()
         with self.assertRaises(ValueError):
-            release.validate_appcast(data.replace(b"2026.10.14", b"2026.10.15"), "macos-arm64", "26101324", TEST_PUBLIC, self.openssl)
+            release.validate_appcast(data.replace(b"AMPLIFai Phone ", b"AMPLIFai PhoneX", 1), "macos-arm64", "26101324", TEST_PUBLIC, self.openssl)
         for key, value in (("architecture", "x86_64"), ("channel", "macos-intel-test"),
                            ("bundleId", "ai.wrong"), ("build", "26101324")):
             spec = self.spec(); spec[key] = value

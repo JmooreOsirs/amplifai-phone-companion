@@ -22,6 +22,7 @@ GUI_FILES = (
     "collector/windows/installer_guard.py",
     "collector/windows/update_installer.py",
     "collector/amplifai_phone/companion_status.py",
+    "collector/amplifai_phone/source_diagnostics.py",
     "collector/amplifai_phone/windows_storage.py",
 )
 LOGO = "public/brand/amplifai-by-nexus-original.png"
@@ -243,7 +244,7 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
         "python_version": platform.python_version(), "python_build": platform.python_build(),
         "python_implementation": platform.python_implementation(),
         "gui_source_sha256": source_digest,
-        "version": "2026.10.14-rc18", "build": "26101418",
+        "version": "2026.10.15-rc19", "build": "26101519",
         "channel": "windows-x64-test", "installer_trust": "unsigned-test",
         "entry_sha256": _sha256(source / ENTRY),
         "lock_sha256": EXPECTED_LOCK_SHA256,

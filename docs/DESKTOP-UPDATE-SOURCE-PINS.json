@@ -1,15 +1,34 @@
 {
   "schema": 1,
-  "task": "desktop-update-lifecycle-2026-10-14",
+  "task": "brian-messages-diagnostics-2026-10-15",
   "macosBaseCommit": "f8c38a5217ad7c356abefd95264762a9c9afe478",
   "macosArmSourceArchiveSha256": "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3",
   "macosIntelSourceArchiveSha256": "2d3c228561e3e69b8cc51e5753b1f1d69045b6c023e9cddbcf0114d1bc18483b",
   "windowsBaseCommit": "a8fe16ee584abcd9cbee0de5fde953d9a7a262f6",
   "windowsSourceArchiveSha256": "db1bf4db67e22fe633d17dcf4560f0c89b816b20cba4e085ed79e40903a3a19f",
-  "reconciliation": "Preserve the Intel rc24 commit's released ARM/Intel authored and shared collector source; copy exact Windows rc17 wrapper, lockfiles, packaging scripts, tests and workflows. Do not downgrade shared collector code or modify Android.",
+  "reconciliation": "Preserve released rc25/rc18 updater, collection, explicit review/Save/ACK and platform identity boundaries. Apply bounded Brian protocol-journal fix and durable strict source diagnostics. Older local history never enters a new capture or Save. No Android or Fable redesign changes.",
   "plannedBuilds": {
-    "macos-arm64": { "version": "2026.10.14-rc25", "build": "26101425", "bundleId": "ai.satoris.amplifai.phone.candidate" },
-    "macos-intel-test": { "version": "2026.10.14-rc25-intel1", "build": "261014251", "bundleId": "ai.satoris.amplifai.phone.intel-candidate" },
-    "windows-x64-test": { "version": "2026.10.14-rc18", "build": "26101418", "installerVersion": "1.0.18" }
-  }
+    "macos-arm64": {
+      "version": "2026.10.15-rc26",
+      "build": "26101526",
+      "bundleId": "ai.satoris.amplifai.phone.candidate"
+    },
+    "macos-intel-test": {
+      "version": "2026.10.15-rc26-intel1",
+      "build": "261015261",
+      "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
+    },
+    "windows-x64-test": {
+      "version": "2026.10.15-rc19",
+      "build": "26101519",
+      "installerVersion": "1.0.19"
+    }
+  },
+  "previousQualifiedNativeHead": "03170491751fb08bf8ddba9023a12b1933a012ed",
+  "brianMessageFix": {
+    "pullRequest": "https://github.com/Osirs-io/amplifai-phone-companion/pull/2",
+    "head": "8c94f4ef2fb7de7bff269311c8a60de2f8083e53",
+    "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
+  },
+  "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json"
 }

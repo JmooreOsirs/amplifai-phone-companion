@@ -4,8 +4,12 @@ The authored AMPLIFai Phone companion is Copyright (C) 2026 OSIRS LLC and is
 licensed under GPL-3.0-or-later. The accompanying LICENSE and COPYRIGHT retain
 the license and warranty terms. THIRD-PARTY-NOTICES.txt retains upstream terms.
 
-This release adds compatible desktop update discovery, native idle and unsaved
-review gates, and a bounded local running-app status service. It preserves the
+This release includes the bounded protocol journal fix and strict source-failure
+diagnostics retained through partial success and local relaunch. Current facts
+are included in the transfer hashes; previous-run history stays local and is
+never attached to a new capture or Save. It retains compatible update discovery,
+native idle and unsaved review gates, and the bounded running-app status service.
+It preserves the
 collection, review, explicit account Save and acknowledgment boundaries. The
 source does not establish physical phone, customer account or hardware acceptance.
 

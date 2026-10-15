@@ -40,6 +40,9 @@ from .metadata import (
     read_messages,
 )
 from .record_store import RecordStore
+from .source_diagnostics import (
+    MAX_SAFE_INTEGER, diagnostic_from_sample, validate_source_diagnostics,
+)
 from .workspace import SessionWorkspace, WorkspaceError
 
 # Info.plist can grow with the installed-application inventory. It is already a
@@ -78,12 +81,22 @@ class IPhoneCapture:
     record_store: RecordStore | None = None
     backup_encrypted: bool | None = field(default=None, compare=False)
     unavailable_reasons: tuple[tuple[str, str], ...] = field(default=(), compare=False)
+    source_diagnostics: tuple[dict[str, object], ...] = field(default=(), compare=False)
 
     def close(self) -> None:
         if self.record_store is not None:
             self.record_store.close()
         if self.review_workspace is not None:
             self.review_workspace.__exit__(None, None, None)
+
+
+def capture_source_diagnostics(capture: IPhoneCapture) -> list[dict[str, object]]:
+    records = validate_source_diagnostics(list(capture.source_diagnostics))
+    reasons = dict(capture.unavailable_reasons)
+    if any(record["source"] not in capture.missing_sources
+           or reasons.get(record["source"]) != record["reason"] for record in records):
+        raise ValueError("Source diagnostics do not match unavailable capture sources")
+    return records
 
 
 def _read_plist(path: Path) -> dict:
@@ -134,6 +147,18 @@ def _extract_database(
     source_kind = next(
         (key for key, path in DATABASES.items() if path == relative_path), None
     )
+
+    def component_failure(component: str, reason: str, declared: object = None) -> None:
+        if payload_diagnostic_callback is None:
+            return
+        encrypted = getattr(backup, "is_encrypted", None)
+        payload_diagnostic_callback({
+            "source": source_kind, "component": component, "reason": reason,
+            "result": "unavailable",
+            "manifest_bytes": declared if type(declared) is int and 0 <= declared <= MAX_SAFE_INTEGER else None,
+            "encrypted": encrypted if type(encrypted) is bool else None,
+        })
+
     for suffix in ("", "-wal", "-shm"):
         component = suffix.removeprefix("-") or "database"
         try:
@@ -149,6 +174,7 @@ def _extract_database(
             or isinstance(entry.size, bool)
             or entry.size < 0
         ):
+            component_failure(component, "selected_payload_size")
             raise SelectedPayloadIntegrityError(
                 "Invalid selected payload size", code="selected_payload_size"
             )
@@ -157,6 +183,7 @@ def _extract_database(
             or not re.fullmatch(r"[0-9a-f]{40}", entry.file_id)
             or not entry.is_file()
         ):
+            component_failure(component, "selected_payload_identity", entry.size)
             raise SelectedPayloadIntegrityError(
                 "Invalid selected payload identity", code="selected_payload_identity"
             )
@@ -164,6 +191,7 @@ def _extract_database(
         if workspace is not None:
             workspace.checked_path(source)
         if not source.is_file():
+            component_failure(component, "selected_payload_missing", entry.size)
             raise SelectedPayloadMissing(
                 f"Selected backup payload missing: {Path(relative_path).name}{suffix}"
             ) from None
@@ -216,9 +244,10 @@ def _extract_database(
                 raw_chunk_callback=raw_chunk if raw_hasher is not None else None,
                 copied_chunk_callback=copied_hasher.update if copied_hasher is not None else None,
             )
-        except SelectedPayloadIntegrityError:
+        except SelectedPayloadIntegrityError as error:
             if diagnostic is not None:
-                payload_diagnostic_callback({**diagnostic, "result": "copy_failed"})
+                payload_diagnostic_callback({**diagnostic, "result": "copy_failed",
+                                             "reason": error.code})
             raise
         validation = None
         if copied != entry.size:
@@ -262,6 +291,7 @@ def _extract_database(
                 if hasattr(validation, 'producer_digest_present'):
                     sample['producer_digest_present'] = validation.producer_digest_present
                     sample['producer_digest_matches'] = validation.producer_checksum_matches
+                    sample['plaintext_copy_checksum_matches'] = validation.plaintext_copy_checksum_matches
                     sample['sidecars_absent'] = validation.sidecars_absent
             payload_diagnostic_callback(sample)
         if copied != entry.size:
@@ -372,40 +402,75 @@ def _parse_entries(
     missing = []
     reasons: dict[str, str] = {}
     available = {}
+    latest: dict[tuple[str, str], dict[str, object]] = {}
+    failures: dict[tuple[str, str], dict[str, object]] = {}
+
+    def observe_diagnostic(value: dict[str, object]) -> None:
+        metadata = diagnostic_from_sample(value, reason="source_integrity")
+        if metadata is not None:
+            latest[(metadata["source"], metadata["component"])] = metadata
+        failure = diagnostic_from_sample(value)
+        if failure is not None:
+            failures[(failure["source"], failure["component"])] = failure
+
+    def source_unavailable(source: str, reason: str) -> None:
+        observed = [record for record in failures.values() if record["source"] == source]
+        if not observed:
+            metadata = latest.get((source, "database"))
+            if metadata is None:
+                metadata = diagnostic_from_sample({
+                    "source": source, "component": "database", "result": "unavailable",
+                    "encrypted": getattr(backup, "is_encrypted", None),
+                }, reason=reason)
+            observed = [{**metadata, "result": "unavailable"}] if metadata is not None else []
+        for record in observed:
+            fixed = {**record, "reason": reason}
+            failures[(source, fixed["component"])] = fixed
+            if payload_diagnostic_callback is not None:
+                payload_diagnostic_callback(fixed)
+
     for key, path in DATABASES.items():
         destination = extracted / key
         try:
-            diagnostic_option = ({"payload_diagnostic_callback": payload_diagnostic_callback}
-                                 if payload_diagnostic_callback is not None else {})
             available[key] = _extract_database(
                 backup, path, destination, bound_callback, workspace, progress_callback,
-                **diagnostic_option,
+                payload_diagnostic_callback=observe_diagnostic,
             )
         except (SelectedPayloadMissing, SelectedPayloadIntegrityError) as error:
+            reason = (
+                "selected_payload_missing" if isinstance(error, SelectedPayloadMissing)
+                else error.code if error.code in OPTIONAL_PAYLOAD_REASON_CODES
+                or (key == "contacts" and error.code == "selected_contacts_integrity")
+                else "source_integrity"
+            )
+            source_unavailable(key, reason)
             if key == "contacts":
                 raise
             available[key] = False
             # Keep only fixed diagnostic codes. A manifest-listed missing file
             # differs from an absent source; neither is a genuine zero-row DB.
-            reasons[key] = (
-                "selected_payload_missing" if isinstance(error, SelectedPayloadMissing)
-                else error.code if error.code in OPTIONAL_PAYLOAD_REASON_CODES
-                else "source_integrity"
-            )
+            reasons[key] = reason
         if bound_callback is not None:
             bound_callback()
         if not available[key]:
             missing.append(key)
             if key != "contacts":
                 reasons.setdefault(key, "absent")
+                if reasons[key] == "absent":
+                    source_unavailable(key, "absent")
     if available["contacts"]:
         try:
             contacts = read_contacts(extracted / "contacts", bound_callback, record_store)
         except UnsupportedSchema as error:
+            source_unavailable("contacts", "contacts_schema")
             raise ContactsSchemaUnsupported(
                 "Contact database schema is unsupported"
             ) from error
+        except SourceReadCapacityLimit:
+            source_unavailable("contacts", "source_capacity")
+            raise
         except sqlite3.DatabaseError as error:
+            source_unavailable("contacts", "selected_contacts_integrity")
             raise SelectedPayloadIntegrityError(
                 "Contact database is invalid", code="selected_contacts_integrity"
             ) from error
@@ -423,6 +488,7 @@ def _parse_entries(
             missing.append(key)
             reasons[key] = ("source_capacity" if isinstance(error, SourceReadCapacityLimit) else
                             "unsupported_schema" if isinstance(error, UnsupportedSchema) else "source_invalid")
+            source_unavailable(key, reasons[key])
             return SourceResult(0, (), 0)
 
     calls = optional_source(
@@ -436,6 +502,8 @@ def _parse_entries(
         contacts, calls, messages, now.isoformat(), since.isoformat(), tuple(missing),
         backup_encrypted=encrypted_state if isinstance(encrypted_state, bool) else None,
         unavailable_reasons=tuple((key, reasons[key]) for key in ("calls", "messages") if key in reasons),
+        source_diagnostics=tuple(record for record in failures.values()
+                                 if record["source"] in reasons),
     )
 
 
@@ -606,6 +674,7 @@ async def collect_iphone(
                             parsed.collected_at, parsed.since, parsed.missing_sources,
                             review_workspace, record_store,
                             parsed.backup_encrypted, parsed.unavailable_reasons,
+                            parsed.source_diagnostics,
                         )
                         return review_capture
                     except BaseException:

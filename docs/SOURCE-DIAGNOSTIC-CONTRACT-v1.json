@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "field": "sourceDiagnostics",
+  "optionalForOlderBuilds": true,
+  "maxRecords": 12,
+  "uniqueBy": [
+    "source",
+    "component"
+  ],
+  "sources": [
+    "contacts",
+    "calls",
+    "messages"
+  ],
+  "components": [
+    "database",
+    "wal",
+    "shm",
+    "journal"
+  ],
+  "reasons": [
+    "absent",
+    "selected_payload_missing",
+    "selected_payload_invalid",
+    "selected_payload_size",
+    "selected_payload_identity",
+    "selected_payload_file_type",
+    "selected_payload_length",
+    "selected_payload_crypto",
+    "source_integrity",
+    "unsupported_schema",
+    "source_capacity",
+    "source_invalid",
+    "selected_contacts_integrity",
+    "contacts_schema"
+  ],
+  "results": [
+    "length_mismatch",
+    "copy_failed",
+    "unavailable"
+  ],
+  "requiredRecordFields": [
+    "source",
+    "component",
+    "reason",
+    "result",
+    "declaredBytes",
+    "rawBytes",
+    "copiedBytes",
+    "encrypted",
+    "entryKeyPresent",
+    "validationCode",
+    "validationScope",
+    "producerDigest",
+    "copyDigest",
+    "sidecars"
+  ],
+  "nullableByteCounts": [
+    "declaredBytes",
+    "rawBytes",
+    "copiedBytes"
+  ],
+  "maximumByteCount": 9007199254740991,
+  "nullableBooleans": [
+    "encrypted",
+    "entryKeyPresent"
+  ],
+  "nullableValidationCodes": [
+    "insufficient_manifest",
+    "active_wal",
+    "active_journal",
+    "active_shm",
+    "unsafe",
+    "checksum_mismatch",
+    "structural_invalid",
+    "timed_out",
+    "unavailable",
+    "unsupported_tokenizer",
+    "validated_contacts_tables",
+    "contacts_relationship_invalid",
+    "contacts_types_invalid",
+    "validated_messages_database",
+    "copy_checksum_mismatch",
+    "sidecar_present",
+    "schema_unsupported",
+    "validated_call_database"
+  ],
+  "nullableValidationScopes": [
+    "contacts_tables_v1",
+    "messages_database_v1",
+    "encrypted_contacts_tables_v1",
+    "encrypted_calls_database_v1",
+    "encrypted_messages_database_v1"
+  ],
+  "producerDigest": [
+    "matched",
+    "mismatched",
+    "absent",
+    "unknown"
+  ],
+  "copyDigest": [
+    "matched",
+    "mismatched",
+    "unknown"
+  ],
+  "sidecars": [
+    "present",
+    "absent",
+    "unknown"
+  ],
+  "invariants": [
+    "Reject unknown keys, duplicate source/component, unsafe integers, bool-as-int, nonfinite values and nonallowlisted strings.",
+    "This array contains failure/unavailable evidence, not successful-source metadata. Valid readable zero has no failure record.",
+    "A completed capture or bridge contains only diagnostics for its current missing/unavailable source, with reason matching unavailableReasons. Fatal Contacts evidence is local only because required Contacts still fail closed.",
+    "All fields enter schema1 payload or schema2 manifest hash, per-category Save fingerprint, persisted source receipt and report readback. Never place personal source rows in diagnostics.",
+    "Older payloads may omit this field. Do not infer validation facts for older reports.",
+    "Historical local diagnostics must be labeled previous run and never attached to a new capture or Save."
+  ],
+  "localRetention": {
+    "maximumAttempts": 10,
+    "maximumRecordsPerAttempt": 12,
+    "maximumAgeDays": 30,
+    "maximumSerializedBytes": 65536,
+    "identity": "random attempt UUID only; no account or device identity",
+    "location": "private marker-owned diagnostics directory beside sessions; never in temporary backup sessions",
+    "failure": "fixed diagnostic-storage state visible; never raw exceptions/paths"
+  },
+  "excluded": [
+    "phone databases",
+    "raw manifests",
+    "file IDs",
+    "private paths",
+    "personal rows",
+    "names",
+    "phone numbers",
+    "email addresses",
+    "message content",
+    "passwords",
+    "keys",
+    "raw digest values",
+    "arbitrary error strings"
+  ],
+  "localHistoryEntry": {
+    "attemptId": "canonical random UUIDv4 string",
+    "createdAt": "UTC Unix integer seconds",
+    "sourceDiagnostics": "strict v1 normalized array"
+  },
+  "localHistoryOrder": "newest first",
+  "nativeEvents": {
+    "selected-payload-diagnostic": "existing event now carries exact normalized failure record plus kind",
+    "capture": "optional sourceDiagnostics for this current capture only",
+    "residue": "optional sourceDiagnosticHistory loaded from durable store",
+    "diagnostic-storage": {
+      "state": [
+        "retained",
+        "failed"
+      ],
+      "codeOnFailure": "diagnostics_unavailable",
+      "attemptIdOnRetained": "canonical UUIDv4"
+    }
+  }
+}

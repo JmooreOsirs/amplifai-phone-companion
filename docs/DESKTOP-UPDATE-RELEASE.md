@@ -6,9 +6,9 @@ The release owner qualifies packages and corresponding source, publishes immutab
 
 | Channel | Feed | Bundle / installer | Planned build | CPU |
 | --- | --- | --- | --- | --- |
-| `macos-arm64` | `/phone/macos/appcast.xml` | `ai.satoris.amplifai.phone.candidate` | `26101425` / `2026.10.14-rc25` | `arm64` |
-| `macos-intel-test` | `/phone/macos/intel-appcast.xml` | `ai.satoris.amplifai.phone.intel-candidate` | `261014251` / `2026.10.14-rc25-intel1` | `x86_64` |
-| `windows-x64-test` | `/phone/windows/update-v1.json` + `.sig` | per-user MSI `1.0.18` | `26101418` / `2026.10.14-rc18` | `x86_64` |
+| `macos-arm64` | `/phone/macos/appcast.xml` | `ai.satoris.amplifai.phone.candidate` | `26101526` / `2026.10.15-rc26` | `arm64` |
+| `macos-intel-test` | `/phone/macos/intel-appcast.xml` | `ai.satoris.amplifai.phone.intel-candidate` | `261015261` / `2026.10.15-rc26-intel1` | `x86_64` |
+| `windows-x64-test` | `/phone/windows/update-v1.json` + `.sig` | per-user MSI `1.0.19` | `26101519` / `2026.10.15-rc19` | `x86_64` |
 
 Use the public key already embedded in the companion: `vtvaNfb6+dVMP4tz6PeLMXTeVQH7lK7o1zzy4WeqUGs=`. The existing Keychain account is `ai.satoris.amplifai.phone.candidate`; Sparkle's default `ed25519` account is absent. A harmless synthetic signature was verified independently against this public key. No product key was generated, exported, imported, or rotated.
 

@@ -9,9 +9,7 @@ struct CollectorFlowChecks {
         guard value() else { throw Failure.check(reason) }
     }
     private static func event(_ json: String) throws -> AgentEvent {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(AgentEvent.self, from: Data(json.utf8))
+        try AgentEvent.decode(Data(json.utf8))
     }
     private static func emittedReviewID(_ commands: [Data]) throws -> String {
         guard let command = commands.last,
@@ -31,6 +29,7 @@ struct CollectorFlowChecks {
         catch { FileHandle.standardError.write(Data("macOS flow check failed: \(error)\n".utf8)); Darwin.exit(1) }
     }
     private static func checks() throws {
+        try SourceDiagnosticChecks.run()
         try architecturePreservesSessionNamespace()
         try optionalSourceReasonCopy()
         try boundedSelectedPayloadContext()
@@ -128,15 +127,14 @@ struct CollectorFlowChecks {
         try require(CollectorModel.sessionProductName == "AMPLIFai Phone Intel Test" &&
                     environment["AMPLIFAI_INTEL_CANDIDATE"] == "1",
                     "Intel helper and free-space display must use the isolated Intel sessions")
-        try require(SupportDiagnosticReporter.build == "261013241",
-                    "Intel diagnostics must identify the distinct Intel build")
         #else
         try require(CollectorModel.sessionProductName == "AMPLIFai Phone Candidate" &&
                     environment["AMPLIFAI_INTEL_CANDIDATE"] == nil,
                     "ARM rebuild must retain the accepted sessions namespace")
-        try require(SupportDiagnosticReporter.build == "26101324",
-                    "ARM diagnostics must retain the accepted build identity")
         #endif
+        try require(!SupportDiagnosticReporter.build.isEmpty &&
+                    SupportDiagnosticReporter.build == (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String),
+                    "Diagnostics must use this executable's actual validated bundle metadata")
         let code = "A1|\(SupportDiagnosticReporter.build)|ABCD1234|connecting|phone_connection|0|0|0|-"
         try require(SupportDiagnosticReporter.request(for: code) != nil,
                     "The architecture's diagnostic build must be accepted locally")
@@ -145,9 +143,9 @@ struct CollectorFlowChecks {
     private static func boundedSelectedPayloadContext() throws {
         let model = CollectorModel()
         model.phase = .processing
-        model.receive(try event(#"{"kind":"selected-payload-diagnostic","source":"contacts","component":"database","result":"length_mismatch","declaredBytes":8192,"rawBytes":4112,"copiedBytes":4096,"encrypted":true,"producerDigest":"mismatched","sidecars":"absent","privatePath":"/Users/owner/AddressBook.sqlitedb"}"#))
+        model.receive(try event(#"{"kind":"selected-payload-diagnostic","source":"contacts","component":"database","reason":"selected_payload_length","result":"length_mismatch","declaredBytes":8192,"rawBytes":4112,"copiedBytes":4096,"encrypted":true,"entryKeyPresent":true,"validationCode":"structural_invalid","validationScope":"encrypted_contacts_tables_v1","producerDigest":"mismatched","copyDigest":"unknown","sidecars":"absent"}"#))
         model.receive(try event(#"{"kind":"error","code":"selected_payload_length","stage":"processing"}"#))
-        try require(model.failureContext.contains("contacts database") &&
+        try require(model.failureContext.contains("Contacts · database") &&
                     model.failureContext.contains("8192") && model.failureContext.contains("mismatched"),
                     "Copyable local failure context must retain bounded source and byte evidence")
         try require(!model.failureContext.contains("/Users/") &&
@@ -155,7 +153,9 @@ struct CollectorFlowChecks {
                     "Private paths and payload counts must not enter the support code")
         let rejected = CollectorModel()
         rejected.phase = .processing
-        rejected.receive(try event(#"{"kind":"selected-payload-diagnostic","source":"/private/source","component":"database","result":"length_mismatch","declaredBytes":8192,"encrypted":true,"producerDigest":"matched","sidecars":"absent"}"#))
+        if let invalid = try? event(#"{"kind":"selected-payload-diagnostic","source":"/private/source","component":"database","result":"length_mismatch","declaredBytes":8192,"encrypted":true,"producerDigest":"matched","sidecars":"absent"}"#) {
+            rejected.receive(invalid)
+        }
         try require(rejected.selectedPayloadContext.isEmpty,
                     "Unexpected source identities must never enter the local error view")
     }

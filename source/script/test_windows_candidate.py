@@ -33,8 +33,11 @@ class WindowsCandidateBoundaryTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(relative.encode())
         first = gui_digest(self.root)
+        (self.root / "collector/amplifai_phone/source_diagnostics.py").write_bytes(b"changed diagnostic validation")
+        second = gui_digest(self.root)
+        self.assertNotEqual(second, first)
         (self.root / GUI_FILES[1]).write_bytes(b"changed")
-        self.assertNotEqual(gui_digest(self.root), first)
+        self.assertNotEqual(gui_digest(self.root), second)
 
     def test_gui_receipt_rejects_missing_or_linked_input(self):
         with self.assertRaises((FileNotFoundError, ValueError)):

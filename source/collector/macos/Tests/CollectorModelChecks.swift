@@ -13,9 +13,7 @@ struct CollectorModelChecks {
     }
 
     private static func event(_ json: String) throws -> AgentEvent {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(AgentEvent.self, from: Data(json.utf8))
+        try AgentEvent.decode(Data(json.utf8))
     }
 
     static func main() async {

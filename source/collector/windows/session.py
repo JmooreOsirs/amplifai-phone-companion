@@ -8,6 +8,10 @@ import re
 import uuid
 from typing import TextIO
 
+from amplifai_phone.source_diagnostics import (
+    merge_source_diagnostics, validate_source_diagnostics, validate_source_diagnostic_history,
+)
+
 DISCLOSURE_VERSION = "native-local-collection-v1"
 CONTACT_PAGE_SIZE = 200
 REVIEW_PAGE_SIZE = 1_000
@@ -50,8 +54,28 @@ def unavailable_detail(source: str, reason: str | None, backup_encrypted: bool |
         "unsupported_schema": "source format could not be read",
         "source_capacity": "local processing limit reached",
         "source_invalid": "not a readable database",
+        "selected_contacts_integrity": "selected contacts failed integrity validation",
+        "contacts_schema": "contacts format could not be read",
     }
     return details.get(reason, "reason not available from this helper")
+
+
+def diagnostic_summary(item: dict) -> str:
+    def amount(key: str) -> str:
+        return "unknown" if item[key] is None else f"{item[key]:,}"
+    return (f"{item['source'].title()} ({item['component']}): "
+            f"{unavailable_detail(item['source'], item['reason'], item['encrypted'])}. "
+            f"Bytes reported / received / copied: {amount('declaredBytes')} / {amount('rawBytes')} / {amount('copiedBytes')}.")
+
+
+def diagnostic_context(item: dict) -> str:
+    def flag(value: bool | None) -> str:
+        return "unknown" if value is None else "yes" if value else "no"
+    def code(key: str) -> str:
+        return "unknown" if item[key] is None else item[key].replace("_", " ")
+    return (diagnostic_summary(item) + f"\nResult: {code('result')}. Encrypted: {flag(item['encrypted'])}; entry key present: {flag(item['entryKeyPresent'])}. "
+            f"Validation: {code('validationCode')} ({code('validationScope')}). "
+            f"Producer digest: {item['producerDigest']}; copy digest: {item['copyDigest']}; sidecars: {item['sidecars']}.")
 
 
 def contact_source_details(item: dict) -> str:
@@ -90,6 +114,10 @@ class Session:
         self.review_counts = (0, 0, 0)
         self.missing: list[str] = []
         self.unavailable_reasons: dict[str, str] = {}
+        self.source_diagnostics: list[dict] = []
+        self.source_diagnostic_history: list[dict] = []
+        self.diagnostic_storage_status = ""
+        self._current_diagnostic_attempt_id: str | None = None
         self.backup_encrypted: bool | None = None
         self.checked_backup_setting: bool | None = None
         self.backup_check_status = "Backup setting: Unknown — no read-only check completed."
@@ -185,13 +213,43 @@ class Session:
     @property
     def coverage_status(self) -> str:
         if not self._capture_received:
-            return "Call and message coverage has not been read."
-        labels = (("calls", "Calls", self.source_counts[0]), ("messages", "Messages", self.source_counts[1]))
-        return " · ".join(
-            f"{label} unavailable: {unavailable_detail(source, self.unavailable_reasons.get(source), self.backup_encrypted)}"
-            if source in self.missing else f"{label}: {observed} readable phone entries"
-            for source, label, observed in labels
-        )
+            coverage = "Call and message coverage has not been read."
+        else:
+            labels = (("calls", "Calls", self.source_counts[0]), ("messages", "Messages", self.source_counts[1]))
+            coverage = " · ".join(
+                f"{label} unavailable: {unavailable_detail(source, self.unavailable_reasons.get(source), self.backup_encrypted)}"
+                if source in self.missing else f"{label}: {observed} readable phone entries"
+                for source, label, observed in labels
+            )
+        summaries = [coverage]
+        if self.source_diagnostics:
+            summaries.append("Current collection source details: " + "\n".join(map(diagnostic_summary, self.source_diagnostics)))
+        previous = self.previous_diagnostics
+        if previous:
+            latest = previous[0]["sourceDiagnostics"]
+            attempts = "attempt" if len(previous) == 1 else "attempts"
+            summaries.append(f"Previous run diagnostics ({len(previous)} retained {attempts}): " +
+                             "; ".join(diagnostic_summary(item) for item in latest) + " Not part of this collection or account Save.")
+        if self.diagnostic_storage_status:
+            summaries.append(self.diagnostic_storage_status)
+        return "\n".join(summaries)
+
+    @property
+    def previous_diagnostics(self) -> list[dict]:
+        return [item for item in self.source_diagnostic_history if item["attemptId"] != self._current_diagnostic_attempt_id]
+
+    @property
+    def diagnostic_details(self) -> str:
+        sections = []
+        if self.source_diagnostics:
+            sections.append("Current collection source details\n" + "\n\n".join(map(diagnostic_context, self.source_diagnostics)))
+        for number, attempt in enumerate(self.previous_diagnostics, 1):
+            sections.append(f"Previous run {number} — local attempt {attempt['attemptId']}\n"
+                            "Historical evidence only; not part of this collection or account Save.\n" +
+                            "\n\n".join(map(diagnostic_context, attempt["sourceDiagnostics"])))
+        if self.diagnostic_storage_status:
+            sections.append(self.diagnostic_storage_status)
+        return "\n\n".join(sections)
 
     @property
     def can_select(self) -> bool:
@@ -257,6 +315,9 @@ class Session:
             self.reviewed = self.saved_acknowledged = self.save_receipt_pending = False
             self.missing = []
             self.unavailable_reasons = {}
+            self.source_diagnostics = []
+            self.diagnostic_storage_status = ""
+            self._current_diagnostic_attempt_id = None
             self.backup_encrypted = None
             self.source_counts = (0, 0)
             self.transfer_status = "Waiting for the iPhone. No phone data has been received."
@@ -588,7 +649,7 @@ class Session:
         kind = event.get("kind")
         if not isinstance(kind, str):
             raise ProtocolError("Invalid helper event kind")
-        if self._stopping and kind != "error":
+        if self._stopping and kind not in {"error", "selected-payload-diagnostic", "diagnostic-storage"}:
             return None
         if kind == BACKUP_CHECK_MODE:
             if (self.mode != BACKUP_CHECK_MODE or self._backup_check_received or
@@ -656,6 +717,31 @@ class Session:
                 self.reviewed = False
                 self.phase = "selecting"
                 self.status = "Browser pairing closed. Your contact choices remain; change them and review again."
+        elif kind == "selected-payload-diagnostic":
+            if self.mode != "connect" or self._capture_received:
+                raise ProtocolError("Unexpected source diagnostic")
+            try:
+                facts = validate_source_diagnostics([{key: value for key, value in event.items() if key != "kind"}])
+                self.source_diagnostics = merge_source_diagnostics(self.source_diagnostics, facts)
+            except ValueError as error:
+                raise ProtocolError("Invalid source diagnostic") from error
+        elif kind == "diagnostic-storage":
+            state = event.get("state")
+            if state == "retained" and set(event) == {"kind", "state", "attemptId"}:
+                attempt = event.get("attemptId")
+                try:
+                    parsed = uuid.UUID(attempt) if type(attempt) is str else None
+                except ValueError:
+                    parsed = None
+                if parsed is None or str(parsed) != attempt or parsed.version != 4 or parsed.variant != uuid.RFC_4122:
+                    raise ProtocolError("Invalid retained diagnostic identity")
+                if self.mode == "connect":
+                    self._current_diagnostic_attempt_id = attempt
+                self.diagnostic_storage_status = "Source diagnostics retained locally for this attempt."
+            elif state == "failed" and set(event) == {"kind", "state", "code"} and event.get("code") == "diagnostics_unavailable":
+                self.diagnostic_storage_status = "Source diagnostics could not be retained locally. Current details remain visible until a new collection starts."
+            else:
+                raise ProtocolError("Invalid diagnostic storage result")
         elif kind == "capture":
             if self.mode != "connect" or self._capture_received:
                 raise ProtocolError("Invalid contact preview")
@@ -674,10 +760,20 @@ class Session:
                     or not isinstance(reason, str) or reason not in UNAVAILABLE_REASONS
                     for source, reason in reasons.items())):
                 raise ProtocolError("Invalid source reason")
+            try:
+                facts = validate_source_diagnostics(event.get("sourceDiagnostics", []))
+                if any(item["source"] not in missing or reasons.get(item["source"]) != item["reason"] for item in facts):
+                    raise ValueError("Source diagnostic does not match capture availability")
+                pending = [item for item in self.source_diagnostics
+                           if item["source"] in missing and reasons.get(item["source"]) == item["reason"]]
+                facts = merge_source_diagnostics(pending, facts)
+            except ValueError as error:
+                raise ProtocolError("Invalid capture source diagnostics") from error
             self._accept_contact_page(event, first=True)
             self.source_counts = (calls, messages)
             self.missing = missing
             self.unavailable_reasons = dict(reasons)
+            self.source_diagnostics = facts
             self.backup_encrypted = backup_encrypted
             self._capture_received = True
             self.phase = "selecting"
@@ -824,7 +920,12 @@ class Session:
                 if not isinstance(item, dict) or not re.fullmatch(r"session-[0-9a-f]{32}", str(item.get("name", ""))):
                     raise ProtocolError("Invalid cleanup target")
                 count(item.get("bytes"))
+            try:
+                history = validate_source_diagnostic_history(event.get("sourceDiagnosticHistory", []))
+            except ValueError as error:
+                raise ProtocolError("Invalid source diagnostic history") from error
             self.residue = items
+            self.source_diagnostic_history = history
             self.inspected = True
         elif kind == "cleared":
             if self.mode != "clear-residue":

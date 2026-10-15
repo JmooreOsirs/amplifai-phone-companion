@@ -15,6 +15,8 @@ swiftc -parse-as-library -target "$native_arch-apple-macos14.0" \
     "$native_root/collector/macos/Sources/Services/ContactWorkspace.swift" \
     "$native_root/collector/macos/Sources/Services/SupportDiagnosticReporter.swift" \
     "$native_root/collector/macos/Sources/Models/AgentEvent.swift" \
+    "$native_root/collector/macos/Tests/SourceDiagnosticChecks.swift" \
     "$native_root/collector/macos/Tests/CollectorFlowChecks.swift" \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$native_root/collector/macos/Info.plist" \
     -o "$native_temp/CollectorFlowChecks"
 "$native_temp/CollectorFlowChecks"

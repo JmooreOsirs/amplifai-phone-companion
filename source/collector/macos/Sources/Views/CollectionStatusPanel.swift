@@ -89,6 +89,9 @@ struct CollectionStatusPanel: View {
             if let space = model.workspaceSpaceStatus {
                 Text(space).foregroundStyle(Brand.body).textSelection(.enabled)
             }
+            if model.diagnosticRetention == .retained {
+                Text("These safe source details were retained on this Mac.").foregroundStyle(Brand.muted)
+            }
             Button("Copy error details") {
                 let details = [model.statusTitle, model.errorMessage, model.failureContext,
                                model.workspaceSpaceStatus ?? "",

@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
 
-from .ios_backup import IPhoneCapture
+from .ios_backup import IPhoneCapture, capture_source_diagnostics
 from .metadata import (
     Contact,
     Interaction,
@@ -87,6 +87,9 @@ class PagedTransfer:
                 "unavailableReasons": dict(capture.unavailable_reasons),
                 "sampleContactNames": samples, "sources": sources,
             }
+            diagnostics = capture_source_diagnostics(capture)
+            if diagnostics:
+                self.manifest["sourceDiagnostics"] = diagnostics
             self.sha256 = hashlib.sha256(_encode(self.manifest)).hexdigest()
             self.db.commit()
         except BaseException as error:

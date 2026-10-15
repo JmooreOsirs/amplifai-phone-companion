@@ -54,6 +54,11 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var transferElapsedSeconds = 0
     @Published private(set) var diagnosticReference = ""
     @Published private(set) var selectedPayloadContext = ""
+    @Published private(set) var currentSourceDiagnostics: [SourceDiagnostic] = []
+    @Published private(set) var sourceDiagnosticHistory: [SourceDiagnosticAttempt] = []
+    enum DiagnosticRetention: Equatable { case unreported, retained, failed }
+    @Published private(set) var diagnosticRetention: DiagnosticRetention = .unreported
+    private let diagnosticBuild: String?
     @Published private(set) var errorElapsedSeconds = 0
     @Published private(set) var handoffID = ""
     @Published private(set) var handoffAcknowledged = false
@@ -178,14 +183,9 @@ final class CollectorModel: ObservableObject {
     private var attemptedDiagnosticCode: String?
     private var backupProgressSamples: [(date: Date, percent: Double)] = []
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
-    private let decoder: JSONDecoder = {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return decoder
-    }()
-
-    init(commandWriter: ((Data) -> Void)? = nil) {
+    init(commandWriter: ((Data) -> Void)? = nil, bundleInformation: [String: Any]? = Bundle.main.infoDictionary) {
         self.commandWriter = commandWriter
+        diagnosticBuild = SupportDiagnosticReporter.validatedBuild(bundleInformation)
     }
 
     private var commandReady: Bool { helperRunning || commandWriter != nil }
@@ -471,9 +471,7 @@ final class CollectorModel: ObservableObject {
         guard phase == .error, !statusCheckFailureActive, !diagnosticReference.isEmpty else { return "" }
         let stage = lastErrorStage ?? "connecting"
         let code = lastErrorCode.flatMap { SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil } ?? "collection_failed"
-        let expectedBuild = SupportDiagnosticReporter.build
-        if let declaredBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-           declaredBuild != expectedBuild { return "" }
+        guard let expectedBuild = diagnosticBuild else { return "" }
         return "A1|\(expectedBuild)|\(diagnosticReference)|\(stage)|\(code)|\(errorElapsedSeconds)|\(transferBytes)|\(retainedBytes)|\(lastDeviceStatus.map(String.init) ?? "-")"
     }
 
@@ -539,6 +537,8 @@ final class CollectorModel: ObservableObject {
         attemptedDiagnosticCode = nil
         diagnosticDelivery = .idle
         selectedPayloadContext = ""
+        currentSourceDiagnostics = []
+        diagnosticRetention = .unreported
         diagnosticReference = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8))
         transferElapsedSeconds = 0
         errorElapsedSeconds = 0
@@ -1363,7 +1363,7 @@ final class CollectorModel: ObservableObject {
         while let newline = outputBuffer.firstIndex(of: 10) {
             let line = Data(outputBuffer[..<newline])
             outputBuffer.removeSubrange(...newline)
-            guard let event = try? decoder.decode(AgentEvent.self, from: line) else {
+            guard let event = try? AgentEvent.decode(line) else {
                 process?.terminate()
                 needsStorageReview = true
                 awaitHelperExit()
@@ -1466,23 +1466,11 @@ final class CollectorModel: ObservableObject {
             connectionTransport = event.transport == "wifi" ? "Wi-Fi" : "USB"
         case "selected-payload-diagnostic":
             guard phase == .processing || phase == .connecting,
-                  let source = event.source, ["contacts", "calls", "messages"].contains(source),
-                  let component = event.component, ["database", "wal", "shm"].contains(component),
-                  let result = event.result, ["length_mismatch", "copy_failed"].contains(result),
-                  let encrypted = event.encrypted,
-                  let declared = event.declaredBytes, declared >= 0, declared <= 9_007_199_254_740_991,
-                  let producer = event.producerDigest,
-                  ["matched", "mismatched", "absent", "unknown"].contains(producer),
-                  let sidecars = event.sidecars,
-                  ["present", "absent", "unknown"].contains(sidecars) else { return }
-            func safeCount(_ value: Int64?) -> String {
-                guard let value, value >= 0, value <= 9_007_199_254_740_991 else { return "unknown" }
-                return String(value)
-            }
-            selectedPayloadContext = "Selected source \(source) \(component): manifest \(declared) bytes, " +
-                "selected file \(safeCount(event.rawBytes)) bytes, local copy \(safeCount(event.copiedBytes)) bytes. " +
-                "Encrypted: \(encrypted ? "yes" : "no"); producer digest: \(producer); " +
-                "sidecars: \(sidecars)."
+                  let record = event.selectedSourceDiagnostic else { return }
+            currentSourceDiagnostics.removeAll { $0.id == record.id }
+            guard currentSourceDiagnostics.count < 12 else { return }
+            currentSourceDiagnostics.append(record)
+            selectedPayloadContext = currentSourceDiagnostics.map(\.detail).joined(separator: "\n")
         case "capture":
             let firstPage = event.contacts ?? []
             let total = event.totalContacts ?? firstPage.count
@@ -1492,7 +1480,24 @@ final class CollectorModel: ObservableObject {
                 rejectContactPage()
                 return
             }
-            selectedPayloadContext = ""
+            let captureMissing = Set(event.missing ?? [])
+            let captureReasons = event.unavailableReasons ?? [:]
+            let suppliedDiagnostics = event.sourceDiagnostics ?? []
+            guard suppliedDiagnostics.count <= 12,
+                  Set(suppliedDiagnostics.map(\.id)).count == suppliedDiagnostics.count,
+                  suppliedDiagnostics.allSatisfy({ $0.source != "contacts" && captureMissing.contains($0.source) && captureReasons[$0.source] == $0.reason }) else {
+                fail("The local helper returned inconsistent source details.")
+                return
+            }
+            var captureDiagnostics = currentSourceDiagnostics.filter {
+                $0.source != "contacts" && captureMissing.contains($0.source) && captureReasons[$0.source] == $0.reason
+            }
+            for record in suppliedDiagnostics {
+                captureDiagnostics.removeAll { $0.id == record.id }
+                captureDiagnostics.append(record)
+            }
+            currentSourceDiagnostics = captureDiagnostics
+            selectedPayloadContext = currentSourceDiagnostics.map(\.detail).joined(separator: "\n")
             declineLocalCollection()
             clearSuggestions()
             workspace = nil
@@ -1750,7 +1755,15 @@ final class CollectorModel: ObservableObject {
         case "residue":
             declineLocalCollection()
             residues = event.sessions ?? []
+            sourceDiagnosticHistory = event.sourceDiagnosticHistory ?? []
             needsStorageReview = false
+        case "diagnostic-storage":
+            if event.state == "failed", event.code == "diagnostics_unavailable" {
+                diagnosticRetention = .failed
+            } else if event.state == "retained", let attempt = event.attemptId,
+                      SourceDiagnosticAttempt.validID(attempt) {
+                diagnosticRetention = .retained
+            }
         case "cleared":
             declineLocalCollection()
             residues = []

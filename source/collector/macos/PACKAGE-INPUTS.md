@@ -1,8 +1,8 @@
-# October 14 rc25 package inputs
+# October 15 rc26 package inputs
 
 The accepted source baseline is rc24; `docs/DESKTOP-UPDATE-SOURCE-PINS.json`
 records the released source archives and planned platform identities.
-This ARM source is versioned `2026.10.14-rc25`, build `26101425`;
+This ARM source is versioned `2026.10.15-rc26`, build `26101526`;
 it requires a newly signed/notarized app and newly frozen Python helper because
 the updater and independent running-app status protocol changed. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
@@ -254,3 +254,21 @@ The Android `2026.10.09-rc9` website APK is independently published with
 its matching source and existing signing certificate. It does not qualify this
 Mac helper, normal installation or physical phones. Previously published Mac
 and Android packages remain rollback artifacts.
+
+
+## rc26 source failure diagnostics
+
+Brian PR2's protocol journal cleanup requires a successful terminal Backup result
+and the exact host-created empty-file identity; real source files stay intact.
+The strict v1 contract is `docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json`. Current
+failure metadata survives optional-source partial success and is hashed into both
+transfer formats. Private bounded history survives helper/app relaunch in a
+separate marker-owned diagnostics directory; it is labeled Previous run and
+never added to a new capture or account Save.
+
+The review and error disclosure reuse the existing Source details/technical
+disclosure, Arial typography, Brand colors and panel primitives. Readable zero
+remains zero. A1 support metadata derives the actual validated bundle build.
+Native/source/package evidence does not establish a physical phone transfer or
+Jeff's explicit account Save, report readback and return-login. The compatible
+web receiver must be qualified before new native publication/feed promotion.

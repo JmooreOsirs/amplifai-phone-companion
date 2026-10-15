@@ -61,5 +61,5 @@ codesign --verify --deep --strict "$PORTABLE_APP"
 python3 "$ROOT_DIR/script/verify_macos_architecture.py" "$PORTABLE_APP" --arch arm64 --minimum-macos 14.0 \
   --output "$OUTPUT_DIR/architecture-receipt.json"
 python3 "$ROOT_DIR/script/verify_frozen_companion_status.py" --helper "$RESOURCES/helper/amplifai-agent" \
-  --architecture arm64 --version 2026.10.14-rc25 --build 26101425 > "$OUTPUT_DIR/status-receipt.json"
+  --architecture arm64 --version 2026.10.15-rc26 --build 26101526 > "$OUTPUT_DIR/status-receipt.json"
 echo "$PORTABLE_APP"

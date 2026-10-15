@@ -105,6 +105,9 @@ class AgentProtocolTest(unittest.TestCase):
             "component": "database", "result": "length_mismatch",
             "encrypted": True, "producerDigest": "mismatched", "sidecars": "absent",
             "declaredBytes": 8192, "rawBytes": 4112, "copiedBytes": 4096,
+            # The v1 additive contract carries fixed reason/verification facts only.
+            "reason": "selected_payload_length", "entryKeyPresent": None,
+            "validationCode": None, "validationScope": None, "copyDigest": "unknown",
         })
         self.assertEqual(events[-1], {
             "kind": "error", "code": "selected_payload_length", "stage": "processing",

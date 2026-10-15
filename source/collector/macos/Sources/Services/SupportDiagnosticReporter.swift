@@ -3,11 +3,13 @@ import Foundation
 enum SupportDiagnosticReporter {
     private static let endpoint = URL(string: "https://amplifai-database-engine.vercel.app/api/v1/companion-diagnostics")!
     static var build: String {
-        #if arch(x86_64)
-        "261013241"
-        #else
-        "26101324"
-        #endif
+        validatedBuild(Bundle.main.infoDictionary) ?? ""
+    }
+    static func validatedBuild(_ information: [String: Any]?) -> String? {
+        guard let value = information?["CFBundleVersion"] as? String,
+              (1...12).contains(value.utf8.count), value.utf8.first != 48,
+              value.utf8.allSatisfy({ (48...57).contains($0) }) else { return nil }
+        return value
     }
     static let reportCodes: Set<String> = [
         "backup_host_space", "backup_password", "backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed", "backup_stalled", "backup_no_file_progress", "backup_time_limit",
@@ -20,9 +22,10 @@ enum SupportDiagnosticReporter {
         "workspace_unavailable", "workspace_unsafe",
     ]
 
-    static func request(for code: String) -> URLRequest? {
+    static func request(for code: String, bundleInformation: [String: Any]? = Bundle.main.infoDictionary) -> URLRequest? {
         let fields = code.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-        guard fields.count == 9, fields[0] == "A1", fields[1] == build,
+        guard let actualBuild = validatedBuild(bundleInformation),
+              fields.count == 9, fields[0] == "A1", fields[1] == actualBuild,
               fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil,
               ["connecting", "backup", "processing", "review"].contains(fields[3]),
               reportCodes.contains(fields[4]),

@@ -200,6 +200,8 @@ class PhoneWindow:
         self.password_button.pack(side="left")
         self.label(outer, "Select contacts below. Nothing is selected by default; unavailable history is not zero activity.")
         ttk.Label(outer, textvariable=self.coverage_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
+        self.diagnostic_details_button = ttk.Button(outer, text="Source diagnostic details", command=self.show_source_diagnostics)
+        self.diagnostic_details_button.pack(anchor="w", pady=(0, 8))
         paging = ttk.Frame(outer)
         paging.pack(fill="x", pady=(0, 8))
         self.search_entry = ttk.Entry(paging, textvariable=self.contact_query, width=28)
@@ -290,18 +292,36 @@ class PhoneWindow:
         if not 0 <= index < len(self.state.contacts):
             return
         item = self.state.contacts[index]
+        self.show_readonly_details("Contact source details", item["name"] or "Unnamed contact", contact_source_details(item), height=7)
+
+    def show_source_diagnostics(self) -> None:
+        if self.state.diagnostic_details:
+            self.show_readonly_details("Source diagnostic details", "Current collection and previous runs",
+                                       self.state.diagnostic_details, height=18, scrollable=True)
+
+    def show_readonly_details(self, title: str, heading: str, text: str, *, height: int, scrollable: bool = False) -> None:
         self.close_source_details()
         details = tk.Toplevel(self.window)
         self.source_details_window = details
-        details.title("Contact source details")
+        details.title(title)
         details.configure(background=BACKGROUND)
         details.minsize(400, 240)
         body = ttk.Frame(details, padding=16)
         body.pack(fill="both", expand=True)
-        self.label(body, item["name"] or "Unnamed contact", heading=True)
-        content = self.readable_text(body, height=7)
+        self.label(body, heading, heading=True)
+        if scrollable:
+            details.maxsize(self.window.winfo_width(), self.window.winfo_height())
+            text_frame = ttk.Frame(body)
+            text_frame.pack(fill="both", expand=True)
+            content = self.readable_text(text_frame, height=height)
+            content.pack_configure(side="left", fill="both", expand=True)
+            scroll = ttk.Scrollbar(text_frame, command=content.yview)
+            content.configure(yscrollcommand=scroll.set)
+            scroll.pack(side="right", fill="y")
+        else:
+            content = self.readable_text(body, height=height)
         content.configure(state="normal")
-        content.insert("1.0", contact_source_details(item))
+        content.insert("1.0", text)
         content.configure(state="disabled")
         ttk.Button(body, text="Close details", command=self.close_source_details).pack(anchor="w", pady=(12, 0))
         details.protocol("WM_DELETE_WINDOW", self.close_source_details)
@@ -531,6 +551,7 @@ class PhoneWindow:
         self.status.set(state.status)
         self.transfer_status.set(state.transfer_status)
         self.coverage_status.set(state.coverage_status)
+        self.diagnostic_details_button.configure(state="normal" if state.diagnostic_details else "disabled")
         self.backup_setting.set(state.backup_check_status)
         self.backup_check.configure(state="normal" if state.can_check_backup_setting and getattr(self, "status_owned", True) and getattr(self, "update_state", "") != "installing" else "disabled")
         self.activity_stage.set(state.activity_stage)

@@ -14,7 +14,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TextIO
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pymobiledevice3.exceptions import (
     ConnectionTerminatedError,
@@ -32,7 +32,7 @@ from .backup_watchdog import (
 from .bridge import BridgeError, BridgeServer
 from .capture_runtime import run_local_capture
 from .ios_backup import (
-    BackupEncryptionPreflightError, IPhoneCapture, collect_iphone,
+    BackupEncryptionPreflightError, IPhoneCapture, capture_source_diagnostics, collect_iphone,
     inspect_backup_encryption,
 )
 from .metadata import (
@@ -47,53 +47,26 @@ from .metadata import (
     UnsupportedSchema,
 )
 from .record_store import RecordCollection, SelectionSnapshot
+from .source_diagnostics import (
+    DiagnosticHistory, DiagnosticsStorageError, diagnostic_from_sample,
+    validate_source_diagnostics,
+)
 from .workspace import WorkspaceError, abandoned_sessions, clear_abandoned
 
 MAX_COMMAND_BYTES = 600_000
 CONTACT_PAGE_SIZE = 200
 MAX_CONTACT_QUERY_LENGTH = 120
 MAX_PASSWORD_LENGTH = 512
-MAX_SAFE_BYTE_COUNT = 9_007_199_254_740_991
 
 
 def _payload_diagnostic_event(value: dict[str, object]) -> dict[str, object] | None:
-    """Only copyable local failure context; never a path, digest or source row."""
-    source = value.get("source")
-    component = value.get("component")
-    result = value.get("result")
-    if (type(source) is not str or source not in {"contacts", "calls", "messages"}
-            or type(component) is not str or component not in {"database", "wal", "shm"}
-            or type(result) is not str or result not in {"length_mismatch", "copy_failed"}
-            or type(value.get("encrypted")) is not bool):
+    """Project internal samples onto the exact public diagnostic allowlist."""
+    try:
+        record = (validate_source_diagnostics([value])[0] if "declaredBytes" in value
+                  else diagnostic_from_sample(value))
+    except ValueError:
         return None
-    counts: dict[str, int | None] = {}
-    for output, original in (("declaredBytes", "manifest_bytes"),
-                             ("rawBytes", "raw_after_bytes"),
-                             ("copiedBytes", "copied_plaintext_bytes")):
-        amount = value.get(original)
-        if original == "raw_after_bytes" and amount is None:
-            amount = value.get("raw_before_bytes")
-        if amount is not None and (type(amount) is not int or not 0 <= amount <= MAX_SAFE_BYTE_COUNT):
-            return None
-        counts[output] = amount
-    present = value.get("producer_digest_present")
-    matched = value.get("producer_digest_matches")
-    if present is False:
-        producer = "absent"
-    elif matched is True:
-        producer = "matched"
-    elif matched is False:
-        producer = "mismatched"
-    else:
-        producer = "unknown"
-    sidecars = value.get("sidecars_absent")
-    return {
-        "kind": "selected-payload-diagnostic", "source": source,
-        "component": component, "result": result,
-        "encrypted": value["encrypted"], "producerDigest": producer,
-        "sidecars": "absent" if sidecars is True else "present" if sidecars is False else "unknown",
-        **counts,
-    }
+    return {"kind": "selected-payload-diagnostic", **record} if record is not None else None
 
 
 class CaptureCancelled(KeyboardInterrupt):
@@ -266,9 +239,12 @@ def run_connect(
     sink: TextIO,
     collector: Callable[..., Awaitable[IPhoneCapture]] = collect_iphone,
     require_encrypted_backup: bool = False,
+    *, diagnostic_history: DiagnosticHistory | None = None,
 ) -> int:
     _emit(sink, {"kind": "state", "state": "connecting"})
     capture_stage = "connecting"
+    attempt_id = str(uuid4())
+    diagnostics: dict[tuple[str, str], dict[str, object]] = {}
 
     def password_provider() -> str:
         nonlocal capture_stage
@@ -305,7 +281,21 @@ def run_connect(
     def payload_diagnostic(value: dict[str, object]) -> None:
         event = _payload_diagnostic_event(value)
         if event is not None:
+            record = {key: value for key, value in event.items() if key != "kind"}
+            identity = (record["source"], record["component"])
+            if diagnostics.get(identity) == record:
+                return
+            diagnostics[identity] = record
             _emit(sink, event)
+            if diagnostic_history is not None:
+                try:
+                    diagnostic_history.record(attempt_id, list(diagnostics.values()))
+                except DiagnosticsStorageError:
+                    _emit(sink, {"kind": "diagnostic-storage", "state": "failed",
+                                 "code": "diagnostics_unavailable"})
+                else:
+                    _emit(sink, {"kind": "diagnostic-storage", "state": "retained",
+                                 "attemptId": attempt_id})
 
     bridge: BridgeServer | None = None
     capture: IPhoneCapture | None = None
@@ -322,6 +312,9 @@ def run_connect(
             collector_options["require_encrypted_backup"] = True
         capture = run_local_capture(collector(**collector_options))
         capture_stage = "review"
+        captured_diagnostics = capture_source_diagnostics(capture)
+        for record in captured_diagnostics:
+            payload_diagnostic(record)
         _emit(
             sink,
             {
@@ -333,6 +326,7 @@ def run_connect(
                 "missing": capture.missing_sources,
                 "backupEncrypted": capture.backup_encrypted,
                 "unavailableReasons": dict(capture.unavailable_reasons),
+                **({"sourceDiagnostics": captured_diagnostics} if captured_diagnostics else {}),
             },
         )
         while True:
@@ -552,9 +546,17 @@ def run_connect(
                 capture.close()
 
 
-def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
+def run_admin(mode: str, sink: TextIO, root: Path | None = None, *,
+              diagnostic_history: DiagnosticHistory | None = None) -> int:
     try:
         if mode == "inspect":
+            history = []
+            if diagnostic_history is not None:
+                try:
+                    history = diagnostic_history.load()
+                except DiagnosticsStorageError:
+                    _emit(sink, {"kind": "diagnostic-storage", "state": "failed",
+                                 "code": "diagnostics_unavailable"})
             items = abandoned_sessions(root)
             _emit(
                 sink,
@@ -564,6 +566,7 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None) -> int:
                         {"name": item.name, "bytes": item.bytes_on_disk}
                         for item in items
                     ],
+                    **({"sourceDiagnosticHistory": history} if history else {}),
                 },
             )
         elif mode == "clear-residue":
@@ -614,14 +617,19 @@ def main() -> int:
     )
     parser.add_argument("--require-encrypted-backup", action="store_true")
     args = parser.parse_args()
+    diagnostic_history = DiagnosticHistory()
     if args.mode != "connect":
-        return run_admin(args.mode, sys.stdout)
+        return run_admin(args.mode, sys.stdout, diagnostic_history=diagnostic_history)
 
     def terminate(_signal_number: int, _frame: object) -> None:
         raise CaptureCancelled()
 
     signal.signal(signal.SIGTERM, terminate)
-    return run_connect(sys.stdin, sys.stdout, require_encrypted_backup=args.require_encrypted_backup)
+    return run_connect(
+        sys.stdin, sys.stdout,
+        require_encrypted_backup=args.require_encrypted_backup,
+        diagnostic_history=diagnostic_history,
+    )
 
 
 if __name__ == "__main__":

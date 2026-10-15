@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build RC25 as a separate, ad-hoc signed Intel candidate; never install it.
+"""Build RC26 as a separate, ad-hoc signed Intel candidate; never install it.
 
 Run with the prepared CPython 3.12 Intel environment. This intentionally does
 not modify the existing ARM release scripts, sign with Developer ID, contact
@@ -11,9 +11,10 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -21,29 +22,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "source"
 MINIMUM = "14.0"
-BASELINE_PATH = ROOT / "docs/INTEL-RC24-BASELINE.json"
-INTEL_MODIFIED_BASE_FILES = {
-    "source/collector/macos/Sources/Services/CompanionUpdater.swift",
-    "source/collector/macos/Info.plist",
-    "source/collector/macos/PACKAGE-INPUTS.md",
-    "source/collector/macos/Sources/App/AmplifaiPhoneApp.swift",
-    "source/collector/agent_entry.py",
-    "source/script/build_portable_candidate.sh",
-    "source/script/package_macos_dmg.sh",
-    "source/collector/macos/Sources/Views/ContentView.swift",
-    "source/collector/macos/Tests/CompanionUpdaterChecks.swift",
-    "source/collector/macos/Tests/check_flow.sh",
-    "source/collector/macos/Tests/check_updater.sh",
-    "source/collector/macos/Tests/check_contact_provenance.sh",
-    "source/collector/macos/Sources/Services/CollectorModel.swift",
-    "source/collector/macos/Sources/Services/SupportDiagnosticReporter.swift",
-    "source/collector/macos/Tests/CollectorFlowChecks.swift",
-    "source/collector/macos/Tests/CollectorModelChecks.swift",
-    "source/collector/amplifai_phone/workspace.py",
-    "source/collector/amplifai_phone/sqlite_size_compat.py",
-    "source/collector/tests/test_workspace.py",
-    "source/collector/tests/test_sqlite_size_compat.py",
-}
+VERSION = "2026.10.15-rc26-intel1"
+BUILD = "261015261"
+RELEASE = "macos-2026.10.15-rc26-intel1-test"
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def run(command: list[str], **kwargs):
@@ -55,20 +38,85 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def verify_base_source() -> dict:
-    baseline = json.loads(BASELINE_PATH.read_text())
-    if baseline.get("release") != "macos-2026.10.13-rc24-release":
-        raise ValueError("Intel build requires the accepted RC24 source baseline")
-    files = baseline["files"]
-    if not INTEL_MODIFIED_BASE_FILES.issubset(files):
-        raise ValueError("RC24 baseline omits a modified Intel source file")
-    for relative, expected in files.items():
-        if relative in INTEL_MODIFIED_BASE_FILES:
+def _git(repo: Path, *arguments: str) -> bytes:
+    return subprocess.check_output(["git", "-C", str(repo), *arguments], stderr=subprocess.PIPE)
+
+
+def source_freeze(repo: Path, expected_commit: str) -> dict:
+    """Freeze only clean committed authored inputs; independent of host/time/paths."""
+    if not COMMIT.fullmatch(expected_commit):
+        raise ValueError("Expected a full approved Git commit")
+    commit = _git(repo, "rev-parse", "HEAD").decode().strip()
+    if commit != expected_commit:
+        raise ValueError("Checkout differs from the approved source commit")
+    if _git(repo, "status", "--porcelain=v1", "--untracked-files=all"):
+        raise ValueError("Authored source checkout must be clean before freezing")
+    records = []
+    for row in _git(repo, "ls-tree", "-r", "-z", "--full-tree", commit).split(b"\0"):
+        if not row:
             continue
-        path = ROOT / relative
-        if not path.is_file() or sha256(path) != expected:
-            raise ValueError(f"Source differs from accepted RC24: {relative}")
-    return baseline
+        header, encoded_name = row.split(b"\t", 1)
+        mode, kind, blob = header.decode().split()
+        name = encoded_name.decode("utf-8")
+        parts = PurePosixPath(name)
+        if mode not in {"100644", "100755"} or kind != "blob" or parts.is_absolute() or ".." in parts.parts or "\\" in name:
+            raise ValueError("Unsupported authored source entry")
+        path = repo
+        for component in parts.parts:
+            path /= component
+            if path.is_symlink():
+                raise ValueError("Authored source cannot traverse a link")
+        if not path.is_file():
+            raise ValueError("Authored source input is missing")
+        content = _git(repo, "cat-file", "blob", blob)
+        checksum = hashlib.sha256(content).hexdigest()
+        if sha256(path) != checksum or path.stat().st_size != len(content):
+            raise ValueError("Working source differs from the committed blob")
+        if (bool(path.stat().st_mode & 0o111)) != (mode == "100755"):
+            raise ValueError("Authored source executable mode differs from Git")
+        records.append({"path": name, "bytes": len(content), "sha256": checksum,
+                        "git_mode": mode, "git_blob": blob})
+    if not records or len({record["path"] for record in records}) != len(records):
+        raise ValueError("Authored source inventory is empty or duplicated")
+    if (_git(repo, "rev-parse", "HEAD").decode().strip() != expected_commit
+            or _git(repo, "status", "--porcelain=v1", "--untracked-files=all")):
+        raise ValueError("Authored source changed while freezing")
+    return {"schema": 1, "kind": "intel-rc26-authored-source-freeze", "version": VERSION,
+            "build": BUILD, "commit": commit,
+            "tree": _git(repo, "rev-parse", commit + "^{tree}").decode().strip(),
+            "files": sorted(records, key=lambda record: record["path"])}
+
+
+def freeze_bytes(receipt: dict) -> bytes:
+    return (json.dumps(receipt, sort_keys=True, indent=2, ensure_ascii=True) + "\n").encode("ascii")
+
+
+def verify_release_policy(repo: Path = ROOT) -> dict:
+    policy = json.loads((repo / "docs/INTEL-RC26-BASELINE.json").read_text())
+    if (policy.get("schema") != 1 or policy.get("release") != RELEASE
+            or policy.get("version") != VERSION or policy.get("build") != BUILD
+            or policy.get("bundle_id") != "ai.satoris.amplifai.phone.intel-candidate"
+            or policy.get("channel") != "macos-intel-test" or policy.get("minimum_macos") != MINIMUM):
+        raise ValueError("Intel release policy differs from the approved rc26 identity")
+    expected = {"source/collector/portable-requirements.lock", "source/collector/intel-dependency-inputs.json",
+                "source/collector/intel-python-inputs.json", "source/collector/macos/Package.resolved"}
+    if set(policy["pinned_inputs"]) != expected:
+        raise ValueError("Intel release policy omits a pinned dependency input")
+    for name, checksum in policy["pinned_inputs"].items():
+        if not SHA256.fullmatch(checksum) or sha256(repo / name) != checksum:
+            raise ValueError("Intel dependency/source recipe differs from the approved pin")
+    return policy
+
+
+def verify_source_freeze(repo: Path, path: Path, expected_commit: str, expected_sha256: str) -> dict:
+    if not SHA256.fullmatch(expected_sha256) or path.is_symlink() or not path.is_file():
+        raise ValueError("Expected an exact authored-source receipt digest")
+    current = source_freeze(repo, expected_commit)
+    data = freeze_bytes(current)
+    if hashlib.sha256(data).hexdigest() != expected_sha256 or path.read_bytes() != data:
+        raise ValueError("Current authored inputs differ from the approved freeze receipt")
+    verify_release_policy(repo)
+    return current
 
 
 def candidate_plist(original: dict, *, enable_published_updates: bool = False) -> dict:
@@ -76,8 +124,8 @@ def candidate_plist(original: dict, *, enable_published_updates: bool = False) -
     info.update({
         "CFBundleIdentifier": "ai.satoris.amplifai.phone.intel-candidate",
         "CFBundleName": "AMPLIFai Phone Intel Test",
-        "CFBundleShortVersionString": "2026.10.14-rc25-intel1",
-        "CFBundleVersion": "261014251",
+        "CFBundleShortVersionString": VERSION,
+        "CFBundleVersion": BUILD,
         "LSMinimumSystemVersion": MINIMUM,
         "SUEnableAutomaticChecks": enable_published_updates,
         "SUAutomaticallyUpdate": enable_published_updates,
@@ -96,17 +144,51 @@ def candidate_plist(original: dict, *, enable_published_updates: bool = False) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--dependency-receipt", type=Path, required=True)
-    parser.add_argument("--python-sources", type=Path, required=True)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--dependency-receipt", type=Path)
+    parser.add_argument("--python-sources", type=Path)
+    parser.add_argument("--expected-source-commit", required=True)
+    parser.add_argument("--expected-source-manifest-sha256")
+    parser.add_argument("--source-freeze-receipt", type=Path)
+    parser.add_argument("--freeze-source-receipt", type=Path,
+                        help="Write a new reproducible source receipt only; no native build or package.")
+    parser.add_argument("--verify-source-freeze", action="store_true",
+                        help="Verify the approved receipt only; no native build or package.")
     parser.add_argument("--enable-published-updates", action="store_true",
                         help="Prepare the fixed Intel update channel; final signed feed/archive qualification remains a release gate.")
     args = parser.parse_args()
+    if args.freeze_source_receipt is not None:
+        if args.verify_source_freeze or args.freeze_source_receipt.resolve().is_relative_to(ROOT.resolve()):
+            parser.error("Write the new freeze receipt outside the authored source checkout")
+        verify_release_policy(ROOT)
+        receipt = source_freeze(ROOT, args.expected_source_commit)
+        data = freeze_bytes(receipt)
+        if args.expected_source_manifest_sha256 is not None and hashlib.sha256(data).hexdigest() != args.expected_source_manifest_sha256:
+            parser.error("Source receipt differs from approved dispatch digest")
+        args.freeze_source_receipt.parent.mkdir(parents=True, exist_ok=True)
+        with args.freeze_source_receipt.open("xb") as stream:
+            stream.write(data)
+        print(json.dumps({"commit": receipt["commit"], "source_files": len(receipt["files"]),
+                          "source_freeze_sha256": hashlib.sha256(data).hexdigest()}, sort_keys=True))
+        return 0
+    if args.verify_source_freeze:
+        if args.source_freeze_receipt is None or args.expected_source_manifest_sha256 is None:
+            parser.error("Verification requires the approved source receipt and digest")
+        receipt = verify_source_freeze(ROOT, args.source_freeze_receipt, args.expected_source_commit,
+                                       args.expected_source_manifest_sha256)
+        print(json.dumps({"commit": receipt["commit"], "source_files": len(receipt["files"]),
+                          "source_freeze_sha256": args.expected_source_manifest_sha256}, sort_keys=True))
+        return 0
+    if any(value is None for value in (args.output, args.dependency_receipt, args.python_sources,
+                                      args.source_freeze_receipt, args.expected_source_manifest_sha256)):
+        parser.error("Native build requires output, dependency/Python inputs and approved source receipt/digest")
     if sys.platform != "darwin" or platform.machine() != "x86_64":
         parser.error("Build with an x86_64 macOS Python runtime on an Intel runner.")
     if sys.version_info[:2] != (3, 12):
         parser.error("The release dependency lock requires CPython 3.12.")
-    baseline = verify_base_source()
+    frozen = verify_source_freeze(ROOT, args.source_freeze_receipt,
+                                  args.expected_source_commit, args.expected_source_manifest_sha256)
+    policy = verify_release_policy(ROOT)
     receipt_path = args.dependency_receipt.resolve(strict=True)
     dependency_receipt = json.loads(receipt_path.read_text())
     if dependency_receipt.get("status") != "built-and-validated":
@@ -121,6 +203,7 @@ def main() -> int:
         parser.error("Output must be a new directory; previous builds are preserved.")
     output = args.output.resolve()
     output.mkdir(parents=True)
+    shutil.copy2(args.source_freeze_receipt, output / "authored-source-freeze.json")
     env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET=MINIMUM,
                PYTHONPATH=str(SOURCE / "collector"))
     package = SOURCE / "collector/macos"
@@ -163,6 +246,7 @@ def main() -> int:
     for name in ("LICENSE", "COPYRIGHT", "THIRD-PARTY-NOTICES.txt"):
         shutil.copy2(ROOT / name, legal / name)
     shutil.copy2(receipt_path, legal / "intel-dependency-receipt.json")
+    shutil.copy2(args.source_freeze_receipt, legal / "authored-source-freeze.json")
     shutil.copy2(receipt_path.parent / "source-inputs/OpenSSL-LICENSE.txt", legal / "OpenSSL-3.5.9-LICENSE.txt")
     shutil.copy2(python_sources / "receipt.json", legal / "intel-python-source-receipt.json")
     shutil.copy2(python_sources / "INTEL-PYTHON-NOTICES.txt", legal / "INTEL-PYTHON-NOTICES.txt")
@@ -175,13 +259,13 @@ def main() -> int:
                      "and notices. Other Python package versions are unchanged.\n")
     (legal / "SOURCE-README.md").write_text(
         "# Intel candidate corresponding source\n\n"
-        "This is a modified, ad-hoc signed RC25 Intel build derived from RC24.\n"
-        "Exact authored source is in the accompanying Intel build-source archive.\n"
-        "Original RC24 dependencies/source: " + baseline["source_archive_url"] + "\n"
+        "This is a modified, ad-hoc signed RC26 Intel test build.\n"
+        "Exact current authored source and commit are in the adjacent authored-source-freeze.json and accompanying Intel build-source archive.\n"
+        "Historical unchanged dependency source only: " + policy["historical_dependency_source"]["archive_url"] + "\n"
         "The adjacent Intel dependency receipt identifies rebuilt native dependencies.\n"
         "Use the accompanying build-source archive for this exact candidate and its source inputs.\n")
-    manifest = {str(p.relative_to(SOURCE)): sha256(p) for p in sorted(SOURCE.rglob("*"))
-                if p.is_file() and not any(part in {".build", "__pycache__", "dist"} for part in p.parts)}
+    manifest = {record["path"].removeprefix("source/"): record["sha256"] for record in frozen["files"]
+                if record["path"].startswith("source/")}
     (legal / "source-package-file-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     # PyInstaller signs its own Mach-O files; sign the copied framework's nested
     # code inside-out, then the framework and enclosing application.
@@ -210,13 +294,17 @@ def main() -> int:
              "--build", info["CFBundleVersion"]], stdout=status_receipt)
     result = subprocess.run([str(helper), "runtime-check"], env=env, text=True, capture_output=True, check=True)
     (output / "helper-runtime-check.json").write_text(result.stdout)
+    verify_source_freeze(ROOT, args.source_freeze_receipt, args.expected_source_commit,
+                         args.expected_source_manifest_sha256)
     receipt = {
         "kind": "macos-intel-candidate", "architecture": "x86_64", "minimum_macos_declared": MINIMUM,
         "build_host_macos": platform.mac_ver()[0], "python": sys.version,
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "base_release": baseline["release"],
-        "base_source_archive_sha256": baseline["source_archive_sha256"],
-        "base_source_files_checked": len(baseline["files"]) - len(INTEL_MODIFIED_BASE_FILES),
+        "release": policy["release"],
+        "authored_source_commit": frozen["commit"], "authored_source_tree": frozen["tree"],
+        "authored_source_files": len(frozen["files"]),
+        "source_freeze_sha256": sha256(args.source_freeze_receipt),
+        "historical_dependency_source_archive_sha256": policy["historical_dependency_source"]["archive_sha256"],
         "version": info["CFBundleShortVersionString"], "bundle_id": info["CFBundleIdentifier"],
         "swift_sha256": sha256(contents / "MacOS/AmplifaiPhone"), "helper_sha256": sha256(helper),
         "dependency_receipt_sha256": sha256(receipt_path),
