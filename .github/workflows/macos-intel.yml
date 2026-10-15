@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   intel:
-    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/codex/brian-message-diagnostics-oct15'
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/codex/brian-rc27-account-origin'
     # Standard runner on this public repository: no larger/paid runner, no Homebrew.
     runs-on: macos-15-intel
     timeout-minutes: 90
@@ -123,14 +123,7 @@ jobs:
           tar -czf "$RUNNER_TEMP/intel-delivery/AMPLIFai-Intel-Build-Source.tar.gz" -C "$RUNNER_TEMP" intel-source
           cd "$RUNNER_TEMP/intel-delivery"
           shasum -a 256 ./* > SHA256SUMS
-      - name: Retain qualified delivery for the release owner
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: macos-intel-rc26-delivery-${{ github.sha }}
-          path: ${{ runner.temp }}/intel-delivery/
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0 # App ZIP and source tarball are already compressed.
+      # Build-only check: the packaged app stays on the runner; nothing is uploaded on success.
       - name: Collect bounded receipts and logs after failure
         if: failure()
         shell: bash
