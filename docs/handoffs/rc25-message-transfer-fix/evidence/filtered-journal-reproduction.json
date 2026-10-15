@@ -1,0 +1,34 @@
+{
+  "reproduced": true,
+  "scope": "fictional_fresh_stream_condition_only",
+  "oct15_owner_cause_proven": false,
+  "control": {
+    "source_commit": "2f773fff5208c5da6274029b6db92af213ca70aa",
+    "fictional_only": true,
+    "ghost_journal_transferred": false,
+    "discarded_path_set_size": 0,
+    "journal_placeholder_survives_sdk_cleanup": false,
+    "journal_placeholder_bytes": null,
+    "producer_ciphertext_digest_matches": true,
+    "journal_absent_from_final_manifest": true,
+    "initial_result": "available",
+    "initial_accepted_messages": 1,
+    "no_session_residue": true
+  },
+  "triggered": {
+    "source_commit": "2f773fff5208c5da6274029b6db92af213ca70aa",
+    "fictional_only": true,
+    "ghost_journal_transferred": true,
+    "discarded_path_set_size": 0,
+    "journal_placeholder_survives_sdk_cleanup": true,
+    "journal_placeholder_bytes": 0,
+    "producer_ciphertext_digest_matches": true,
+    "journal_absent_from_final_manifest": true,
+    "initial_result": "selected_payload_length",
+    "validation_result": "sidecar_present",
+    "after_known_stub_removal": "available",
+    "accepted_after_removal": 1,
+    "ciphertext_unchanged": true,
+    "no_session_residue": true
+  }
+}

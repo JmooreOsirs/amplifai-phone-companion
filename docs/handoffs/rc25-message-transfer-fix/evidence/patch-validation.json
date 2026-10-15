@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "source_commit": "2f773fff5208c5da6274029b6db92af213ca70aa",
+  "behavioral_regression_fails_before": true,
+  "before_failure": "selected_payload_length",
+  "regression_tests_passed_after": 12,
+  "canonical_backup_stream_tests_passed_after": 28,
+  "patch_applies_cleanly_to_exact_rc25_source": true,
+  "owner_oct15_cause_proven": false,
+  "phone_collected": false,
+  "owner_data_accessed": false,
+  "prod_mutated": false,
+  "sha256": {
+    "fix-filtered-journal-placeholders.patch": "a116e4529747230e25d94ea3b8c18a742273a93b751c82d71daf2d0b069a1b72",
+    "fixed-source/collector/amplifai_phone/backup_stream.py": "c7389f3693c79c8e1d1f0551d593fb23aa5ce7a9fa592e0a45b88318f10c305c",
+    "fixed-source/collector/tests/test_filtered_journal_cleanup.py": "0db4e64e832e101bc86e0cd4bb87b4952b358f7ced09489eb2d44530cf61d48c"
+  }
+}

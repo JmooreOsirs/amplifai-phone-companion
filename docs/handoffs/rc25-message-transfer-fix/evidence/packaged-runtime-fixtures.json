@@ -1,0 +1,126 @@
+{
+  "fictional_inputs_only": true,
+  "actual_packaged_worker": "/Applications/AMPLIFai Phone.app/Contents/Resources/helper/amplifai-agent",
+  "cases": [
+    {
+      "fixture": "no_sidecar",
+      "manifest_lists_sidecar": false,
+      "extraction": "accepted",
+      "accepted_messages": 1,
+      "worker_commands": [
+        [
+          "/Applications/AMPLIFai Phone.app/Contents/Resources/helper/amplifai-agent",
+          "--internal-encrypted-size-validation"
+        ]
+      ],
+      "diagnostics": [
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "copying",
+          "manifest_bytes": 16384,
+          "raw_before_bytes": 12304
+        },
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "accepted_compatibility",
+          "manifest_bytes": 16384,
+          "copied_plaintext_bytes": 12288,
+          "raw_before_bytes": 12304,
+          "size_difference_validation": "validated_messages_database",
+          "producer_digest_present": true,
+          "producer_digest_matches": true,
+          "sidecars_absent": true
+        }
+      ]
+    },
+    {
+      "fixture": "ghost_raw_journal",
+      "manifest_lists_sidecar": false,
+      "extraction": "rejected",
+      "error_code": "selected_payload_length",
+      "worker_commands": [],
+      "diagnostics": [
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "copying",
+          "manifest_bytes": 16384,
+          "raw_before_bytes": 12304
+        },
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "length_mismatch",
+          "manifest_bytes": 16384,
+          "copied_plaintext_bytes": 12288,
+          "raw_before_bytes": 12304,
+          "size_difference_validation": "sidecar_present",
+          "producer_digest_present": true,
+          "producer_digest_matches": null,
+          "sidecars_absent": false
+        }
+      ]
+    },
+    {
+      "fixture": "ghost_raw_wal",
+      "manifest_lists_sidecar": false,
+      "extraction": "rejected",
+      "error_code": "selected_payload_length",
+      "worker_commands": [],
+      "diagnostics": [
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "copying",
+          "manifest_bytes": 16384,
+          "raw_before_bytes": 12304
+        },
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "length_mismatch",
+          "manifest_bytes": 16384,
+          "copied_plaintext_bytes": 12288,
+          "raw_before_bytes": 12304,
+          "size_difference_validation": "sidecar_present",
+          "producer_digest_present": true,
+          "producer_digest_matches": null,
+          "sidecars_absent": false
+        }
+      ]
+    },
+    {
+      "fixture": "ghost_copied_journal",
+      "manifest_lists_sidecar": false,
+      "extraction": "rejected",
+      "error_code": "selected_payload_length",
+      "worker_commands": [],
+      "diagnostics": [
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "copying",
+          "manifest_bytes": 16384,
+          "raw_before_bytes": 12304
+        },
+        {
+          "source": "messages",
+          "component": "database",
+          "result": "length_mismatch",
+          "manifest_bytes": 16384,
+          "copied_plaintext_bytes": 12288,
+          "raw_before_bytes": 12304,
+          "size_difference_validation": "sidecar_present",
+          "producer_digest_present": true,
+          "producer_digest_matches": null,
+          "sidecars_absent": false
+        }
+      ]
+    }
+  ],
+  "host_python": "3.12.12",
+  "host_sqlite": "3.50.4",
+  "synthetic_session_cleanup_verified": true
+}

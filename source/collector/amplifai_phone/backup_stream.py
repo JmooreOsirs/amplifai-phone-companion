@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import hashlib
 import os
 import plistlib
 import struct
+import stat
 import tempfile
 import time
 import xml.parsers.expat
@@ -37,6 +39,7 @@ from .backup_watchdog import MAX_CONTROL_BYTES, RECEIVE_CHUNK_BYTES, BackupWatch
 from .metadata import (
     BackupControlFrameLimit,
     BackupControlPathLimit,
+    BackupControlMetadataLimit,
     UnsupportedSchema,
 )
 from .workspace import SessionWorkspace, WorkspaceError
@@ -48,6 +51,17 @@ MAX_PATH_BYTES = 4096
 # frames through a private temporary file; keep a separate finite parsing bound.
 MAX_CONTROL_MESSAGE_BYTES = 128 * 1024 * 1024
 NO_COPY_METADATA = frozenset({"Info.plist", "Status.plist", "Manifest.plist"})
+# Only these selected-source ancillary names can obstruct source-local integrity
+# checks after their rejected, transient payloads were replaced by protocol stubs.
+SOURCE_JOURNAL_IDS = frozenset(
+    hashlib.sha1(("HomeDomain-" + relative + "-journal").encode()).hexdigest()
+    for relative in (
+        "Library/AddressBook/AddressBook.sqlitedb",
+        "Library/CallHistoryDB/CallHistory.storedata",
+        "Library/SMS/sms.db",
+    )
+)
+MAX_CRITICAL_PLACEHOLDERS = 32
 
 
 class DeviceBackupRejected(RuntimeError):
@@ -88,6 +102,53 @@ class StreamedDeviceLink(DeviceLink):
         self._received = self._retained = self._files = 0
         self._reserve_current_copy = False
         self._reserved_paths: dict[Path, int] = {}
+        self._critical_placeholders: dict[Path, tuple[int, int]] = {}
+        self._backup_requested = False
+        self._protocol_complete = False
+
+    async def send_process_message(self, message) -> None:
+        if isinstance(message, dict) and message.get("MessageName") == "Backup":
+            self._backup_requested = True
+            self._protocol_complete = False
+        await super().send_process_message(message)
+
+    def _placeholder_identity(self, path: Path) -> tuple[int, int] | None:
+        self.workspace.checked_path(path)
+        try:
+            value = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or value.st_size != 0:
+            raise WorkspaceError("Discarded backup placeholder changed", code="workspace_unsafe")
+        return value.st_dev, value.st_ino
+
+    def _remember_placeholder(self, path: Path, expected: tuple[int, int] | None = None) -> None:
+        current = self._placeholder_identity(path)
+        if current is None or (expected is not None and current != expected):
+            raise WorkspaceError("Discarded backup placeholder changed", code="workspace_unsafe")
+        if path not in self._critical_placeholders and len(self._critical_placeholders) >= MAX_CRITICAL_PLACEHOLDERS:
+            raise BackupControlMetadataLimit("Critical backup placeholder bound exceeded")
+        self._critical_placeholders[path] = current
+
+    def _forget_placeholders(self, path: Path) -> None:
+        for candidate in tuple(self._critical_placeholders):
+            if candidate == path or path in candidate.parents:
+                self._critical_placeholders.pop(candidate)
+
+    def cleanup_discarded_files(self) -> None:
+        # Protocol readback needs empty stubs until successful completion. Keep
+        # general discarded files untracked: an arbitrarily large phone library
+        # must not grow an in-memory path set. Only proven own critical stubs are
+        # removed, with no changes to manifest/SQLite compatibility validation.
+        if not self._protocol_complete:
+            return
+        for path, expected in tuple(self._critical_placeholders.items()):
+            current = self._placeholder_identity(path)
+            if current is not None:
+                if current != expected:
+                    raise WorkspaceError("Discarded backup placeholder changed", code="workspace_unsafe")
+                path.unlink()
+            self._critical_placeholders.pop(path)
 
     async def receive_message(self):
         (size,) = struct.unpack(">I", await self._recvall(4))
@@ -129,6 +190,8 @@ class StreamedDeviceLink(DeviceLink):
                     else None
                 )
                 raise DeviceBackupRejected(device_code)
+            if self._backup_requested and isinstance(status, dict) and type(status.get("ErrorCode")) is int and status["ErrorCode"] == 0:
+                self._protocol_complete = True
         return message
 
     def _path(self, name: str, *, create_parents: bool = False) -> Path:
@@ -236,6 +299,7 @@ class StreamedDeviceLink(DeviceLink):
             self._reserve_current_copy = keep and path.name not in NO_COPY_METADATA
             retained_before = self._retained
             if keep:
+                self._forget_placeholders(path)
                 previous = self._reserved_paths.pop(path, 0)
                 with self.workspace.open_private(path) as destination:
                     self.workspace.release_copy_budget(previous)
@@ -250,9 +314,12 @@ class StreamedDeviceLink(DeviceLink):
                 # Preserve the empty protocol entry without retaining its payload
                 # or growing the SDK's discarded-path set.
                 previous = self._reserved_paths.pop(path, 0)
+                self._forget_placeholders(path)
                 with self.workspace.open_private(path):
                     self.workspace.release_copy_budget(previous)
                 size, code = await self._consume_file_transfer(size, code)
+                if path.name in SOURCE_JOURNAL_IDS and path.parent.name == path.name[:2]:
+                    self._remember_placeholder(path)
             self._files += 1
             if code == CODE_ERROR_REMOTE:
                 # This is a length-prefixed diagnostic, not a path or metadata
@@ -339,7 +406,20 @@ class StreamedDeviceLink(DeviceLink):
             if new.is_dir():
                 new = new / old.name
             movements.append((old, new, old.is_file()))
+        # Model a whole batch before checking final identities. A valid ordered
+        # batch can move the same placeholder twice (A -> B -> C).
+        placeholder_plan = dict(self._critical_placeholders)
+        for old, new, _ in movements:
+            moved = {path: proof for path, proof in placeholder_plan.items()
+                     if path == old or old in path.parents}
+            placeholder_plan = {path: proof for path, proof in placeholder_plan.items()
+                                if path != old and old not in path.parents and path != new and new not in path.parents}
+            for path, proof in moved.items():
+                placeholder_plan[new / path.relative_to(old)] = proof
         await super().move_items(message)
+        self._critical_placeholders.clear()
+        for path, proof in placeholder_plan.items():
+            self._remember_placeholder(path, proof)
         for old, new, source_was_file in movements:
             if source_was_file:
                 self.workspace.release_copy_budget(self._reserved_paths.pop(new, 0))
@@ -389,6 +469,10 @@ class StreamedDeviceLink(DeviceLink):
                     else destination / path.relative_to(source)
                 )
                 reserve = path in self._reserved_paths
+                placeholder = self._critical_placeholders.get(path)
+                if placeholder is not None and self._placeholder_identity(path) != placeholder:
+                    raise WorkspaceError("Discarded backup placeholder changed", code="workspace_unsafe")
+                self._forget_placeholders(target)
                 with (
                     path.open("rb") as reader,
                     self.workspace.open_private(target) as writer,
@@ -404,6 +488,8 @@ class StreamedDeviceLink(DeviceLink):
                         await asyncio.sleep(0)
                 if reserve:
                     self._reserved_paths[target] = target.stat().st_size
+                if placeholder is not None:
+                    self._remember_placeholder(target)
         await self.status_response(0)
 
     async def remove_items(self, message) -> None:
@@ -412,6 +498,8 @@ class StreamedDeviceLink(DeviceLink):
         for path in tuple(self._reserved_paths):
             if any(path == removed or removed in path.parents for removed in paths):
                 self.workspace.release_copy_budget(self._reserved_paths.pop(path))
+        for path in paths:
+            self._forget_placeholders(path)
 
 
 def bind_streamed_device_link(

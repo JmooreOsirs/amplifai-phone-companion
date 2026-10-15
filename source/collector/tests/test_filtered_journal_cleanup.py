@@ -1,0 +1,319 @@
+"""Fictional encrypted DeviceLink regression; no phone, account or owner backup."""
+import asyncio
+import contextlib
+import hashlib
+import io
+import json
+import os
+import plistlib
+import sqlite3
+import struct
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import AsyncMock
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.keywrap import aes_key_wrap
+from amplifai_phone import backup_stream
+from amplifai_phone.backup_stream import StreamedDeviceLink
+MAX_CRITICAL_PLACEHOLDERS = getattr(backup_stream, "MAX_CRITICAL_PLACEHOLDERS", 32)
+from amplifai_phone.backup_watchdog import BackupWatchdog
+from amplifai_phone.workspace import SessionWorkspace, WorkspaceError
+from amplifai_phone.metadata import BackupControlMetadataLimit, SelectedPayloadIntegrityError, RETAINED_HISTORY_START, read_messages
+from amplifai_phone.ios_backup import _extract_database, HOME_DOMAIN
+from amplifai_phone.backup_files import copy_backup_file
+from pyiosbackup import Backup
+from pyiosbackup.keybag import Keybag
+from pyiosbackup.manifest_plist import ManifestPlist
+from pyiosbackup.manifest_dbs.sqlite3 import ManifestDbSqlite3
+from pymobiledevice3.services.mobilebackup2 import Mobilebackup2Service, BackupSelectionRule
+
+PASSWORD = "FICTIONAL_PASSWORD_ONLY"
+PHONE = "+12025550123"
+BODY = "FICTIONAL_BODY_NEVER_IN_REPORT"
+RELATIVE = "Library/SMS/sms.db"
+
+
+def tlv(tag, data):
+    if type(data) is int:
+        data = struct.pack(">I", data)
+    return tag + struct.pack(">I", len(data)) + data
+
+
+def cipher(data, key, padded=False):
+    if padded:
+        worker = padding.PKCS7(128).padder()
+        data = worker.update(data) + worker.finalize()
+    worker = Cipher(algorithms.AES(key), modes.CBC(b"\0" * 16)).encryptor()
+    return worker.update(data) + worker.finalize()
+
+
+def archive(relative, size, key, digest):
+    objects = ["$null", {"$class": plistlib.UID(3), "RelativePath": plistlib.UID(2), "Size": size,
+        "Mode": 0o100600, "LastModified": 0, "LastStatusChange": 0, "Birth": 0, "GroupID": 0,
+        "UserID": 0, "EncryptionKey": plistlib.UID(4), "Digest": plistlib.UID(6)}, relative,
+        {"$classname": "MBFile", "$classes": ["MBFile", "NSObject"]},
+        {"$class": plistlib.UID(5), "NS.data": key},
+        {"$classname": "NSMutableData", "$classes": ["NSMutableData", "NSData", "NSObject"]},
+        {"$class": plistlib.UID(7), "NS.data": digest}, {"$classname": "NSData", "$classes": ["NSData", "NSObject"]}]
+    return plistlib.dumps({"$archiver": "NSKeyedArchiver", "$version": 100000,
+        "$top": {"root": plistlib.UID(1)}, "$objects": objects}, fmt=plistlib.FMT_BINARY)
+
+
+def fixture(root, *, missing=False, schema_invalid=False, rows=True, wal=False, mismatch=0):
+    folder = root / "fictional-backup"
+    folder.mkdir()
+    salt, dpsl = b"fictional-salt", b"fictional-dpsl"
+    wrapping = hashlib.pbkdf2_hmac("sha1", hashlib.pbkdf2_hmac("sha256", PASSWORD.encode(), dpsl, 10, 32), salt, 10, 32)
+    bag = b"".join(tlv(tag, value) for tag, value in [(b"SALT", salt), (b"ITER", 10),
+        (b"DPSL", dpsl), (b"DPIC", 10), (b"CLAS", 1), (b"UUID", b"u" * 16),
+        (b"KTYP", 0), (b"WRAP", 2), (b"WPKY", aes_key_wrap(wrapping, b"c" * 32))])
+    key = struct.pack("<I", 1) + aes_key_wrap(b"c" * 32, b"e" * 32)
+    control = {"IsEncrypted": True, "Lockdown": {"ProductVersion": "18.0"}, "BackupKeyBag": bag,
+        "ManifestKey": struct.pack("<I", 1) + aes_key_wrap(b"c" * 32, b"m" * 32)}
+    (folder / "Manifest.plist").write_bytes(plistlib.dumps(control))
+    (folder / "Status.plist").write_bytes(plistlib.dumps({"SnapshotState": "finished"}))
+    # These must never be opened by the SMS-only diagnostic.
+    (folder / "Info.plist").write_bytes(b"NOT_A_PLIST_MUST_NOT_BE_READ")
+    manifest = root / "fictional-manifest.sqlite3"
+    with contextlib.closing(sqlite3.connect(manifest)) as index, index:
+        index.execute("CREATE TABLE Files(fileID TEXT PRIMARY KEY,domain TEXT,relativePath TEXT,flags INTEGER,file BLOB)")
+        if not missing:
+            path = root / "fictional-sms.sqlite3"
+            with contextlib.closing(sqlite3.connect(path)) as db:
+                db.execute("PRAGMA page_size=4096")
+                if schema_invalid:
+                    db.execute("CREATE TABLE message(date INTEGER)")
+                else:
+                    db.executescript("CREATE TABLE message(ROWID INTEGER PRIMARY KEY,date INTEGER,service TEXT,is_from_me INTEGER,handle_id INTEGER,text TEXT); CREATE TABLE handle(ROWID INTEGER PRIMARY KEY,id TEXT);")
+                    db.commit()
+                    if wal:
+                        db.execute("PRAGMA journal_mode=WAL")
+                        db.execute("PRAGMA wal_autocheckpoint=0")
+                    if rows:
+                        db.execute("INSERT INTO handle VALUES(77,?)", (PHONE,))
+                        db.execute("INSERT INTO message VALUES(43,800000000,'SMS',0,77,?)", (BODY,))
+                db.commit()
+                components = [("", path)]
+                if wal:
+                    components += [("-wal", Path(str(path) + "-wal")), ("-shm", Path(str(path) + "-shm"))]
+                for suffix, component in components:
+                    plain = component.read_bytes()
+                    raw = cipher(plain, b"e" * 32, True)
+                    identifier = hashlib.sha1(("HomeDomain-" + RELATIVE + suffix).encode()).hexdigest()
+                    target = folder / identifier[:2] / identifier
+                    target.parent.mkdir(exist_ok=True)
+                    target.write_bytes(raw)
+                    index.execute("INSERT INTO Files VALUES(?,?,?,?,?)", (identifier, "HomeDomain", RELATIVE + suffix, 1,
+                        archive(RELATIVE + suffix, len(plain) + (mismatch if not suffix else 0), key, hashlib.sha1(raw).digest())))
+    (folder / "Manifest.db").write_bytes(cipher(manifest.read_bytes(), b"m" * 32))
+    return folder
+
+
+def hashes(folder):
+    return {str(p.relative_to(folder)): hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob("*") if p.is_file()}
+
+
+def prefixed(text):
+    raw = text.encode()
+    return struct.pack(">I", len(raw)) + raw
+
+
+def transfer(device, name, payload):
+    frames = (struct.pack(">IB", len(payload) + 1, 0xC) + payload) if payload else b""
+    return prefixed(device) + prefixed(name) + frames + struct.pack(">IB", 1, 0)
+
+
+class Wire:
+    def __init__(self, payload):
+        self.stream = io.BytesIO(payload)
+        self.send_plist = AsyncMock()
+        self.sendall = AsyncMock()
+
+    async def recvall(self, size):
+        raw = self.stream.read(size)
+        if len(raw) != size:
+            raise asyncio.IncompleteReadError(raw, size)
+        return raw
+
+
+class FilteredJournalCleanupTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="fictional-filtered-journal-")
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name).resolve()
+        self.workspace = SessionWorkspace(self.base / "sessions")
+        self.root = self.workspace.__enter__()
+        self.addCleanup(self.workspace.__exit__, None, None, None)
+        self.journal_id = hashlib.sha1((HOME_DOMAIN + "-" + RELATIVE + "-journal").encode()).hexdigest()
+        self.journal = f"phone/{self.journal_id[:2]}/{self.journal_id}"
+        rules = (*Mobilebackup2Service.resolve_backup_selection(("contacts", "call_history", "sms")),
+                 BackupSelectionRule(HOME_DOMAIN, RELATIVE + "-wal"), BackupSelectionRule(HOME_DOMAIN, RELATIVE + "-shm"))
+        selected = Mobilebackup2Service.selection_filter_callback(rules)
+        self.preserve = lambda name, device: Mobilebackup2Service.should_preserve_backup_file(name, device, selected)
+
+    async def stream(self, uploads, *, start=True):
+        wire = Wire(b"".join(transfer(*upload) for upload in uploads) + prefixed(""))
+        link = StreamedDeviceLink(wire, self.root, workspace=self.workspace, watchdog=BackupWatchdog(), preserve_file=self.preserve)
+        if start:
+            await link.send_process_message({"MessageName": "Backup"})
+        await link.upload_files([])
+        return link, wire
+
+    async def complete(self, link, wire):
+        raw = plistlib.dumps(["DLMessageProcessMessage", {"ErrorCode": 0}])
+        wire.stream = io.BytesIO(struct.pack(">I", len(raw)) + raw)
+        await link.receive_message()
+        link.cleanup_discarded_files()
+
+    def ghost(self, *, payload=b"FICTIONAL_TRANSIENT_JOURNAL"):
+        return HOME_DOMAIN + "-" + RELATIVE + "-journal", self.journal, payload
+
+    async def test_filtered_journal_stub_removed_after_verified_backup_completion(self):
+        link, wire = await self.stream([self.ghost()])
+        path = self.root / self.journal
+        self.assertEqual(path.read_bytes(), b"")
+        link.cleanup_discarded_files()
+        self.assertTrue(path.exists())  # Still usable for protocol readback.
+        await self.complete(link, wire)
+        self.assertFalse(path.exists())
+        self.assertEqual(link._critical_placeholders, {})
+        self.assertEqual(link._discarded_files, set())
+
+    async def test_handshake_success_does_not_arm_cleanup(self):
+        link, wire = await self.stream([self.ghost()], start=False)
+        await self.complete(link, wire)
+        self.assertTrue((self.root / self.journal).exists())
+        await link.send_process_message({"MessageName": "Backup"})
+        link.cleanup_discarded_files()
+        self.assertTrue((self.root / self.journal).exists())
+        await self.complete(link, wire)
+        self.assertFalse((self.root / self.journal).exists())
+
+    async def test_selected_empty_file_and_wal_are_preserved(self):
+        wal = hashlib.sha1((HOME_DOMAIN + "-" + RELATIVE + "-wal").encode()).hexdigest()
+        wal_name = f"phone/{wal[:2]}/{wal}"
+        link, wire = await self.stream([(HOME_DOMAIN + "-" + RELATIVE, self.journal, b""),
+                                       (HOME_DOMAIN + "-" + RELATIVE + "-wal", wal_name, b"selected-wal")])
+        await self.complete(link, wire)
+        self.assertTrue((self.root / self.journal).is_file())
+        self.assertEqual((self.root / wal_name).read_bytes(), b"selected-wal")
+
+    async def test_selected_replacement_clears_old_stub_proof(self):
+        link, wire = await self.stream([self.ghost(), (HOME_DOMAIN + "-" + RELATIVE, self.journal, b"selected")])
+        await self.complete(link, wire)
+        self.assertEqual((self.root / self.journal).read_bytes(), b"selected")
+
+    async def test_nonempty_changed_stub_is_not_deleted(self):
+        link, wire = await self.stream([self.ghost()])
+        path = self.root / self.journal
+        path.write_bytes(b"changed")
+        with self.assertRaises(WorkspaceError):
+            await self.complete(link, wire)
+        self.assertEqual(path.read_bytes(), b"changed")
+
+    async def test_replaced_zero_stub_is_not_deleted(self):
+        link, wire = await self.stream([self.ghost()])
+        path = self.root / self.journal
+        with path.open("rb"):
+            path.unlink()
+            path.write_bytes(b"")
+            with self.assertRaises(WorkspaceError):
+                await self.complete(link, wire)
+        self.assertTrue(path.exists())
+
+    async def test_move_copy_remove_lifecycle(self):
+        link, wire = await self.stream([self.ghost()])
+        await link.move_items(["DLMessageMoveItems", {self.journal: "phone/moved"}])
+        await link.copy_item(["DLMessageCopyItem", "phone/moved", "phone/copied"])
+        await link.remove_items(["DLMessageRemoveItems", ["phone/copied"]])
+        await self.complete(link, wire)
+        self.assertFalse((self.root / "phone/moved").exists())
+        self.assertFalse((self.root / "phone/copied").exists())
+
+    async def test_chained_move_batch_tracks_final_identity(self):
+        link, wire = await self.stream([self.ghost()])
+        await link.move_items(["DLMessageMoveItems", {self.journal: "phone/second", "phone/second": "phone/third"}])
+        await self.complete(link, wire)
+        self.assertFalse((self.root / "phone/third").exists())
+
+    async def test_unrelated_discarded_files_do_not_grow_tracking(self):
+        link, wire = await self.stream([("unrelated", f"phone/unrelated-{i}", b"discard") for i in range(300)])
+        self.assertEqual(link._critical_placeholders, {})
+        self.assertEqual(link._discarded_files, set())
+        await self.complete(link, wire)
+        self.assertTrue((self.root / "phone/unrelated-299").exists())
+
+    async def test_critical_copy_aliases_are_bounded(self):
+        link, _ = await self.stream([self.ghost()])
+        with self.assertRaises(BackupControlMetadataLimit):
+            for number in range(MAX_CRITICAL_PLACEHOLDERS + 1):
+                await link.copy_item(["DLMessageCopyItem", self.journal, f"phone/alias-{number}"])
+        self.assertLessEqual(len(link._critical_placeholders), MAX_CRITICAL_PLACEHOLDERS)
+
+    async def encrypted_case(self, listed_journal):
+        inputs = self.base / "inputs"
+        inputs.mkdir()
+        folder = fixture(inputs, mismatch=4096)
+        if listed_journal:
+            raw = cipher(b"j" * 512, b"e" * 32, True)
+            key = struct.pack("<I", 1) + aes_key_wrap(b"c" * 32, b"e" * 32)
+            target = folder / self.journal_id[:2] / self.journal_id
+            target.parent.mkdir(exist_ok=True)
+            target.write_bytes(raw)
+            with contextlib.closing(sqlite3.connect(inputs / "fictional-manifest.sqlite3")) as db, db:
+                db.execute("INSERT INTO Files VALUES(?,?,?,?,?)", (self.journal_id, HOME_DOMAIN, RELATIVE + "-journal", 1,
+                    archive(RELATIVE + "-journal", 512, key, hashlib.sha1(raw).digest())))
+            (folder / "Manifest.db").write_bytes(cipher((inputs / "fictional-manifest.sqlite3").read_bytes(), b"m" * 32))
+        uploads = []
+        for file in sorted(folder.rglob("*")):
+            if not file.is_file() or file.name == "Info.plist":
+                continue
+            logical = HOME_DOMAIN + "-" + RELATIVE if len(file.name) == 40 else file.name
+            if file.name == self.journal_id:
+                logical += "-journal"
+            uploads.append((logical, "phone/" + str(file.relative_to(folder)), file.read_bytes()))
+        if not listed_journal:
+            uploads.append(self.ghost())
+        link, wire = await self.stream(uploads)
+        await self.complete(link, wire)
+        backup_path = self.root / "phone"
+        manifest = ManifestPlist.from_path(backup_path / "Manifest.plist")
+        keybag = Keybag.from_manifest(manifest, PASSWORD)
+        copy_backup_file(backup_path / "Manifest.db", self.root / "manifest.sqlite3", keybag=keybag,
+                         encryption_key=manifest.manifest_key, workspace=self.workspace)
+        database = ManifestDbSqlite3(self.root / "manifest.sqlite3")
+        try:
+            backup = Backup(backup_path, database, manifest, {"SnapshotState": "finished"}, {}, keybag)
+            samples = []
+            if listed_journal:
+                with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+                    _extract_database(backup, RELATIVE, self.root / "messages", workspace=self.workspace,
+                                      payload_diagnostic_callback=samples.append)
+                self.assertEqual(raised.exception.code, "selected_payload_length")
+                self.assertEqual(samples[-1]["size_difference_validation"], "sidecar_present")
+            else:
+                try:
+                    accepted = _extract_database(backup, RELATIVE, self.root / "messages", workspace=self.workspace,
+                                                 payload_diagnostic_callback=samples.append)
+                except SelectedPayloadIntegrityError as error:
+                    self.fail(error.code)
+                self.assertTrue(accepted)
+                result = read_messages(self.root / "messages", RETAINED_HISTORY_START)
+                self.assertEqual(len(result.records), 1)
+                self.assertEqual(samples[-1]["size_difference_validation"], "validated_messages_database")
+                self.assertTrue(samples[-1]["producer_digest_matches"])
+            self.assertFalse((self.root / self.journal).exists())
+        finally:
+            database._conn.close()
+
+    async def test_real_encrypted_stream_ghost_stub_no_longer_blocks_messages(self):
+        await self.encrypted_case(False)
+
+    async def test_manifest_listed_journal_still_rejects_smaller_main(self):
+        await self.encrypted_case(True)
+
+
+if __name__ == "__main__":
+    unittest.main()
