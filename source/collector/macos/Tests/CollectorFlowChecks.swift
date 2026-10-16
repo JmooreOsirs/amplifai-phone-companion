@@ -39,6 +39,7 @@ struct CollectorFlowChecks {
         try localContactSuggestions()
         try mainReviewWorkspace()
         try allGroupWorkspaceActions()
+        try scopedSelectionAtScale()
         try reviewedAccountContinuation()
         try staleDestinationEventsCannotClearApprovedRequest()
         try firstReceiptDuringReconnectKeepsOldBinding()
@@ -382,6 +383,85 @@ struct CollectorFlowChecks {
         model.receive(try event(#"{"kind":"capture","query":"","cursor":0,"totalContacts":1,"contacts":[{"id":900,"name":"Replacement","phoneCount":1,"phoneEnds":["0000"]}]}"#))
         try require(model.workspace == nil && model.selectedIDs.isEmpty && model.selectionNeedsReview,
                     "A replacement capture discards old group and selected-ID authority")
+    }
+
+    private static func scopedSelectionAtScale() throws {
+        let total = 5_400
+        func name(_ id: Int) -> String { id > 4_800 ? "Acme LLC \(id)" : id % 50 == 0 ? "Smith \(id)" : "Person \(id)" }
+        let rows = (1...total).map { #"{"id":\#($0),"name":"\#(name($0))","phoneCount":1,"phoneEnds":["0000"]}"# }
+        var commands: [Data] = []
+        let model = CollectorModel(commandWriter: { commands.append($0) })
+        model.receive(try event(#"{"kind":"capture","query":"","cursor":0,"totalContacts":\#(total),"nextCursor":200,"contacts":[\#(rows.prefix(200).joined(separator: ","))]}"#))
+        model.prepareWorkspace()
+        let scan = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
+        let scanID = scan["scanId"] as! String
+        for cursor in stride(from: 0, to: total, by: 200) {
+            let end = min(cursor + 200, total)
+            let next = end == total ? "null" : String(end)
+            model.receive(try event(#"{"kind":"contacts","scanId":"\#(scanID)","query":"","cursor":\#(cursor),"totalContacts":\#(total),"nextCursor":\#(next),"contacts":[\#(rows[cursor..<end].joined(separator: ","))]}"#))
+        }
+        guard let ready = model.workspace else { throw Failure.check("All 5,400 contacts must build one workspace") }
+        try require(ready.mainCount == 4_800 && ready.reviewCount == 600 && model.selectedIDs.isEmpty,
+                    "5,400 contacts start unselected with Main and Review counted across all 27 pages")
+
+        // Select all, then uncheck exceptions on the first and last page.
+        model.selectAllVerifiedContacts()
+        try require(model.selectedIDs.count == total, "Select all covers every page of 5,400 contacts")
+        model.showContactGroup(.all)
+        model.toggle(7)
+        model.toggle(5_400)
+        try require(model.selectedIDs.count == 5_398 && !model.selectedIDs.contains(7) && !model.selectedIDs.contains(5_400),
+                    "Unchecking exceptions after select all removes only those contacts")
+        model.clearAllVerifiedContacts()
+        try require(model.selectedIDs.isEmpty && !model.canClearScopedContacts, "Clear selection empties every page")
+
+        // A group scope covers all of its pages and is labeled.
+        model.showContactGroup(.main)
+        try require(model.workspace?.isScoped == true && model.workspace?.hasNextPage == true &&
+                    model.workspace?.scopeLabel == "Main contacts · 4800 across all pages",
+                    "The Main scope is labeled and spans more than one page")
+        model.selectScopedContacts()
+        try require(model.selectedIDs.count == 4_800 && model.selectedScopedCount == 4_800 &&
+                    model.selectedIDs.isDisjoint(with: Set(4_801...total)) && !model.canSelectScopedContacts,
+                    "Selecting the Main scope selects all 4,800 Main contacts and no Review contact")
+
+        // A search scope covers every matching contact on every page.
+        model.searchWorkspace("person")
+        try require(model.workspace?.filteredCount == 4_704 && model.workspace?.hasNextPage == true &&
+                    model.workspace?.scopeLabel == "Main contacts matching “person” · 4704 across all pages",
+                    "A Main search scope counts and labels every match across pages")
+        model.clearScopedContacts()
+        try require(model.selectedIDs.count == 96 && model.selectedIDs.allSatisfy { $0 % 50 == 0 },
+                    "Clearing a search scope keeps only selections outside it")
+        model.searchWorkspace("SMITH")
+        try require(model.workspace?.filteredCount == 96 && model.selectedScopedCount == 96, "Search ignores case")
+        model.toggle(100)
+        try require(model.selectedIDs.count == 95 && !model.selectedIDs.contains(100), "A search helps uncheck one exception")
+        model.searchWorkspace("")
+        model.showContactGroup(.review)
+        model.selectScopedContacts()
+        try require(model.selectedIDs.count == 695 && model.selectedScopedCount == 600,
+                    "Selecting the Review scope adds all 600 Review contacts to the earlier choices")
+
+        // Select all minus exceptions reaches the helper as one exact, multi-page review.
+        model.clearAllVerifiedContacts()
+        model.selectAllVerifiedContacts()
+        model.toggle(7)
+        model.toggle(5_400)
+        let expected = (1...total).filter { $0 != 7 && $0 != 5_400 }
+        model.review()
+        let reviewID = try emittedReviewID(commands)
+        for start in stride(from: 0, to: expected.count, by: 1_000) {
+            let page = try JSONSerialization.jsonObject(with: commands.last!) as? [String: Any]
+            let end = min(start + 1_000, expected.count)
+            try require(page?["cursor"] as? Int == start && page?["total"] as? Int == expected.count &&
+                        (page?["ids"] as? [Int]) == Array(expected[start..<end]),
+                        "Review page at \(start) must carry exactly the next selected IDs")
+            model.receive(try event(#"{"kind":"review-page","reviewId":"\#(reviewID)","nextCursor":\#(end)}"#))
+        }
+        model.receive(try reviewEvent(reviewID, ids: expected))
+        try require(model.phase == .reviewing && !model.selectionNeedsReview,
+                    "The exact 5,398-contact review across six helper pages authorizes the next step")
     }
 
     private static func allGroupWorkspaceActions() throws {

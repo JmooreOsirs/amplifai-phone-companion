@@ -330,6 +330,15 @@ final class CollectorModel: ObservableObject {
     }
     var selectedMainCount: Int { selectedIDs.intersection(workspace?.mainIDs ?? []).count }
     var selectedReviewCount: Int { selectedIDs.intersection(workspace?.reviewIDs ?? []).count }
+    var canSelectScopedContacts: Bool {
+        guard canEditWorkspace, let workspace, workspace.filteredCount > 0 else { return false }
+        return !workspace.filteredIDs.isSubset(of: selectedIDs)
+    }
+    var canClearScopedContacts: Bool {
+        guard canEditWorkspace, let workspace, workspace.filteredCount > 0 else { return false }
+        return !workspace.filteredIDs.isDisjoint(with: selectedIDs)
+    }
+    var selectedScopedCount: Int { selectedIDs.intersection(workspace?.filteredIDs ?? []).count }
     var pendingBulkMoveCount: Int { pendingBulkMove?.ids.count ?? 0 }
     var pendingBulkMoveTitle: String {
         guard let pendingBulkMove else { return "Move contact group?" }
@@ -708,6 +717,22 @@ final class CollectorModel: ObservableObject {
         guard canClearMain, let workspace else { return }
         guard invalidateSelectionForEdit() else { return }
         selectedIDs.subtract(workspace.mainIDs)
+        groupUndo = nil
+    }
+
+    /// Selects every contact in the current group and search, on every page.
+    func selectScopedContacts() {
+        guard canSelectScopedContacts, let workspace else { return }
+        guard invalidateSelectionForEdit() else { return }
+        selectedIDs.formUnion(workspace.filteredIDs)
+        groupUndo = nil
+    }
+
+    /// Clears every contact in the current group and search, on every page.
+    func clearScopedContacts() {
+        guard canClearScopedContacts, let workspace else { return }
+        guard invalidateSelectionForEdit() else { return }
+        selectedIDs.subtract(workspace.filteredIDs)
         groupUndo = nil
     }
 
