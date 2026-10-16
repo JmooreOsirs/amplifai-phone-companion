@@ -26,7 +26,17 @@ trap 'rm -rf -- "$BUILD_ROOT"' EXIT
 swift build --package-path "$ROOT_DIR/collector/macos" --configuration release --arch arm64
 RELEASE_BIN="$(swift build --package-path "$ROOT_DIR/collector/macos" --configuration release --arch arm64 --show-bin-path)"
 
-uv venv --python 3.12 "$BUILD_ROOT/venv"
+# Fetch the exact provider runtime covered by the retained dependency closure.
+# A generic managed 3.12 can silently change both Python and its static inputs.
+INPUTS="$ROOT_DIR/collector/macos-release-source-inputs.json"
+RUNTIME_URL="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["channels"]["macos-arm64"]["runtime"]["url"])' "$INPUTS")"
+RUNTIME_SHA="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["channels"]["macos-arm64"]["runtime"]["sha256"])' "$INPUTS")"
+curl --fail --location --retry 3 "$RUNTIME_URL" -o "$BUILD_ROOT/python.tar.gz"
+echo "$RUNTIME_SHA  $BUILD_ROOT/python.tar.gz" | shasum -a 256 --check
+mkdir "$BUILD_ROOT/runtime"
+tar -xzf "$BUILD_ROOT/python.tar.gz" -C "$BUILD_ROOT/runtime"
+"$BUILD_ROOT/runtime/python/bin/python3.12" -c 'import platform,sys; assert platform.machine()=="arm64"; assert sys.version_info[:3]==(3,12,12)'
+uv venv --python "$BUILD_ROOT/runtime/python/bin/python3.12" "$BUILD_ROOT/venv"
 uv pip sync --require-hashes --python "$BUILD_ROOT/venv/bin/python" \
   "$ROOT_DIR/collector/portable-requirements.lock"
 

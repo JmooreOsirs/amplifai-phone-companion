@@ -1,0 +1,38 @@
+{
+  "channels": {
+    "macos-arm64": {
+      "baseline": {
+        "bytes": 346421259,
+        "name": "AMPLIFai-Phone-Apple-Silicon-2026.10.15-rc26-Source.zip",
+        "sha256": "d43086679b9e88c77f31d0494d8ab7ed7ff9c7b6f109e03c687706212b0dc4bf",
+        "url": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/macos-2026.10.15-rc26-release/AMPLIFai-Phone-Apple-Silicon-2026.10.15-rc26-Source.zip"
+      },
+      "portableLockSha256": "d71549960142e50b1a35bb5ffddb26f5a3f0ff4fb7c1648f166a2c212e62c067",
+      "pythonVersion": "3.12.12",
+      "runtime": {
+        "bytes": 17668626,
+        "name": "cpython-3.12.12+20260203-aarch64-apple-darwin-install_only_stripped.tar.gz",
+        "sha256": "f1a4a44f7e5c4a9a4a87f4dde275b500a4dbee70e1681714da6766832876eac5",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260203/cpython-3.12.12%2B20260203-aarch64-apple-darwin-install_only_stripped.tar.gz"
+      },
+      "sparklePackageSha256": "b54984d191725eec8c4ac9f36daffef75244287b408d143509e7d681364d49cb"
+    },
+    "macos-intel-test": {
+      "baseline": {
+        "bytes": 283845684,
+        "name": "AMPLIFai-Phone-Intel-macOS14-Test-2026.10.15-rc26-intel1-Source.tar.gz",
+        "sha256": "b15d41602d06b9cb960af2e4e0254ddf8a53a853a9053c35d7ab0e3d033a99cb",
+        "url": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/macos-2026.10.15-rc26-intel1-test/AMPLIFai-Phone-Intel-macOS14-Test-2026.10.15-rc26-intel1-Source.tar.gz"
+      },
+      "portableLockSha256": "d71549960142e50b1a35bb5ffddb26f5a3f0ff4fb7c1648f166a2c212e62c067",
+      "pythonVersion": "3.12.15",
+      "runtime": {
+        "filename": "cpython-3.12.15+20261009-x86_64-apple-darwin-install_only_stripped.tar.gz",
+        "sha256": "fb3187d95334813b88940db0f1ca57b84cedfd552739c3a5771c3ea0e49988c9",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-x86_64-apple-darwin-install_only_stripped.tar.gz"
+      },
+      "sparklePackageSha256": "b54984d191725eec8c4ac9f36daffef75244287b408d143509e7d681364d49cb"
+    }
+  },
+  "schema": 1
+}
