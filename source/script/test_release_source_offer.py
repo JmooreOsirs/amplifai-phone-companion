@@ -1,4 +1,5 @@
 """Source staging rejects archive substitution and historical product payloads."""
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -11,11 +12,35 @@ import zipfile
 
 from stage_release_source_offer import (
     extract_dependencies, native_inputs, selected_dependency, retain_intel_source_declarations,
-    verify_readable_authored_python,
+    verify_readable_authored_python, verify_bundled_brand_files,
 )
 
 
 class SourceOfferChecks(unittest.TestCase):
+    def test_font_and_license_must_match_committed_source_and_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source/public/brand/fonts"
+            bundled = root / "app/Contents/Resources/Fonts"
+            source.mkdir(parents=True)
+            bundled.mkdir(parents=True)
+            records = []
+            for name, content in (("OpenSans.ttf", b"font bytes"), ("OFL.txt", b"license text")):
+                (source / name).write_bytes(content)
+                records.append({"file": name, "sha256": hashlib.sha256(content).hexdigest()})
+            (source / "provenance.json").write_text(json.dumps({"files": records}))
+            with self.assertRaises(ValueError):
+                verify_bundled_brand_files(root, root / "app")
+            for item in records:
+                (bundled / item["file"]).write_bytes((source / item["file"]).read_bytes())
+            self.assertEqual(len(verify_bundled_brand_files(root, root / "app")), 2)
+            (bundled / "OpenSans.ttf").write_bytes(b"substituted")
+            with self.assertRaises(ValueError):
+                verify_bundled_brand_files(root, root / "app")
+            (source / "OpenSans.ttf").write_bytes(b"substituted")
+            with self.assertRaises(ValueError):
+                verify_bundled_brand_files(root, root / "app")
+
     def test_frozen_only_intel_is_supported_but_missing_or_partial_arm_copy_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

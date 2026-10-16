@@ -43,16 +43,16 @@ struct CollectionStatusPanel: View {
             }
             if model.phase == .error {
                 Text(model.settingCheckAfterCollectionFailure ? "Previous attempt: \(model.errorMessage)" : model.errorMessage)
-                    .font(.custom("Arial", size: 18))
+                    .font(Brand.bodyFont(18))
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
                 if !model.isCallHistorySetupFailure {
                     ForEach(Array(model.recoverySteps.enumerated()), id: \.offset) { index, step in
-                        Text("\(index + 1). \(step)").font(.custom("Arial", size: 16))
+                        Text("\(index + 1). \(step)").font(Brand.bodyFont(16))
                     }
                 } else {
                     Text("Use the call-history setup below. The read-only setting check comes before any new collection.")
-                        .font(.custom("Arial", size: 18))
+                        .font(Brand.bodyFont(18))
                         .foregroundStyle(Brand.body)
                 }
                 Button(showingTechnicalDetails ? "Hide technical details" : "Show technical details and support code") {
@@ -121,10 +121,10 @@ struct CollectionStatusPanel: View {
                         ? "Support code copied." : "Copy failed. Select the support code instead."
                 }
                 .buttonStyle(SecondaryButton())
-                Text(model.safeSupportCode).font(.custom("Arial", size: 14)).textSelection(.enabled)
+                Text(model.safeSupportCode).font(Brand.bodyFont(14)).textSelection(.enabled)
             }
         }
-        .font(.custom("Arial", size: 16))
+        .font(Brand.bodyFont(16))
     }
 
     private func clock(_ seconds: Int) -> String {
@@ -243,13 +243,13 @@ struct CollectionStatusPanel: View {
                 Text(nextAction).foregroundStyle(Brand.body)
                 if model.phase == .connecting || model.phase == .transferring || model.phase == .processing {
                     Text("While you wait · \(waitingLines[reduceMotion ? 0 : max(0, elapsed / 12) % waitingLines.count])")
-                        .font(.custom("Arial", size: 16))
+                        .font(Brand.bodyFont(16))
                         .foregroundStyle(Brand.muted)
                 }
                 Text("Temporary local bytes are not saved account records.")
-                    .font(.custom("Arial", size: 12)).foregroundStyle(Brand.muted)
+                    .font(Brand.bodyFont(12)).foregroundStyle(Brand.muted)
             }
-            .font(.custom("Arial", size: 16))
+            .font(Brand.bodyFont(16))
             .padding(18)
             .background(Brand.background.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.border, lineWidth: 1))
@@ -272,7 +272,7 @@ struct CollectionStatusPanel: View {
     private func elapsedClock(_ seconds: Int) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(clock(seconds)).font(.custom("Arial", size: 32).weight(.bold)).monospacedDigit().foregroundStyle(Brand.heading)
-            Text("Elapsed · not time remaining").font(.custom("Arial", size: 11)).foregroundStyle(Brand.muted)
+            Text("Elapsed · not time remaining").font(Brand.bodyFont(11)).foregroundStyle(Brand.muted)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Observed elapsed time \(seconds / 60) minutes, \(seconds % 60) seconds")

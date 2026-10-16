@@ -35,6 +35,22 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def verify_bundled_brand_files(checkout, app):
+    source = checkout / "source/public/brand/fonts"
+    provenance = json.loads((source / "provenance.json").read_text())
+    entries = provenance["files"]
+    if {item["file"] for item in entries} != {"OpenSans.ttf", "OFL.txt"} or len(entries) != 2:
+        raise ValueError("unexpected bundled font provenance")
+    for item in entries:
+        authored = source / item["file"]
+        bundled = app / "Contents/Resources/Fonts" / item["file"]
+        if not bundled.is_file() or bundled.is_symlink():
+            raise ValueError("bundled font or license is missing")
+        if digest(authored) != item["sha256"] or digest(bundled) != item["sha256"]:
+            raise ValueError("bundled font or license differs from pinned source")
+    return entries
+
+
 def safe_name(name):
     path = PurePosixPath(name)
     if (not path.parts or path.is_absolute() or ".." in path.parts
@@ -276,12 +292,16 @@ def stage(checkout, app, baseline, output, channel):
         authored[name] = member
     # Check readable copies where the channel ships them; frozen checks are separate.
     readable_authored = verify_readable_authored_python(tree, app, authored, channel)
+    brand_files = verify_bundled_brand_files(checkout, app)
     legal = {name: "legal/" + name for name in ("LICENSE", "COPYRIGHT", "SOURCE-README.md", "THIRD-PARTY-NOTICES.txt")}
     (tree / "legal").mkdir()
     for name in ("LICENSE", "COPYRIGHT"):
         shutil.copyfile(checkout / name, tree / legal[name])
     notices_name = "THIRD-PARTY-NOTICES.txt" if channel == "macos-arm64" else "INTEL-THIRD-PARTY-NOTICES.txt"
     shutil.copyfile(dependencies / notices_name, tree / legal["THIRD-PARTY-NOTICES.txt"])
+    with (tree / legal["THIRD-PARTY-NOTICES.txt"]).open("a") as notices:
+        notices.write("\n\nOpen Sans — bundled native body font\n")
+        notices.write((checkout / "source/public/brand/fonts/OFL.txt").read_text())
     (tree / legal["SOURCE-README.md"]).write_text(
         "# AMPLIFai Phone corresponding source\n\n"
         f"Current authored commit: `{commit}`. Channel: `{channel}`.\n\n"
@@ -296,7 +316,7 @@ def stage(checkout, app, baseline, output, channel):
     write_json(tree / "release-evidence/source-binding.json", {
         "schema": 1, "sourceCommit": commit, "channel": channel, "baseline": inputs["baseline"],
         "runtime": inputs["runtime"], "privateDataUsed": False,
-        "readableAuthoredPythonFiles": readable_authored,
+        "readableAuthoredPythonFiles": readable_authored, "bundledBrandFiles": brand_files,
         "retainedSbomsMatch": True, "binaryReproductionClaimed": False, "legalDeterminationClaimed": False})
     # Manifest omits itself and the map to avoid circular hashes.
     manifest = "legal/source-package-file-manifest.json"

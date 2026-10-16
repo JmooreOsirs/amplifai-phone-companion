@@ -52,6 +52,8 @@ cp "$UVX_BIN" "$RESOURCES/uvx"
 cp "$UV_BIN" "$RESOURCES/uv"
 cp "$ROOT_DIR"/collector/amplifai_phone/*.py "$RESOURCES/collector/amplifai_phone/"
 cp "$ROOT_DIR/public/brand/amplifai-by-nexus-original.png" "$RESOURCES/amplifai-logo.png"
+mkdir -p "$RESOURCES/Fonts"
+cp "$ROOT_DIR/public/brand/fonts/OpenSans.ttf" "$ROOT_DIR/public/brand/fonts/OFL.txt" "$RESOURCES/Fonts/"
 ICON_BUILD_DIR="$(mktemp -d -t amplifai-icon)"
 trap 'rm -rf -- "$ICON_BUILD_DIR"' EXIT
 swiftc -parse-as-library "$SWIFT_PACKAGE/Tools/prepare_app_icon.swift" -o "$ICON_BUILD_DIR/prepare-app-icon"

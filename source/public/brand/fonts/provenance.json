@@ -1,0 +1,18 @@
+{
+  "source": "https://github.com/google/fonts/tree/main/ofl/opensans",
+  "license": "SIL Open Font License 1.1",
+  "files": [
+    {
+      "file": "OpenSans.ttf",
+      "gitBlob": "9db85693b027f3b05f6d77471d215f20707127c1",
+      "sha256": "36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878",
+      "bytes": 532636
+    },
+    {
+      "file": "OFL.txt",
+      "gitBlob": "d762c3c4629d0950bfcb101ea82dd52b4ebf3707",
+      "sha256": "fbbbcfef55318de350562559b671360de6d597112ecc5c73881b05092db89602",
+      "bytes": 4389
+    }
+  ]
+}

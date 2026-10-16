@@ -228,6 +228,9 @@ def main() -> int:
     with (contents / "Info.plist").open("wb") as stream:
         plistlib.dump(info, stream)
     shutil.copy2(SOURCE / "public/brand/amplifai-by-nexus-original.png", resources / "amplifai-logo.png")
+    (resources / "Fonts").mkdir()
+    for font_file in ("OpenSans.ttf", "OFL.txt"):
+        shutil.copy2(SOURCE / "public/brand/fonts" / font_file, resources / "Fonts" / font_file)
     icon_dir = output / "icon"
     icon_dir.mkdir()
     icon_tool = icon_dir / "prepare-icon"

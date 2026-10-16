@@ -40,6 +40,6 @@ struct AmplifaiPhoneApp: App {
                 }
                 .onDisappear { model.disconnect() }
         }
-        .defaultSize(width: 820, height: 680)
+        .defaultSize(width: 1180, height: 820)
     }
 }
