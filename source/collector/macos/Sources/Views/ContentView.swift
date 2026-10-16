@@ -18,7 +18,6 @@ struct ContentView: View {
     @State private var confirmingRetainedReviewDiscard = false
     @State private var confirmingBulkMove = false
     @State private var showingGroupTools = false
-    @State private var showingContactList = false
 
     var body: some View {
         ScrollViewReader { setupScroll in
@@ -735,7 +734,7 @@ struct ContentView: View {
             Text("Choose contacts")
                 .font(.custom("Arial", size: 28).weight(.bold))
                 .foregroundStyle(Brand.heading)
-            Text("Select a whole group or search, then uncheck any exceptions.")
+            Text("Main contacts start selected. Select or deselect a whole group or search at once, then uncheck exceptions.")
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(model.selectedIDs.count) selected")
                     .font(.custom("Arial", size: 24).weight(.bold))
@@ -777,6 +776,25 @@ struct ContentView: View {
 
     private func contactWorkspaceContent(_ workspace: ContactWorkspace) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            Toggle(isOn: Binding(
+                get: { !workspace.knownIDs.isEmpty && workspace.knownIDs.isSubset(of: model.selectedIDs) },
+                set: { on in if on { model.selectAllVerifiedContacts() } else { model.clearAllVerifiedContacts() } }
+            )) {
+                HStack(spacing: 10) {
+                    Text("Include all \(workspace.knownIDs.count) contacts")
+                        .font(.custom("Arial", size: 18).weight(.bold))
+                        .foregroundStyle(Brand.heading)
+                    Spacer()
+                    Text("\(model.selectedIDs.count) selected")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                }
+            }
+            .toggleStyle(.checkbox)
+            .disabled(!model.canEditWorkspace)
+            .padding(12)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.border, lineWidth: 1))
+            .accessibilityLabel("Include all \(workspace.knownIDs.count) contacts, \(model.selectedIDs.count) selected")
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { workspaceFilters(workspace) }
                 VStack(alignment: .leading, spacing: 8) { workspaceFilters(workspace) }
@@ -793,60 +811,44 @@ struct ContentView: View {
                     if value.unicodeScalars.count > 120 { search = String(value.unicodeScalars.prefix(120)) }
                     else { model.searchWorkspace(value) }
                 }
-            Text("Scope: \(workspace.scopeLabel)")
-                .font(.custom("Arial", size: 18).weight(.bold))
-                .foregroundStyle(Brand.heading)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel("Selection scope: \(workspace.scopeLabel)")
-            Text("\(model.selectedScopedCount) of \(workspace.filteredCount) in this scope selected · \(model.selectedIDs.count) selected in total")
-                .font(.custom("Arial", size: 16))
-                .foregroundStyle(Brand.muted)
-                .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 10) { workspaceSelectionActions(workspace) }
-                VStack(alignment: .leading, spacing: 10) { workspaceSelectionActions(workspace) }
+                HStack(spacing: 10) { scopeSelectionRow(workspace) }
+                VStack(alignment: .leading, spacing: 10) { scopeSelectionRow(workspace) }
             }
-            Text("Selections cover every page. Nothing is saved until you confirm Save in the browser.")
+            .padding(12)
+            .background(Brand.background, in: RoundedRectangle(cornerRadius: 8))
+            Text("Select all and Deselect all cover every contact in the scope, on every page. Uncheck exceptions below. Nothing is saved until you confirm Save in the browser.")
                 .font(.custom("Arial", size: 16))
                 .foregroundStyle(Brand.muted)
                 .fixedSize(horizontal: false, vertical: true)
-            DisclosureGroup("Adjust individual contacts · \(workspace.filteredCount) in this scope",
-                            isExpanded: $showingContactList) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Search above to find someone, then uncheck exceptions.")
-                        .font(.custom("Arial", size: 16))
-                        .foregroundStyle(Brand.muted)
-                    if workspace.filteredCount == 0 {
-                        Text("No matches here. Your selections are kept. Clear the search or choose another group.")
-                            .foregroundStyle(Brand.muted)
-                    } else {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 8) {
-                                ForEach(workspace.visible) { contact in
-                                    contactRow(contact, workspace: workspace)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .frame(height: 300)
-                        HStack(spacing: 10) {
-                            if workspace.hasPreviousPage {
-                                Button("Previous page") { model.previousWorkspacePage() }
-                                    .buttonStyle(SecondaryButton())
-                                    .accessibilityLabel("Previous page of contacts")
-                            }
-                            if workspace.hasNextPage {
-                                Button("Next page") { model.nextWorkspacePage() }
-                                    .buttonStyle(SecondaryButton())
-                                    .accessibilityLabel("Next page of contacts")
-                            }
-                            Text("\(workspace.pageStart + 1)–\(workspace.pageStart + workspace.visible.count) of \(workspace.filteredCount) matches")
-                                .font(.custom("Arial", size: 16))
-                                .foregroundStyle(Brand.muted)
+            if workspace.filteredCount == 0 {
+                Text("No matches here. Your selections are kept. Clear the search or choose another group.")
+                    .foregroundStyle(Brand.muted)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(workspace.visible) { contact in
+                            contactRow(contact, workspace: workspace)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.top, 8)
+                .frame(height: 300)
+                HStack(spacing: 10) {
+                    if workspace.hasPreviousPage {
+                        Button("Previous page") { model.previousWorkspacePage() }
+                            .buttonStyle(SecondaryButton())
+                            .accessibilityLabel("Previous page of contacts")
+                    }
+                    if workspace.hasNextPage {
+                        Button("Next page") { model.nextWorkspacePage() }
+                            .buttonStyle(SecondaryButton())
+                            .accessibilityLabel("Next page of contacts")
+                    }
+                    Text("\(workspace.pageStart + 1)–\(workspace.pageStart + workspace.visible.count) of \(workspace.filteredCount) matches")
+                        .font(.custom("Arial", size: 16))
+                        .foregroundStyle(Brand.muted)
+                }
             }
             Button(showingGroupTools
                    ? "Hide organizing · \(model.markedGroupMoveIDs.count) marked"
@@ -906,21 +908,26 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private func workspaceSelectionActions(_ workspace: ContactWorkspace) -> some View {
-        Button("Select all contacts · \(workspace.knownIDs.count)") { model.selectAllVerifiedContacts() }
-            .buttonStyle(LimeButton())
-            .disabled(!model.canSelectAllVerifiedContacts)
-        if workspace.isScoped {
-            Button("Select \(workspace.filteredCount) in this scope") { model.selectScopedContacts() }
-                .buttonStyle(SecondaryButton())
-                .disabled(!model.canSelectScopedContacts)
-            Button("Clear \(model.selectedScopedCount) in this scope") { model.clearScopedContacts() }
-                .buttonStyle(SecondaryButton())
-                .disabled(!model.canClearScopedContacts)
+    @ViewBuilder private func scopeSelectionRow(_ workspace: ContactWorkspace) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Scope: \(workspace.scopeLabel)")
+                .font(.custom("Arial", size: 16).weight(.bold))
+                .foregroundStyle(Brand.heading)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("\(model.selectedScopedCount) of \(workspace.filteredCount) selected")
+                .font(.custom("Arial", size: 16))
+                .foregroundStyle(Brand.muted)
         }
-        Button("Clear selection") { model.clearAllVerifiedContacts() }
+        .accessibilityElement(children: .combine)
+        Spacer(minLength: 8)
+        Button("Select all") { model.selectScopedContacts() }
             .buttonStyle(SecondaryButton())
-            .disabled(!model.canClearAllVerifiedContacts)
+            .disabled(!model.canSelectScopedContacts)
+            .accessibilityLabel("Select all \(workspace.filteredCount) contacts in this scope")
+        Button("Deselect all") { model.clearScopedContacts() }
+            .buttonStyle(SecondaryButton())
+            .disabled(!model.canClearScopedContacts)
+            .accessibilityLabel("Deselect all \(workspace.filteredCount) contacts in this scope")
     }
 
     @ViewBuilder private func groupMoveActions(_ workspace: ContactWorkspace) -> some View {

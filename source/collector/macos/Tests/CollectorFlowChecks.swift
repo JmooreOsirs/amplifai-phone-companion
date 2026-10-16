@@ -401,8 +401,10 @@ struct CollectorFlowChecks {
             model.receive(try event(#"{"kind":"contacts","scanId":"\#(scanID)","query":"","cursor":\#(cursor),"totalContacts":\#(total),"nextCursor":\#(next),"contacts":[\#(rows[cursor..<end].joined(separator: ","))]}"#))
         }
         guard let ready = model.workspace else { throw Failure.check("All 5,400 contacts must build one workspace") }
-        try require(ready.mainCount == 4_800 && ready.reviewCount == 600 && model.selectedIDs.isEmpty,
-                    "5,400 contacts start unselected with Main and Review counted across all 27 pages")
+        try require(ready.mainCount == 4_800 && ready.reviewCount == 600 && model.selectedIDs == ready.mainIDs,
+                    "5,400 contacts start with all 4,800 Main selected and 600 Review unselected across 27 pages")
+        try require(model.canSelectAllVerifiedContacts && model.canClearAllVerifiedContacts,
+                    "Include all and clearing everything are available from the default selection")
 
         // Select all, then uncheck exceptions on the first and last page.
         model.selectAllVerifiedContacts()
@@ -481,8 +483,9 @@ struct CollectorFlowChecks {
             let next = end == rows.count ? "null" : String(end)
             model.receive(try event(#"{"kind":"contacts","scanId":"\#(scanID)","query":"","cursor":\#(cursor),"totalContacts":1205,"nextCursor":\#(next),"contacts":[\#(rows[cursor..<end].joined(separator: ","))]}"#))
         }
-        try require(model.workspace?.mainCount == 605 && model.workspace?.reviewCount == 600 && model.selectedIDs.isEmpty,
-                    "Review starts unselected after all 1,205 stable IDs are verified")
+        try require(model.workspace?.mainCount == 605 && model.workspace?.reviewCount == 600 &&
+                    model.selectedIDs == model.workspace?.mainIDs,
+                    "Main starts selected and Review unselected after all 1,205 stable IDs are verified")
         model.selectAllMain()
         try require(model.selectedIDs.count == 605 && !model.selectedIDs.contains(601),
                     "Main-only action must not silently select Review")
