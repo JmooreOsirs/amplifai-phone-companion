@@ -79,6 +79,7 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var contactQuery = ""
     @Published private(set) var contactSearchPending = false
     @Published var selectedIDs: Set<Int> = []
+    private var mainPreselected = false
     @Published private(set) var selectingAllContacts = false
     @Published private(set) var selectAllCancelRequested = false
     @Published private(set) var selectAllVisited = 0
@@ -565,6 +566,7 @@ final class CollectorModel: ObservableObject {
         lastErrorCode = nil
         lastErrorStage = nil
         selectedIDs = []
+        mainPreselected = false
         clearSelectAll()
         clearSuggestions()
         clearPendingReview()
@@ -882,12 +884,22 @@ final class CollectorModel: ObservableObject {
         sendSuggestionScanPage()
     }
 
+    /// Main contacts start selected once per capture; Review contacts wait for the owner's choice.
+    private func applyDefaultSelection() {
+        guard !mainPreselected, let workspace else { return }
+        mainPreselected = true
+        if selectedIDs.isEmpty && handoffID.isEmpty && phase == .selecting {
+            selectedIDs = workspace.mainIDs
+        }
+    }
+
     func prepareWorkspace() {
         guard workspace == nil, !suggestionScanning,
               (phase == .selecting || phase == .reviewing), totalContacts > 0 else { return }
         if nextContactCursor == nil && currentContactCursor == 0 &&
             contactQuery.isEmpty && contacts.count == totalContacts {
             workspace = ContactWorkspace(previews: contacts, expectedCount: totalContacts)
+            applyDefaultSelection()
             suggestionMatches = [:]
             for contact in contacts {
                 for kind in ContactSuggestionKind.matches(contact.name) {
@@ -1163,6 +1175,7 @@ final class CollectorModel: ObservableObject {
         selectedIDs = []
         clearSelectAll()
         clearSuggestions()
+        mainPreselected = false
         workspace = nil
         groupUndo = nil
         clearPendingReview()
@@ -1531,6 +1544,7 @@ final class CollectorModel: ObservableObject {
             clearPendingReview()
             reviewedSelectionIDs = nil
             selectedIDs = []
+            mainPreselected = false
             resetHandoff()
             contacts = firstPage
             totalContacts = total
@@ -1583,6 +1597,7 @@ final class CollectorModel: ObservableObject {
                     workspace = ContactWorkspace(previews: workspaceBuilding,
                                                 expectedCount: totalContacts)
                     guard workspace != nil else { rejectContactPage(); return }
+                    applyDefaultSelection()
                     suggestionScanning = false
                     suggestionScanID = nil
                     suggestionSeenIDs = []
