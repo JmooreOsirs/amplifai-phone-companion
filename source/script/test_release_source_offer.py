@@ -1,5 +1,6 @@
 """Source staging rejects archive substitution and historical product payloads."""
 import io
+import json
 from pathlib import Path
 import stat
 import tarfile
@@ -8,10 +9,25 @@ import unittest
 import warnings
 import zipfile
 
-from stage_release_source_offer import extract_dependencies, native_inputs, selected_dependency
+from stage_release_source_offer import extract_dependencies, native_inputs, selected_dependency, retain_intel_source_declarations
 
 
 class SourceOfferChecks(unittest.TestCase):
+    def test_intel_retention_drops_obsolete_binary_inventory_and_success_flags(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "third_party/current-intel-source-closure.json"
+            original.parent.mkdir()
+            declarations = {name: [] for name in ("pythonVersion", "runtimeArchiveSha256", "pythonSourceInputs",
+                "pythonProvider", "rustCrates", "localRustCrates", "rustNoticeRecords", "staticOpenSSL")}
+            original.write_text(json.dumps({**declarations, "actualNativeFileSourceMapping": [{"sha256": "old"}],
+                "currentAppSboms": [{"sha256": "old"}], "sourceArchivesVerified": True, "commit": "old"}))
+            retain_intel_source_declarations(root, {"sha256": "baseline"})
+            retained = json.loads((root / "third_party/retained-intel-source-declarations.json").read_text())
+            self.assertEqual(retained["sourceDeclarations"], declarations)
+            self.assertEqual(set(retained), {"schema", "baselineSourceArchive", "sourceDeclarations"})
+            self.assertFalse(original.exists())
+
     def test_only_dependency_material_is_reused(self):
         for channel in ("macos-arm64", "macos-intel-test"):
             for name in ("source/collector/agent_entry.py", "release-source-map.json",

@@ -120,6 +120,18 @@ def records(root):
     return result
 
 
+def retain_intel_source_declarations(dependencies, baseline):
+    """Retain source declarations, excluding the baseline's obsolete app inventory."""
+    original = dependencies / "third_party/current-intel-source-closure.json"
+    closure = json.loads(original.read_text())
+    keys = ("pythonVersion", "runtimeArchiveSha256", "pythonSourceInputs", "pythonProvider",
+            "rustCrates", "localRustCrates", "rustNoticeRecords", "staticOpenSSL")
+    write_json(dependencies / "third_party/retained-intel-source-declarations.json", {
+        "schema": 1, "baselineSourceArchive": baseline,
+        "sourceDeclarations": {key: closure[key] for key in keys}})
+    original.unlink()
+
+
 def verify_inputs(checkout, dependencies, app, channel, inputs):
     for name, key in (("portable-requirements.lock", "portableLockSha256"),
                       ("macos/Package.resolved", "sparklePackageSha256")):
@@ -229,6 +241,8 @@ def stage(checkout, app, baseline, output, channel):
     dependencies = tree / "dependencies"
     extract_dependencies(baseline, dependencies, channel)
     verify_inputs(checkout, dependencies, app, channel, inputs)
+    if channel == "macos-intel-test":
+        retain_intel_source_declarations(dependencies, inputs["baseline"])
     authored = {}
     tracked = subprocess.check_output(["git", "-C", str(checkout), "ls-files", "-z"]).decode().split("\0")
     for name in filter(None, tracked):
