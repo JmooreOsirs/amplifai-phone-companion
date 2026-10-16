@@ -83,6 +83,9 @@ def api(path: str, *, audit: bool = False) -> dict:
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             data = response.read(1024 * 1024 + 1)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise ValueError("GitHub protection/provenance metadata unavailable") from None
     except (OSError, urllib.error.URLError):
         raise ValueError("GitHub protection/provenance metadata unavailable") from None
     if len(data) > 1024 * 1024:
@@ -234,9 +237,10 @@ def download(url: str, destination: Path, expected_sha: str, limit: int, *, auth
     try:
         response = opener.open(request, timeout=60)
     except urllib.error.HTTPError as error:
-        if not authenticated or error.code != 302:
+        code, location = error.code, error.headers.get("Location", "")
+        error.close()
+        if code not in {302, 303, 307, 308}:
             raise ValueError("artifact download request failed") from None
-        location = error.headers.get("Location", "")
         if not location.startswith("https://"):
             raise ValueError("artifact redirect must use HTTPS")
         try:
@@ -245,6 +249,9 @@ def download(url: str, destination: Path, expected_sha: str, limit: int, *, auth
             raise ValueError("artifact body unavailable") from None
     except (OSError, urllib.error.URLError):
         raise ValueError("download unavailable") from None
+    if not response.geturl().startswith("https://"):
+        response.close()
+        raise ValueError("download must remain on HTTPS")
     count = 0
     with response, destination.open("xb") as target:
         while block := response.read(1024 * 1024):
@@ -337,7 +344,7 @@ def sign_and_verify(path: Path, signer: Path, openssl: str, private: Path) -> st
     return signature
 
 
-def sign_candidate(app: Path, source: Path, output: Path, signer: Path) -> dict:
+def sign_candidate(app: Path, source: Path, output: Path, signer: Path, source_record: dict) -> dict:
     credential_names = ("APPLE_CERTIFICATE_P12_BASE64", "APPLE_CERTIFICATE_PASSWORD", "NOTARY_APPLE_ID",
                         "NOTARY_APP_PASSWORD", "SPARKLE_PRIVATE_KEY")
     if any(not os.environ.get(name) for name in credential_names):
@@ -363,12 +370,15 @@ def sign_candidate(app: Path, source: Path, output: Path, signer: Path) -> dict:
             command(["security", "unlock-keychain", "-p", password, keychain])
             command(["security", "import", certificate, "-P", os.environ["APPLE_CERTIFICATE_PASSWORD"],
                      "-k", keychain, "-T", "/usr/bin/codesign"])
+            certificate.unlink()
             command(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", password, keychain])
             identities = command(["security", "find-identity", "-v", "-p", "codesigning", keychain])
             if not re.search(r"\b" + CERTIFICATE_SHA1 + r'\s+"' + re.escape(IDENTITY) + r'"', identities):
                 raise ValueError("imported existing Developer ID identity differs")
             command(["xcrun", "notarytool", "store-credentials", "amplifai-ci", "--keychain", keychain,
                      "--apple-id", os.environ["NOTARY_APPLE_ID"], "--password", os.environ["NOTARY_APP_PASSWORD"], "--team-id", TEAM])
+            import producer
+            producer.validate_signing_input(source, app, source_record["sourceCommit"], source_record["channel"])
             from verify_macos_architecture import MAGICS
             nodes = []
             for path in app.rglob("*"):
@@ -394,7 +404,10 @@ def sign_candidate(app: Path, source: Path, output: Path, signer: Path) -> dict:
             image_root.mkdir()
             command(["ditto", app, image_root / app.name])
             (image_root / "Applications").symlink_to("/Applications")
-            dmg = output / "candidate.dmg"
+            import feeds
+            import finalize
+            names = feeds.names(source_record)
+            dmg = output / names["package"]
             command(["hdiutil", "create", "-volname", app.stem, "-srcfolder", image_root, "-format", "UDZO", dmg])
             command(["codesign", "--sign", IDENTITY, "--keychain", keychain, "--timestamp", dmg])
             notarize(dmg, keychain)
@@ -402,9 +415,9 @@ def sign_candidate(app: Path, source: Path, output: Path, signer: Path) -> dict:
             command(["xcrun", "stapler", "validate", dmg])
             command(["codesign", "--verify", "--strict", dmg])
             command(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature", dmg])
+            command(["security", "delete-keychain", keychain])
             signature = sign_and_verify(dmg, signer, openssl, private)
-            (output / "candidate.dmg.sig").write_text(signature + "\n")
-            shutil.copyfile(source, output / "corresponding-source.zip")
+            (output / (dmg.name + ".sig")).write_text(signature + "\n")
             inventory = {"files": [], "symlinks": []}
             for path in sorted(app.rglob("*")):
                 relative = path.relative_to(app).as_posix()
@@ -414,10 +427,14 @@ def sign_candidate(app: Path, source: Path, output: Path, signer: Path) -> dict:
                     inventory["files"].append({"path": relative, "bytes": path.stat().st_size, "sha256": digest(path)})
             inventory_path = output / "final-signed-app-inventory.json"
             inventory_path.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n")
+            source_zip = output / names["source"]
+            finalized = finalize.finalize_source(source, source_zip, inventory_path, source_record["sourceCommit"])
+            feed = feeds.prepare(source_record, dmg, source_zip, output / "feed", signer.parent.parent, openssl)
             return {"packageSha256": digest(dmg), "packageBytes": dmg.stat().st_size,
-                    "sourceSha256": digest(source), "developerId": IDENTITY, "sparklePublicKey": PUBLIC_KEY,
-                    "finalSignedAppInventorySha256": digest(inventory_path), "sourceFinalizationRequired": True,
-                    "notarized": True, "published": False, "feedPrepared": False}
+                    "sourceSha256": digest(source_zip), "developerId": IDENTITY, "sparklePublicKey": PUBLIC_KEY,
+                    "finalSignedAppInventorySha256": digest(inventory_path), "sourceFinalizationRequired": False,
+                    "sourceFinalization": finalized, "feed": feed,
+                    "notarized": True, "published": False, "feedPrepared": True}
         finally:
             # Failure must propagate if deletion fails; never silently retain keys.
             if keychain.exists():
@@ -470,7 +487,8 @@ def main() -> None:
                 tools = stage / "tools.tar.xz"
                 download(SPARKLE_URL, tools, SPARKLE_SHA256, 16319840)
                 command(["tar", "-xf", tools, "-C", stage])
-                receipt["signing"] = sign_candidate(app, stage / approved["sourceArchive"]["name"], args.output, stage / "bin/sign_update")
+                receipt["signing"] = sign_candidate(app, stage / approved["sourceArchive"]["name"], args.output,
+                                                    stage / "bin/sign_update", approved)
     (args.output / "release-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 
 

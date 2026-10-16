@@ -5,11 +5,17 @@
   "sourceRef": "refs/heads/release/native",
   "qualifiedAncestor": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
   "signingEnvironment": "amplifai-macos-signing",
+  "publicationEnvironment": "amplifai-release-publication",
   "activationApproved": false,
+  "publicationEnabled": false,
   "releaseAuthority": "reviewed-source-independent-release",
   "requiredChecks": ["release-control-checks"],
   "codeOwners": "* @JmooreOsirs @bac1876\n",
   "releasedBuilds": {"macos-arm64": "26101526", "macos-intel-test": "261015261"},
+  "previousFeeds": {
+    "macos-arm64": {"bytes": 1561, "sha256": "afd0ede099c9219853c4626f1466cff4cde6dfd95e7c42abd9a1164d89b72b13"},
+    "macos-intel-test": {"bytes": 1667, "sha256": "6207d5831dc6f0f638445458379393ac3a9fa7539d7d892e42b54846ec76031c"}
+  },
   "operators": ["JmooreOsirs", "bac1876"],
   "buildWorkflows": [".github/workflows/macos-arm64-check.yml", ".github/workflows/macos-intel.yml"],
   "approvedSources": []

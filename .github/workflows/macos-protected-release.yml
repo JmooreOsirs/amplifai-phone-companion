@@ -1,11 +1,11 @@
-name: Protected Mac release candidate
+name: Protected Mac release
 
 on:
   workflow_dispatch:
     inputs:
       mode:
         type: choice
-        options: [dry-run, signed-candidate]
+        options: [dry-run, signed-candidate, publish]
         default: dry-run
         required: true
       source_commit:
@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           mode=dry-run
-          if [ "$RELEASE_MODE" = signed-candidate ]; then mode=eligible; fi
+          if [ "$RELEASE_MODE" != dry-run ]; then mode=eligible; fi
           python3 release_control/release.py "$mode" --output "$RUNNER_TEMP/inspection"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -73,8 +73,12 @@ jobs:
           retention-days: 7
 
   sign:
+    name: macos-sign-and-notarize
     needs: inspect
-    if: inputs.mode == 'signed-candidate'
+    if: inputs.mode != 'dry-run'
+    outputs:
+      artifact-id: ${{ steps.signed-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.signed-artifact.outputs.artifact-digest }}
     # Exact protected main only; Jeff authorized no second run approval.
     environment: amplifai-macos-signing
     # Hosted, disposable runner; no persistent owner Mac or candidate scripts.
@@ -114,10 +118,42 @@ jobs:
                   subprocess.run(['security', 'delete-keychain', str(keychain)], check=True, capture_output=True)
               shutil.rmtree(path)
       - name: Retain qualified candidate only after success
+        id: signed-artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: signed-macos-${{ inputs.channel }}-${{ github.run_id }}
           path: ${{ runner.temp }}/signed-delivery/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    needs: sign
+    if: inputs.mode == 'publish'
+    environment: amplifai-release-publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SIGNED_ARTIFACT_ID: ${{ needs.sign.outputs.artifact-id }}
+      SIGNED_ARTIFACT_SHA256: ${{ needs.sign.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify isolated signer delivery and publish immutable GitHub assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
+        run: python3 release_control/publish.py --output "$RUNNER_TEMP/publication-readback"
+      - name: Retain public-byte receipt and website handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-publication-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/publication-readback/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
