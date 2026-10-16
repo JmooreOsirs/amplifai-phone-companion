@@ -9,10 +9,34 @@ import unittest
 import warnings
 import zipfile
 
-from stage_release_source_offer import extract_dependencies, native_inputs, selected_dependency, retain_intel_source_declarations
+from stage_release_source_offer import (
+    extract_dependencies, native_inputs, selected_dependency, retain_intel_source_declarations,
+    verify_readable_authored_python,
+)
 
 
 class SourceOfferChecks(unittest.TestCase):
+    def test_frozen_only_intel_is_supported_but_missing_or_partial_arm_copy_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tree, app = root / "source", root / "app"
+            authored = {"source/collector/amplifai_phone/__init__.py": "authored/init.py"}
+            (tree / "authored").mkdir(parents=True)
+            (tree / "authored/init.py").write_text("VALUE = 1\n")
+            self.assertEqual(verify_readable_authored_python(tree, app, authored, "macos-intel-test"), [])
+            with self.assertRaises(ValueError):
+                verify_readable_authored_python(tree, app, authored, "macos-arm64")
+            embedded = app / "Contents/Resources/collector/amplifai_phone/__init__.py"
+            embedded.parent.mkdir(parents=True)
+            # A present but incomplete Intel copy cannot silently use the frozen-only exception.
+            with self.assertRaises(ValueError):
+                verify_readable_authored_python(tree, app, authored, "macos-intel-test")
+            embedded.write_text("VALUE = 1\n")
+            self.assertEqual(verify_readable_authored_python(tree, app, authored, "macos-arm64"), list(authored))
+            embedded.write_text("VALUE = 2\n")
+            with self.assertRaises(ValueError):
+                verify_readable_authored_python(tree, app, authored, "macos-intel-test")
+
     def test_intel_retention_drops_obsolete_binary_inventory_and_success_flags(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

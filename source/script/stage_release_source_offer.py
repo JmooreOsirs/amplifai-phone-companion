@@ -132,6 +132,23 @@ def retain_intel_source_declarations(dependencies, baseline):
     original.unlink()
 
 
+def verify_readable_authored_python(tree, app, authored, channel):
+    root = app / "Contents/Resources/collector/amplifai_phone"
+    if channel == "macos-intel-test" and not root.exists() and not root.is_symlink():
+        # Intel intentionally ships the frozen helper without ARM's readable copy.
+        # Its compiled engine is qualified separately by the producer/workflow.
+        return []
+    verified = []
+    for name, member in authored.items():
+        if name.startswith("source/collector/amplifai_phone/") and name.endswith(".py"):
+            embedded = app / "Contents/Resources" / name.removeprefix("source/")
+            if (root.is_symlink() or embedded.is_symlink() or not embedded.is_file()
+                    or digest(embedded) != digest(tree / member)):
+                raise ValueError("embedded authored Python differs from current source")
+            verified.append(name)
+    return verified
+
+
 def verify_inputs(checkout, dependencies, app, channel, inputs):
     for name, key in (("portable-requirements.lock", "portableLockSha256"),
                       ("macos/Package.resolved", "sparklePackageSha256")):
@@ -257,12 +274,8 @@ def stage(checkout, app, baseline, output, channel):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(original, target)
         authored[name] = member
-    # Check readable embedded authored Python independently of the frozen helper tests.
-    for name, member in authored.items():
-        if name.startswith("source/collector/amplifai_phone/") and name.endswith(".py"):
-            embedded = app / "Contents/Resources" / name.removeprefix("source/")
-            if embedded.is_symlink() or digest(embedded) != digest(tree / member):
-                raise ValueError("embedded authored Python differs from current source")
+    # Check readable copies where the channel ships them; frozen checks are separate.
+    readable_authored = verify_readable_authored_python(tree, app, authored, channel)
     legal = {name: "legal/" + name for name in ("LICENSE", "COPYRIGHT", "SOURCE-README.md", "THIRD-PARTY-NOTICES.txt")}
     (tree / "legal").mkdir()
     for name in ("LICENSE", "COPYRIGHT"):
@@ -283,6 +296,7 @@ def stage(checkout, app, baseline, output, channel):
     write_json(tree / "release-evidence/source-binding.json", {
         "schema": 1, "sourceCommit": commit, "channel": channel, "baseline": inputs["baseline"],
         "runtime": inputs["runtime"], "privateDataUsed": False,
+        "readableAuthoredPythonFiles": readable_authored,
         "retainedSbomsMatch": True, "binaryReproductionClaimed": False, "legalDeterminationClaimed": False})
     # Manifest omits itself and the map to avoid circular hashes.
     manifest = "legal/source-package-file-manifest.json"
