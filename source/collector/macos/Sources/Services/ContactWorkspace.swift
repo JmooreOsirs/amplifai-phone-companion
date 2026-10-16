@@ -44,6 +44,14 @@ struct ContactWorkspace {
     var knownIDs: Set<Int> { allIDs }
     var filteredCount: Int { indices.count }
     var filteredIDs: Set<Int> { Set(indices.map { previews[$0].id }) }
+    /// True when the group or search narrows the scope below every contact.
+    var isScoped: Bool { group != .all || !query.isEmpty }
+    /// Names the current group and search; selection actions cover all its pages.
+    var scopeLabel: String {
+        let base = group == .all ? "All contacts" : "\(group.rawValue) contacts"
+        let matching = query.isEmpty ? base : "\(base) matching “\(query)”"
+        return "\(matching) · \(filteredCount) across all pages"
+    }
     var visible: [ContactPreview] {
         indices[pageStart..<min(pageStart + pageSize, indices.count)].map { previews[$0] }
     }
