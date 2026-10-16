@@ -1,0 +1,105 @@
+name: ARM native build and source qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact 40-character commit of this workflow and native source
+        required: true
+        type: string
+      mode:
+        description: Preview produces evidence only; release requires protected source authorization
+        required: true
+        type: choice
+        default: preview
+        options: [preview, release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm-native-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  arm64:
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && (github.ref == 'refs/heads/release/native' || (inputs.mode == 'preview' && startsWith(github.ref, 'refs/heads/codex/')))
+    # Standard public runner. No product credentials, environment, or write token.
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      QUALIFICATION_MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Bind the run to its exact source and workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$SOURCE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(uname -m)" = arm64
+          if [ "$QUALIFICATION_MODE" = release ]; then
+            test "$GITHUB_REF" = refs/heads/release/native
+            test "$GITHUB_REF_PROTECTED" = true
+          fi
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: '0.10.2'
+          enable-cache: false
+      - name: Test source archive guards
+        run: PYTHONPATH=source/script python3 -W error -m unittest test_release_source_offer -v
+      - name: Build the raw app with the qualified runtime and locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash source/script/build_portable_candidate.sh --isolated > "$RUNNER_TEMP/raw-build.log" 2>&1
+          tail -n 1 "$RUNNER_TEMP/raw-build.log" > "$RUNNER_TEMP/raw-app-path.txt"
+      - name: Prepare the qualification interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv --python 3.12.12 "$RUNNER_TEMP/qualification-venv"
+          uv pip sync --require-hashes --python "$RUNNER_TEMP/qualification-venv/bin/python" source/collector/portable-requirements.lock
+      - name: Read current protected main policy as data
+        if: inputs.mode == 'release'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/JmooreOsirs/amplifai-phone-companion/main/release_control/policy.json -o "$RUNNER_TEMP/control-policy.json"
+      - name: Stage Legal and corresponding source; qualify the real frozen app
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw_app="$(cat "$RUNNER_TEMP/raw-app-path.txt")"
+          args=(--preview)
+          if [ "$QUALIFICATION_MODE" = release ]; then
+            args=(--policy "$RUNNER_TEMP/control-policy.json")
+          fi
+          "$RUNNER_TEMP/qualification-venv/bin/python" source/script/qualify_macos_candidate.py \
+            --app "$raw_app" --channel macos-arm64 --output "$RUNNER_TEMP/qualified" "${args[@]}" > "$RUNNER_TEMP/qualification.log" 2>&1
+      - name: Retain immutable qualified delivery
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-arm64-${{ inputs.mode }}-${{ github.sha }}
+          path: ${{ runner.temp }}/qualified/delivery/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Retain build and qualification logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-arm64-logs-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/raw-build.log
+            ${{ runner.temp }}/qualification.log
+            ${{ runner.temp }}/qualified/staging/source-staging-receipt.json
+          if-no-files-found: warn
+          retention-days: 7
