@@ -124,19 +124,17 @@ def validate_provenance(policy: dict, request: dict, run: dict, artifact: dict, 
 
 def validate_protection(policy: dict, environment: dict, branches: dict, protected: dict, env: dict) -> None:
     rules = environment.get("protection_rules", [])
-    reviewers = [rule for rule in rules if rule.get("type") == "required_reviewers"]
     branch_names = {item.get("name") for item in branches.get("branch_policies", [])
                     if item.get("type", "branch") == "branch"}
     if (env.get("GITHUB_REF_PROTECTED") != "true" or not protected.get("protected")
             or environment.get("name") != policy["signingEnvironment"]
-            or policy.get("adminBypassDisabledVerified") is not True
+            or policy.get("releaseAuthority") != "reviewed-source-independent-release"
             or environment.get("deployment_branch_policy") != {
                 "protected_branches": False, "custom_branch_policies": True}
             or branch_names != {policy["controlRef"].removeprefix("refs/heads/")}
             or len(branches.get("branch_policies", [])) != 1
-            or len(reviewers) != 1 or reviewers[0].get("prevent_self_review") is not True
-            or not reviewers[0].get("reviewers")):
-        raise ValueError("verified environment reviewers, no bypass and exact protected control branch required")
+            or any(rule.get("type") != "branch_policy" for rule in rules)):
+        raise ValueError("exact protected control branch and no per-run approval rules required")
 
 
 def validate_branch_custody(policy: dict, protection: dict, owners: str) -> None:
@@ -166,11 +164,14 @@ def inspected(policy: dict, request: dict, *, signed: bool, custody: bool = True
     artifact = api(f"{repo}/actions/artifacts/{request['artifactId']}")
     comparison = api(f"{repo}/compare/{policy['qualifiedAncestor']}...{request['sourceCommit']}")
     validate_provenance(policy, request, run, artifact, comparison)
-    approved = next((item for item in policy["approvedCandidates"] if item.get("request") == request), None)
+    approved = next((item for item in policy["approvedSources"]
+                     if item.get("sourceCommit") == request["sourceCommit"]
+                     and item.get("channel") == request["channel"]), None)
     if signed:
         if (policy.get("activationApproved") is not True or approved is None
-                or approved.get("qualificationReviewed") is not True):
-            raise ValueError("signing inactive or candidate not approved in reviewed control policy")
+                or approved.get("releaseAuthorized") is not True
+                or approved.get("buildWorkflow") != run.get("path")):
+            raise ValueError("signing inactive or source/workflow not authorized in reviewed control policy")
         if (not isinstance(approved.get("build"), str) or not re.fullmatch(r"[0-9]{1,12}", approved["build"])
                 or int(approved["build"]) <= int(policy["releasedBuilds"][request["channel"]])
                 or not isinstance(approved.get("version"), str)
@@ -195,6 +196,31 @@ def inspected(policy: dict, request: dict, *, signed: bool, custody: bool = True
             "artifactName": artifact["name"], "controlCommit": os.environ["GITHUB_SHA"],
             "operator": os.environ["GITHUB_ACTOR"], "signingApproved": signed and custody,
             "published": False, "physicalAcceptance": False}, approved
+
+
+def validate_delivery_record(record: dict, source: dict, request: dict) -> dict:
+    """Derive artifact eligibility from trusted CI, without a run-specific PR."""
+    fields = {"schema", "sourceCommit", "channel", "version", "build", "buildRunId",
+              "checks", "privateDataUsed", "appArchive", "sourceArchive"}
+    if (set(record) != fields or type(record.get("schema")) is not int or record["schema"] != 1
+            or any(record.get(key) != source[key] for key in ("sourceCommit", "channel", "version", "build"))
+            or type(record.get("buildRunId")) is not int or record["buildRunId"] != request["runId"]
+            or record.get("privateDataUsed") is not False
+            or record.get("checks") != {"functional": True, "architecture": True, "frozenHelper": True,
+                                        "sourceClosure": True, "legal": True}):
+        raise ValueError("trusted build did not qualify this exact reviewed source and run")
+    if any(type(value) is not bool for value in record["checks"].values()):
+        raise ValueError("qualification checks must be measured boolean results")
+    for key in ("appArchive", "sourceArchive"):
+        asset = record[key]
+        if (not isinstance(asset, dict) or set(asset) != {"name", "bytes", "sha256"}
+                or not isinstance(asset["name"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.zip", asset["name"])
+                or type(asset["bytes"]) is not int or not 0 < asset["bytes"] <= MAX_ARTIFACT
+                or not isinstance(asset["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", asset["sha256"])):
+            raise ValueError("invalid qualified asset record")
+    if len({record["appArchive"]["name"], record["sourceArchive"]["name"], "qualification.json"}) != 3:
+        raise ValueError("qualified asset names must be distinct")
+    return record
 
 
 def download(url: str, destination: Path, expected_sha: str, limit: int, *, authenticated: bool = False) -> None:
@@ -424,9 +450,13 @@ def main() -> None:
                 if os.uname().machine != CHANNELS[request["channel"]][0]:
                     raise ValueError("host architecture differs from candidate channel")
                 with zipfile.ZipFile(archive) as artifact:
+                    if (len(artifact.infolist()) != 3 or "qualification.json" not in artifact.namelist()
+                            or artifact.getinfo("qualification.json").file_size > 65536):
+                        raise ValueError("trusted build qualification record and two payload ZIPs required")
+                    approved = validate_delivery_record(exact_json(artifact.read("qualification.json")), approved, request)
                     expected = {record["name"]: record for record in (approved["appArchive"], approved["sourceArchive"])}
-                    if len(expected) != 2 or len(artifact.infolist()) != 2 or set(artifact.namelist()) != set(expected):
-                        raise ValueError("reviewed artifact must contain exactly the app ZIP and complete source ZIP")
+                    if set(artifact.namelist()) != set(expected) | {"qualification.json"}:
+                        raise ValueError("qualified artifact member set differs")
                     for name, record in expected.items():
                         if Path(name).name != name or artifact.getinfo(name).file_size != record["bytes"]:
                             raise ValueError("artifact member differs from approved bytes")
