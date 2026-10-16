@@ -53,8 +53,9 @@ workflow independently verifies source, run, artifact, custody and fresh app has
 The rc27 Windows account-origin source fix is retained alongside the later rc19
 fixture/handoff qualification. Changed Windows bytes require a new version; they
 must never overwrite published rc19 assets. Intel retains its Python 3.12.15
-closure and current successful-artifact retention. A new Intel build requires a
-new release identity and exact-source qualification before publication.
+closure and current successful-artifact retention. The Intel recipe now uses rc27-intel1 / 261015271 and the same source/Legal
+producer hook. Actual Intel compilation and frozen qualification remain required
+before publication.
 
 No new keys, accounts, spend, role changes, or personal collection data are part
 of this build milestone. Source/workflow changes still require independent review.

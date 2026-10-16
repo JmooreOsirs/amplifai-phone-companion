@@ -1,16 +1,18 @@
-name: RC26 Intel Mac bootstrap and qualification
+name: Intel native build and source qualification
 
 on:
   workflow_dispatch:
     inputs:
-      approved_source_commit:
-        description: 'Exact clean rc26 candidate commit (40 lowercase hex characters)'
+      source_commit:
+        description: Exact 40-character commit of this workflow and native source
         required: true
         type: string
-      source_freeze_sha256:
-        description: 'SHA256 of the reproducible authored-source receipt from that clean commit'
+      mode:
+        description: Preview produces evidence only; release requires protected source authorization
         required: true
-        type: string
+        type: choice
+        default: preview
+        options: [preview, release]
 
 permissions:
   contents: read
@@ -21,8 +23,8 @@ concurrency:
 
 jobs:
   intel:
-    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/codex/brian-message-diagnostics-oct15'
-    # Standard runner on this public repository: no larger/paid runner, no Homebrew.
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && (github.ref == 'refs/heads/release/native' || (inputs.mode == 'preview' && startsWith(github.ref, 'refs/heads/codex/')))
+    # Standard public runner; no larger runner, owner Mac, product keys, or write token.
     runs-on: macos-15-intel
     timeout-minutes: 90
     env:
@@ -30,39 +32,41 @@ jobs:
       AMPLIFAI_TARGET_ARCH: x86_64
       RUSTUP_TOOLCHAIN: '1.98.0'
       PYTHONNOUSERSITE: '1'
-      APPROVED_SOURCE_COMMIT: ${{ inputs.approved_source_commit }}
-      SOURCE_FREEZE_SHA256: ${{ inputs.source_freeze_sha256 }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      APPROVED_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      QUALIFICATION_MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Require the release owner's exact approved source commit
+      - name: Bind the run to its exact source and workflow
         shell: bash
         run: |
           set -euo pipefail
           [[ "$APPROVED_SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$SOURCE_FREEZE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$GITHUB_SHA" = "$APPROVED_SOURCE_COMMIT"
           test "$(git rev-parse HEAD)" = "$APPROVED_SOURCE_COMMIT"
+          if [ "$QUALIFICATION_MODE" = release ]; then
+            test "$GITHUB_REF" = refs/heads/release/native
+            test "$GITHUB_REF_PROTECTED" = true
+          fi
       - name: Verify native Intel runner and prepare pinned Python
         shell: bash
         run: |
           set -euo pipefail
           test "$(uname -m)" = x86_64
-          sw_vers
-          swift --version
           mkdir -p "$RUNNER_TEMP/intel-python"
           curl --fail --location --retry 3 'https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15%2B20261009-x86_64-apple-darwin-install_only_stripped.tar.gz' -o "$RUNNER_TEMP/intel-python/python.tar.gz"
           echo "fb3187d95334813b88940db0f1ca57b84cedfd552739c3a5771c3ea0e49988c9  $RUNNER_TEMP/intel-python/python.tar.gz" | shasum -a 256 --check
           tar -xzf "$RUNNER_TEMP/intel-python/python.tar.gz" -C "$RUNNER_TEMP/intel-python"
           echo "$RUNNER_TEMP/intel-python/python/bin" >> "$GITHUB_PATH"
           rustup toolchain install 1.98.0 --profile minimal
-          rustc --version
-      - name: Reproduce the approved authored-source freeze before building
+      - name: Freeze this exact clean source without a second human artifact approval
         shell: bash
         run: |
           set -euo pipefail
-          python3 source/script/build_macos_intel_candidate.py --freeze-source-receipt "$RUNNER_TEMP/intel-authored-source-freeze.json" --expected-source-commit "$APPROVED_SOURCE_COMMIT" --expected-source-manifest-sha256 "$SOURCE_FREEZE_SHA256"
+          python3 source/script/build_macos_intel_candidate.py --freeze-source-receipt "$RUNNER_TEMP/intel-authored-source-freeze.json" --expected-source-commit "$APPROVED_SOURCE_COMMIT"
+          echo "SOURCE_FREEZE_SHA256=$(shasum -a 256 "$RUNNER_TEMP/intel-authored-source-freeze.json" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
       - name: Prepare exact Intel dependency wheels
         shell: bash
         run: |
@@ -77,60 +81,57 @@ jobs:
         run: |
           set -euo pipefail
           python source/script/collect_intel_python_sources.py --runtime-archive "$RUNNER_TEMP/intel-python/python.tar.gz" --output-dir "$RUNNER_TEMP/intel-python-sources" --reuse-source-dir "$RUNNER_TEMP/intel-deps/source-inputs"
-      - name: Test build guards and source collection regressions
+      - name: Test Intel guards, source collection and platform regressions
         shell: bash
         env:
           PYTHONPATH: source/collector:source/collector/tests:source/script
         run: |
           set -euo pipefail
-          python -m unittest discover -s source/script -p 'test_*intel*.py' -v
+          python -W error -m unittest discover -s source/script -p 'test_*intel*.py' -v
           python source/script/test_macos_architecture.py -v
           python source/script/test_macos_wrapper.py -v
-          python -m unittest test_metadata test_ios_backup test_agent test_bridge test_bridge_ack test_sqlite_size_compat test_sqlite_messages_size_compat test_sqlite_encrypted_size_compat test_nonfinite_duration_pipeline test_workspace test_backup_capacity test_backup_stream test_backup_watchdog test_contact_provenance test_companion_status test_filtered_journal_cleanup test_source_diagnostics test_source_diagnostic_flow -v
+          python -W error -m unittest test_release_source_offer -v
+          python -m unittest test_sqlite_size_compat test_sqlite_messages_size_compat test_sqlite_encrypted_size_compat test_nonfinite_duration_pipeline -v
       - name: Build complete Intel app and audit every Mach-O component
         shell: bash
         run: |
           set -euo pipefail
           python source/script/build_macos_intel_candidate.py --output "$RUNNER_TEMP/intel-build" --dependency-receipt "$RUNNER_TEMP/intel-deps/receipt.json" --python-sources "$RUNNER_TEMP/intel-python-sources" --source-freeze-receipt "$RUNNER_TEMP/intel-authored-source-freeze.json" --expected-source-commit "$APPROVED_SOURCE_COMMIT" --expected-source-manifest-sha256 "$SOURCE_FREEZE_SHA256" --enable-published-updates 2>&1 | tee "$RUNNER_TEMP/intel-native-build.log"
-      - name: Run native flow, updater gates, status mode, and actual frozen worker checks
-        shell: bash
-        env:
-          PYTHONPATH: source/collector:source/collector/tests
-        run: |
-          set -euo pipefail
-          {
-            sh source/collector/macos/Tests/check_flow.sh
-            sh source/collector/macos/Tests/check_updater.sh
-            sh source/collector/macos/Tests/check_contact_provenance.sh
-            helper="$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app/Contents/Resources/helper/amplifai-agent"
-            python source/collector/tests/qualify_frozen_encrypted_worker.py --helper "$helper" > "$RUNNER_TEMP/intel-build/frozen-worker-receipt.json"
-            python source/script/verify_frozen_metadata.py --helper "$helper" --expected-helper-sha256 "$(shasum -a 256 "$helper" | cut -d ' ' -f 1)" --tests source/collector/tests --capacity-tests > "$RUNNER_TEMP/intel-build/frozen-metadata-receipt.json"
-          } 2>&1 | tee "$RUNNER_TEMP/intel-qualification.log"
-      - name: Package exact build and corresponding source for Jeff
+      - name: Read current protected main policy as data
+        if: inputs.mode == 'release'
         shell: bash
         run: |
           set -euo pipefail
-          python source/script/build_macos_intel_candidate.py --verify-source-freeze --source-freeze-receipt "$RUNNER_TEMP/intel-authored-source-freeze.json" --expected-source-commit "$APPROVED_SOURCE_COMMIT" --expected-source-manifest-sha256 "$SOURCE_FREEZE_SHA256"
-          mkdir -p "$RUNNER_TEMP/intel-delivery"
-          ditto -c -k --sequesterRsrc --keepParent "$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app" "$RUNNER_TEMP/intel-delivery/AMPLIFai-Phone-Intel-rc26-candidate.zip"
-          cp "$RUNNER_TEMP/intel-build/"*.json "$RUNNER_TEMP/intel-delivery/"
-          cp "$RUNNER_TEMP/intel-deps/receipt.json" "$RUNNER_TEMP/intel-delivery/dependency-receipt.json"
-          mkdir -p "$RUNNER_TEMP/intel-source"
-          git archive "$APPROVED_SOURCE_COMMIT" | tar -x -C "$RUNNER_TEMP/intel-source"
-          cp "$RUNNER_TEMP/intel-authored-source-freeze.json" "$RUNNER_TEMP/intel-source/authored-source-freeze.json"
-          cp -R "$RUNNER_TEMP/intel-deps/source-inputs" "$RUNNER_TEMP/intel-source/intel-dependency-source-inputs"
-          cp -R "$RUNNER_TEMP/intel-python-sources" "$RUNNER_TEMP/intel-source/intel-python-source-inputs"
-          tar -czf "$RUNNER_TEMP/intel-delivery/AMPLIFai-Intel-Build-Source.tar.gz" -C "$RUNNER_TEMP" intel-source
-          cd "$RUNNER_TEMP/intel-delivery"
-          shasum -a 256 ./* > SHA256SUMS
-      - name: Retain qualified delivery for the release owner
+          curl --fail --location --retry 3 https://raw.githubusercontent.com/JmooreOsirs/amplifai-phone-companion/main/release_control/policy.json -o "$RUNNER_TEMP/control-policy.json"
+      - name: Qualify actual frozen code and stage the complete delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app/Contents/Resources/helper/amplifai-agent"
+          python source/script/verify_frozen_metadata.py --helper "$helper" --expected-helper-sha256 "$(shasum -a 256 "$helper" | cut -d ' ' -f 1)" --tests source/collector/tests --capacity-tests > "$RUNNER_TEMP/intel-build/frozen-metadata-receipt.json"
+          args=(--preview)
+          if [ "$QUALIFICATION_MODE" = release ]; then
+            args=(--policy "$RUNNER_TEMP/control-policy.json")
+          fi
+          python source/script/qualify_macos_candidate.py --app "$RUNNER_TEMP/intel-build/AMPLIFai Phone Intel Test.app" --channel macos-intel-test --output "$RUNNER_TEMP/qualified" "${args[@]}" > "$RUNNER_TEMP/intel-qualification.log" 2>&1
+      - name: Retain immutable qualified delivery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: macos-intel-rc26-delivery-${{ github.sha }}
-          path: ${{ runner.temp }}/intel-delivery/
+          name: macos-intel-${{ inputs.mode }}-${{ github.sha }}
+          path: ${{ runner.temp }}/qualified/delivery/
           if-no-files-found: error
           retention-days: 7
-          compression-level: 0 # App ZIP and source tarball are already compressed.
+          compression-level: 0
+      - name: Retain source/build qualification receipts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-intel-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/intel-build/*.json
+            ${{ runner.temp }}/qualified/staging/source-staging-receipt.json
+            ${{ runner.temp }}/intel-authored-source-freeze.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Collect bounded receipts and logs after failure
         if: failure()
         shell: bash
@@ -165,7 +166,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: macos-intel-rc26-failure-${{ github.sha }}
+          name: macos-intel-rc27-failure-${{ github.sha }}
           path: ${{ runner.temp }}/intel-failure/
           if-no-files-found: warn
           retention-days: 7

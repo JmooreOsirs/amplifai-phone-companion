@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "task": "brian-rc27-account-origin-2026-10-15",
+  "task": "rc27-native-integration-2026-10-16",
   "macosBaseCommit": "f8c38a5217ad7c356abefd95264762a9c9afe478",
   "macosArmSourceArchiveSha256": "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3",
   "macosIntelSourceArchiveSha256": "2d3c228561e3e69b8cc51e5753b1f1d69045b6c023e9cddbcf0114d1bc18483b",
   "windowsBaseCommit": "a8fe16ee584abcd9cbee0de5fde953d9a7a262f6",
   "windowsSourceArchiveSha256": "db1bf4db67e22fe633d17dcf4560f0c89b816b20cba4e085ed79e40903a3a19f",
-  "reconciliation": "Preserve released rc25/rc18 updater, collection, explicit review/Save/ACK and platform identity boundaries. Apply bounded Brian protocol-journal fix and durable strict source diagnostics. Older local history never enters a new capture or Save. No Android or Fable redesign changes.",
+  "reconciliation": "Preserve the qualified native lineage, existing updater/key/channel trust, collection and explicit review/Save/ACK boundaries. Integrate rc27 account-origin binding and contact selection without importing the older Intel artifact-removal CI. Windows rc19 fields identify the retained baseline only: changed Windows bytes require a new version before any build/publication. Retained dependency sources do not establish new binary qualification.",
   "plannedBuilds": {
     "macos-arm64": {
       "version": "2026.10.15-rc27",
@@ -14,8 +14,8 @@
       "bundleId": "ai.satoris.amplifai.phone.candidate"
     },
     "macos-intel-test": {
-      "version": "2026.10.15-rc26-intel1",
-      "build": "261015261",
+      "version": "2026.10.15-rc27-intel1",
+      "build": "261015271",
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
@@ -24,7 +24,7 @@
       "installerVersion": "1.0.19"
     }
   },
-  "previousQualifiedNativeHead": "03170491751fb08bf8ddba9023a12b1933a012ed",
+  "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
   "brianMessageFix": {
     "pullRequest": "https://github.com/Osirs-io/amplifai-phone-companion/pull/2",
     "head": "8c94f4ef2fb7de7bff269311c8a60de2f8083e53",

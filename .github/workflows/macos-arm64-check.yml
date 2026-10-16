@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   arm64:
-    if: github.repository == 'JmooreOsirs/amplifai-phone-companion'
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && (github.ref == 'refs/heads/release/native' || (inputs.mode == 'preview' && startsWith(github.ref, 'refs/heads/codex/')))
     # Standard public runner. No product credentials, environment, or write token.
     runs-on: macos-15
     timeout-minutes: 60
