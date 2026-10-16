@@ -1,5 +1,6 @@
 """Adversarial tests of the release credential and artifact boundaries."""
 import copy
+import base64
 import json
 from pathlib import Path
 import plistlib
@@ -16,10 +17,9 @@ import release
 class ReleaseBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((Path(__file__).parent / "policy.json").read_text())
-        self.policy["adminBypassDisabledVerified"] = True
         self.env = {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REPOSITORY": self.policy["repository"],
                     "GITHUB_ACTOR": "bac1876", "GITHUB_TRIGGERING_ACTOR": "bac1876",
-                    "GITHUB_REF": "refs/heads/main", "GITHUB_REF_PROTECTED": "true",
+                    "GITHUB_REF": "refs/heads/main", "GITHUB_REF_PROTECTED": "true", "GITHUB_SHA": "d" * 40,
                     "GITHUB_WORKFLOW_REF": self.policy["repository"] + "/.github/workflows/macos-protected-release.yml@refs/heads/main"}
         self.request = {"runId": 11, "artifactId": 22, "sourceCommit": "a" * 40,
                         "artifactSha256": "b" * 64, "channel": "macos-arm64"}
@@ -29,14 +29,21 @@ class ReleaseBoundaryTests(unittest.TestCase):
                     "actor": {"login": "bac1876"}, "triggering_actor": {"login": "bac1876"},
                     "path": ".github/workflows/macos-arm64-check.yml", "event": "workflow_dispatch",
                     "status": "completed", "conclusion": "success"}
-        self.artifact = {"id": 22, "workflow_run": {"id": 11, "head_sha": "a" * 40},
+        self.artifact = {"id": 22, "name": "qualified-macos-fixture", "workflow_run": {"id": 11, "head_sha": "a" * 40},
                          "expired": False, "size_in_bytes": 100, "digest": "sha256:" + "b" * 64}
         self.comparison = {"status": "ahead", "merge_base_commit": {"sha": self.policy["qualifiedAncestor"]}}
-        self.environment = {"name": "amplifai-macos-signing", "protection_rules": [
-            {"type": "required_reviewers", "prevent_self_review": True,
-             "reviewers": [{"type": "User", "reviewer": {"login": "independent-reviewer"}}]}],
+        self.environment = {"name": "amplifai-macos-signing", "protection_rules": [{"type": "branch_policy"}],
             "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
         self.branches = {"branch_policies": [{"name": "main", "type": "branch"}]}
+        self.source = {"sourceCommit": "a" * 40, "channel": "macos-arm64", "releaseAuthorized": True,
+                       "buildWorkflow": ".github/workflows/macos-arm64-check.yml",
+                       "version": "2026.10.16-rc28", "build": "26101628"}
+        self.protection = {"enforce_admins": {"enabled": True},
+                           "required_pull_request_reviews": {"dismiss_stale_reviews": True, "require_code_owner_reviews": True,
+                               "require_last_push_approval": True, "required_approving_review_count": 1,
+                               "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []}},
+                           "allow_force_pushes": {"enabled": False}, "allow_deletions": {"enabled": False},
+                           "required_status_checks": {"strict": True, "contexts": ["release-control-checks"]}}
 
     def provenance(self, **changes):
         run, artifact, comparison = copy.deepcopy((self.run, self.artifact, self.comparison))
@@ -79,13 +86,11 @@ class ReleaseBoundaryTests(unittest.TestCase):
             release.validate_provenance(self.policy, self.request, self.run, self.artifact,
                                         {"status": "diverged", "merge_base_commit": {"sha": "257748fcb2d6aef758766314f4e3817c8d30c372"}})
 
-    def test_actual_review_gate_and_protected_main_required(self):
+    def test_no_per_run_approval_and_protected_main_required(self):
         release.validate_protection(self.policy, self.environment, self.branches, {"protected": True}, self.env)
-        for mutate in (lambda env: env["protection_rules"].clear(),
-                       lambda env: env["protection_rules"][0].update(prevent_self_review=False),
-                       lambda env: env["protection_rules"][0].update(reviewers=[])):
+        for rule in ({"type": "required_reviewers"}, {"type": "wait_timer"}, {"type": "custom_deployment_protection_rule"}):
             candidate = copy.deepcopy(self.environment)
-            mutate(candidate)
+            candidate["protection_rules"].append(rule)
             with self.assertRaises(ValueError):
                 release.validate_protection(self.policy, candidate, self.branches, {"protected": True}, self.env)
         with self.assertRaises(ValueError):
@@ -95,11 +100,6 @@ class ReleaseBoundaryTests(unittest.TestCase):
         for item in ({"name": "*", "type": "branch"}, {"name": "main", "type": "tag"}):
             with self.assertRaises(ValueError):
                 release.validate_protection(self.policy, self.environment, {"branch_policies": [item]}, {"protected": True}, self.env)
-
-    def test_unverified_admin_bypass_cannot_activate_signing(self):
-        self.policy["adminBypassDisabledVerified"] = False
-        with self.assertRaises(ValueError):
-            release.validate_protection(self.policy, self.environment, self.branches, {"protected": True}, self.env)
 
     def test_weakened_branch_review_or_direct_push_bypass_rejected(self):
         protection = {"enforce_admins": {"enabled": True},
@@ -130,11 +130,63 @@ class ReleaseBoundaryTests(unittest.TestCase):
 
     def test_previously_published_build_cannot_be_signed_as_new_candidate(self):
         self.policy["activationApproved"] = True
-        self.policy["approvedCandidates"] = [{"request": self.request, "qualificationReviewed": True,
-                                               "build": "26101526", "version": "2026.10.15-rc26"}]
+        self.policy["approvedSources"] = [dict(self.source, build="26101526", version="2026.10.15-rc26")]
         with patch.dict(release.os.environ, self.env), patch.object(release, "api", side_effect=[self.run, self.artifact, self.comparison]):
             with self.assertRaisesRegex(ValueError, "newer"):
                 release.inspected(self.policy, self.request, signed=True)
+
+    def authorize(self, request=None, run=None, artifact=None, protection=None):
+        owners = {"encoding": "base64", "content": base64.b64encode(self.policy["codeOwners"].encode()).decode()}
+        responses = [run or self.run, artifact or self.artifact, self.comparison, self.environment,
+                     self.branches, {"protected": True}, {"protected": True},
+                     protection or self.protection, owners, self.protection, owners]
+        with patch.dict(release.os.environ, self.env), patch.object(release, "api", side_effect=responses):
+            return release.inspected(self.policy, request or self.request, signed=True)
+
+    def test_brian_can_release_two_ci_runs_of_same_reviewed_source_without_new_policy_approval(self):
+        self.policy["activationApproved"] = True
+        self.policy["approvedSources"] = [self.source]
+        unchanged = copy.deepcopy(self.policy)
+        receipt, approved = self.authorize()
+        self.assertTrue(receipt["signingApproved"])
+        self.assertEqual(approved, self.source)
+        request = dict(self.request, runId=33, artifactId=44, artifactSha256="e" * 64)
+        run = dict(self.run, id=33)
+        artifact = dict(self.artifact, id=44, workflow_run={"id": 33, "head_sha": "a" * 40}, digest="sha256:" + "e" * 64)
+        receipt, approved = self.authorize(request, run, artifact)
+        self.assertTrue(receipt["signingApproved"])
+        self.assertEqual(self.policy, unchanged)
+
+    def test_independent_release_rejects_unreviewed_source_actor_and_weak_live_review(self):
+        self.policy["activationApproved"] = True
+        self.policy["approvedSources"] = [self.source]
+        with self.assertRaises(ValueError):
+            self.authorize(dict(self.request, sourceCommit="f" * 40), dict(self.run, head_sha="f" * 40),
+                           dict(self.artifact, workflow_run={"id": 11, "head_sha": "f" * 40}))
+        self.env["GITHUB_ACTOR"] = self.env["GITHUB_TRIGGERING_ACTOR"] = "unapproved-user"
+        with self.assertRaises(ValueError):
+            self.authorize()
+        self.env["GITHUB_ACTOR"] = self.env["GITHUB_TRIGGERING_ACTOR"] = "bac1876"
+        weak = copy.deepcopy(self.protection)
+        weak["required_pull_request_reviews"]["required_approving_review_count"] = 0
+        with self.assertRaises(ValueError):
+            self.authorize(protection=weak)
+
+    def test_ci_qualification_binds_exact_run_source_and_all_required_checks(self):
+        record = {"schema": 1, "sourceCommit": "a" * 40, "channel": "macos-arm64", "version": self.source["version"],
+                  "build": self.source["build"], "buildRunId": 11, "privateDataUsed": False,
+                  "checks": {"functional": True, "architecture": True, "frozenHelper": True, "sourceClosure": True, "legal": True},
+                  "appArchive": {"name": "app.zip", "bytes": 100, "sha256": "c" * 64},
+                  "sourceArchive": {"name": "source.zip", "bytes": 200, "sha256": "d" * 64}}
+        release.validate_delivery_record(record, self.source, self.request)
+        for mutate in (lambda r: r.update(buildRunId=33), lambda r: r.update(sourceCommit="f" * 40),
+                       lambda r: r["checks"].update(sourceClosure=False), lambda r: r["checks"].update(legal=1),
+                       lambda r: r["appArchive"].update(name="../app.zip"),
+                       lambda r: r.update(privateDataUsed=True)):
+            candidate = copy.deepcopy(record)
+            mutate(candidate)
+            with self.assertRaises(ValueError):
+                release.validate_delivery_record(candidate, self.source, self.request)
 
     def test_duplicate_policy_fields_rejected(self):
         with self.assertRaises(ValueError):

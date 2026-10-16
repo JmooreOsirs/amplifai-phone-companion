@@ -75,6 +75,7 @@ jobs:
   sign:
     needs: inspect
     if: inputs.mode == 'signed-candidate'
+    # Exact protected main only; Jeff authorized no second run approval.
     environment: amplifai-macos-signing
     # Hosted, disposable runner; no persistent owner Mac or candidate scripts.
     runs-on: ${{ inputs.channel == 'macos-arm64' && 'macos-15' || 'macos-15-intel' }}
