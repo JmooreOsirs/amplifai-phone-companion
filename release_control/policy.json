@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "repository": "JmooreOsirs/amplifai-phone-companion",
+  "controlRef": "refs/heads/main",
+  "sourceRef": "refs/heads/release/native",
+  "qualifiedAncestor": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
+  "signingEnvironment": "amplifai-macos-signing",
+  "activationApproved": false,
+  "adminBypassDisabledVerified": false,
+  "requiredChecks": ["release-control-checks"],
+  "codeOwners": "* @JmooreOsirs @bac1876\n",
+  "releasedBuilds": {"macos-arm64": "26101526", "macos-intel-test": "261015261"},
+  "operators": ["JmooreOsirs", "bac1876"],
+  "buildWorkflows": [".github/workflows/macos-arm64-check.yml", ".github/workflows/macos-intel.yml"],
+  "approvedCandidates": []
+}
