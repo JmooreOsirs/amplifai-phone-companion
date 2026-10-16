@@ -18,13 +18,27 @@ enum Brand {
         static let page: CGFloat = 28
     }
     enum Radius {
+        static let checkbox: CGFloat = 5
         static let control: CGFloat = 8
         static let card: CGFloat = 10
         static let panel: CGFloat = 12
     }
+    enum Control {
+        static let checkboxSize: CGFloat = 22
+        static let compactHeight: CGFloat = 32
+        static let disabledOpacity: Double = 0.55
+        static let focusWidth: CGFloat = 3
+        static let focusGap: CGFloat = 2
+    }
+    enum Depth {
+        static let wellShadow = Color.black.opacity(0.35)
+        static let cardShadow = Color.black.opacity(0.22)
+        static let cardHighlight = Color.white.opacity(0.05)
+        static let selectionHalo = Brand.lime.opacity(0.35)
+    }
     enum Layout {
         static let workspaceMaximum: CGFloat = 1440
-        static let contactMinimum: CGFloat = 256
+        static let contactMinimum: CGFloat = 220
         static func contactWellHeight(windowHeight: CGFloat) -> CGFloat {
             min(520, max(260, windowHeight - 430))
         }

@@ -19,10 +19,12 @@ struct ContentView: View {
     @State private var confirmingBulkMove = false
     @State private var showingGroupTools = false
 
-    @MainActor init(model: CollectorModel, updater: CompanionUpdater) {
+    @MainActor init(model: CollectorModel, updater: CompanionUpdater,
+                   initialCollectionPreparation: CollectorModel.CallHistoryPreparation? = nil) {
         self.model = model
         self.updater = updater
         _search = State(initialValue: model.workspace?.query ?? "")
+        _callHistoryPreparation = State(initialValue: initialCollectionPreparation)
     }
 
     var body: some View {
@@ -54,7 +56,7 @@ struct ContentView: View {
                 }
                 if model.phase == .reviewing { reviewPanel }
             }
-            .frame(maxWidth: model.phase == .selecting || model.phase == .reviewing ? Brand.Layout.workspaceMaximum : 880)
+            .frame(maxWidth: contentMaximumWidth)
             .padding(geometry.size.width < 600 ? 16 : Brand.Space.page)
             .frame(maxWidth: .infinity)
         }
@@ -143,6 +145,14 @@ struct ContentView: View {
         guard !model.hasUnsavedReview, !model.helperRunning,
               model.phase == .idle || model.phase == .error || model.phase == .completed else { return }
         reader.scrollTo("collection-setup", anchor: .top)
+    }
+
+    private var contentMaximumWidth: CGFloat {
+        switch model.phase {
+        case .selecting, .reviewing: return Brand.Layout.workspaceMaximum
+        case .idle, .error, .passwordRequired, .completed: return 880
+        default: return 1180
+        }
     }
 
     private var header: some View {
@@ -266,14 +276,13 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 18) {
             if let approval = model.localCollectionApproval {
                 Text("Ready to connect")
-                    .font(Brand.headingFont(26))
+                    .font(Brand.headingFont(28))
                     .foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
                 Text("Approved for this collection · backup \(backupSettingLabel). \(callHistoryChoiceSummary(approval.callHistoryPreparation))")
                 Button("Connect iPhone") { model.connect() }
                     .buttonStyle(LimeButton())
                     .disabled(!model.canConnect)
-                    .opacity(model.canConnect ? 1 : 0.55)
                 Button("Change setup or consent") {
                     localCollectionChecked = false
                     callHistoryPreparation = nil
@@ -283,7 +292,7 @@ struct ContentView: View {
                 .keyboardShortcut(.cancelAction)
             } else if let choice = callHistoryPreparation {
                 Text("Approve collection")
-                    .font(Brand.headingFont(26))
+                    .font(Brand.headingFont(28))
                     .foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
                 HStack(alignment: .top, spacing: 12) {
@@ -310,7 +319,7 @@ struct ContentView: View {
                 finderEncryptionGuide
             } else {
                 Text("Prepare this iPhone")
-                    .font(Brand.headingFont(26))
+                    .font(Brand.headingFont(28))
                     .foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
                 Text("Check the iPhone's existing backup setting. This does not change it or guarantee every older call.")
@@ -589,6 +598,7 @@ struct ContentView: View {
                 }
                 .font(Brand.bodyFont(16))
                 .foregroundStyle(Brand.muted)
+                .brandControls()
             }
             if model.localCollectionApproval == nil {
                 Toggle("I agree to this local collection and safe failure diagnostic", isOn: Binding(
@@ -597,8 +607,9 @@ struct ContentView: View {
                         localCollectionChecked = checked
                     }
                 ))
-                .toggleStyle(.checkbox)
+                .toggleStyle(BrandCheckbox())
                 .disabled(!model.canPrepareCollection)
+                .brandControls()
             }
         }
     }
@@ -625,7 +636,6 @@ struct ContentView: View {
         .buttonStyle(LimeButton())
         .disabled(!localCollectionChecked || callHistoryPreparation == nil || !model.canPrepareCollection ||
                   (callHistoryPreparation == .confirmedEncryptedBackup && model.backupEncryptionStatus != .encrypted))
-        .opacity(localCollectionChecked && model.canPrepareCollection ? 1 : 0.55)
         Button("Decline") {
             localCollectionChecked = false
             callHistoryPreparation = nil
@@ -655,7 +665,11 @@ struct ContentView: View {
             Text("Use the password already set for this iPhone's encrypted computer backup, not its screen-unlock passcode. Ask its owner if you do not know it. This app never changes or resets encryption; the password stays in the local helper and is not saved.")
                 .font(Brand.bodyFont(18))
             SecureField("Backup password", text: $model.password)
-                .textFieldStyle(.roundedBorder)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 44)
+                .background(Brand.background, in: RoundedRectangle(cornerRadius: Brand.Radius.control))
+                .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control).stroke(Brand.border, lineWidth: 1))
                 .onSubmit { model.submitPassword() }
             Button("Continue locally") { model.submitPassword() }
                 .buttonStyle(LimeButton())
@@ -750,7 +764,8 @@ struct ContentView: View {
             HStack(spacing: Brand.Space.section) { contactActionContent }
             VStack(alignment: .leading, spacing: Brand.Space.item) { contactActionContent }
         }
-        .padding(Brand.Space.section)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
         .frame(maxWidth: Brand.Layout.workspaceMaximum, alignment: .leading)
         .frame(maxWidth: .infinity)
         .background(Brand.panel)
@@ -759,15 +774,13 @@ struct ContentView: View {
 
     @ViewBuilder private var contactActionContent: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("\(model.selectedIDs.count.formatted()) selected")
-                .font(Brand.headingFont(22))
-                .foregroundStyle(Brand.lime)
-            Text(model.suggestionScanning ? "Selection is available after all contacts are checked."
-                 : model.selectedIDs.isEmpty ? "Select at least one contact to continue."
-                 : "Review account and source choices next. Save happens in the browser.")
+            Text(contactActionHelp)
                 .font(Brand.bodyFont(13))
                 .foregroundStyle(Brand.muted)
                 .fixedSize(horizontal: false, vertical: true)
+            if model.reviewPending {
+                Text("Reviewing selected metadata…").font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         if model.canEditWorkspace {
@@ -785,6 +798,15 @@ struct ContentView: View {
         }
     }
 
+    private var contactActionHelp: String {
+        if model.suggestionScanning { return "Selection is available after all contacts are checked." }
+        if model.selectedIDs.isEmpty { return "Select at least one contact to continue." }
+        if model.accountSaveAwaitingBrowserReceipt { return "Saving is being finalized. Finish in the browser before changing contacts." }
+        if model.selectionChangePending { return "Checking that changing contacts won’t interrupt a save… Your reviewed selection is still intact." }
+        if !model.handoffID.isEmpty { return "This selection is linked to the account browser. Finish source choices there, or use Change selected contacts in Local review." }
+        return "Next: confirm the account and source choices. Continuing does not save by itself."
+    }
+
     private var contactActionStatus: String {
         if model.reviewPending { return "Preparing your review…" }
         if model.suggestionScanning { return "Checking all contacts…" }
@@ -796,34 +818,36 @@ struct ContentView: View {
     }
 
     private var contactSelectionSummary: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Choose contacts")
-                .font(Brand.headingFont(28))
-                .foregroundStyle(Brand.heading)
-            Text("\(model.totalContacts.formatted()) contacts found · Main contacts start selected. Review and adjust before continuing.")
+        VStack(alignment: .leading, spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 20) { contactTitle; Spacer(minLength: 0); contactTitleCount }
+                VStack(alignment: .leading, spacing: 8) { contactTitle; contactTitleCount }
+            }
+            Text("Main contacts start selected; Review contacts wait for you. Nothing is saved until you confirm in your account.")
                 .font(Brand.bodyFont(15))
             DisclosureGroup("Collection details") {
                 Text(model.statusDetail).font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
             .font(Brand.bodyFont(13))
-            Text(model.accountSaveAwaitingBrowserReceipt
-                 ? "Saving is being finalized. Finish in the browser before changing contacts."
-                 : model.selectionChangePending
-                 ? "Checking that changing contacts won’t interrupt a save… Your reviewed selection is still intact."
-                 : !model.handoffID.isEmpty
-                 ? "This selection is linked to the account browser. Finish source choices there, or use Change selected contacts in Local review."
-                 : "Nothing is saved here. You approve each source in your account.")
-                .font(Brand.bodyFont(16))
-                .foregroundStyle(Brand.muted)
-            if model.reviewPending {
-                Text("Reviewing selected metadata…")
-                    .foregroundStyle(Brand.muted)
-            }
             if !model.errorMessage.isEmpty && model.phase == .selecting {
                 Text(model.errorMessage).foregroundStyle(.red).textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var contactTitle: some View {
+        Text("Choose contacts").font(Brand.headingFont(28)).foregroundStyle(Brand.heading)
+    }
+
+    private var contactTitleCount: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("\(model.selectedIDs.count.formatted()) selected")
+                .font(Brand.headingFont(24)).monospacedDigit().foregroundStyle(Brand.lime)
+            Text("of \(model.totalContacts.formatted())")
+                .font(Brand.bodyFont(16)).monospacedDigit().foregroundStyle(Brand.muted)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private var reviewPanel: some View {
@@ -836,6 +860,7 @@ struct ContentView: View {
                 metric(model.matchedCalls, "Matching calls", unavailable: model.missingSources.contains("calls"))
                 metric(model.matchedMessages, "Matching messages", unavailable: model.missingSources.contains("messages"))
             }
+            .brandWell()
             Text("The collector attempted all retained available history. The observed dates below do not prove complete phone history.")
                 .font(Brand.bodyFont(13))
                 .foregroundStyle(Brand.muted)
@@ -855,8 +880,6 @@ struct ContentView: View {
                 .buttonStyle(SecondaryButton())
                 .disabled(model.selectionNeedsReview || model.selectionChangePending ||
                           model.accountSaveAwaitingBrowserReceipt || model.handoffAcknowledged)
-                .opacity(model.selectionNeedsReview || model.selectionChangePending ||
-                         model.accountSaveAwaitingBrowserReceipt || model.handoffAcknowledged ? 0.55 : 1)
             Text(model.accountSaveAwaitingBrowserReceipt
                  ? "Saving is being finalized. Finish in the browser before changing contacts or reconnecting."
                  : "Reconnect creates a fresh one-use link from this retained review. It does not collect from the phone again; an earlier browser connection may stop working.")
@@ -901,23 +924,33 @@ struct ContentView: View {
                             .buttonStyle(LimeButton())
                     }
                 }
-                Text("One-time code: \(model.pairCode.prefix(5))-\(model.pairCode.suffix(5))")
-                    .font(Brand.headingFont(18))
-                    .foregroundStyle(Brand.heading)
-                    .textSelection(.enabled)
-                Text("The pairing code expires after five minutes. An active, authorized transfer stays open while pages are requested and for up to two hours without activity. Only the exact AMPLIFai account origin can request pages; page requests do not prove an account save.")
-                    .font(Brand.bodyFont(13))
-                    .foregroundStyle(Brand.muted)
-                Button("Copy temporary code") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(model.pairCode, forType: .string)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("One-time code: \(model.pairCode.prefix(5))-\(model.pairCode.suffix(5))")
+                        .font(Brand.headingFont(18))
+                        .foregroundStyle(Brand.heading)
+                        .textSelection(.enabled)
+                    Text("The pairing code expires after five minutes. An active, authorized transfer stays open while pages are requested and for up to two hours without activity. Only the exact AMPLIFai account origin can request pages; page requests do not prove an account save.")
+                        .font(Brand.bodyFont(13))
+                        .foregroundStyle(Brand.muted)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { pairingActions }
+                        VStack(alignment: .leading, spacing: 12) { pairingActions }
+                    }
                 }
-                .buttonStyle(SecondaryButton())
-                Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
-                    .buttonStyle(SecondaryButton())
+                .brandControls()
             }
         }
         .panel()
+    }
+
+    @ViewBuilder private var pairingActions: some View {
+        Button("Copy temporary code") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(model.pairCode, forType: .string)
+        }
+        .buttonStyle(SecondaryButton())
+        Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
+            .buttonStyle(SecondaryButton())
     }
 
     private func metric(_ value: Int, _ label: String, unavailable: Bool = false) -> some View {
@@ -928,6 +961,7 @@ struct ContentView: View {
             Text(label).font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .brandRaisedCard()
     }
 
     private func dateRange(_ earliest: String, _ latest: String) -> String {
@@ -959,7 +993,7 @@ struct LimeButton: ButtonStyle {
             .font(Brand.headingFont(14))
             .foregroundStyle(isEnabled ? Brand.background : Brand.muted)
             .padding(.horizontal, 18)
-            .frame(minHeight: 40)
+            .frame(minHeight: 44)
             .background((isEnabled ? Brand.lime : Brand.border).opacity(configuration.isPressed ? 0.8 : 1),
                         in: RoundedRectangle(cornerRadius: Brand.Radius.control))
     }

@@ -32,14 +32,14 @@ struct CollectionStatusPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Brand.Space.section) {
             if showsActivity { activityWidget }
             else {
                 Text(model.statusTitle)
-                    .font(.custom("Arial", size: model.phase == .error ? 26 : 21).weight(.bold))
+                    .font(Brand.headingFont(model.phase == .error ? 26 : 21))
                     .foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
-                Text(model.statusDetail).font(.custom("Arial", size: model.phase == .error ? 18 : 15))
+                Text(model.statusDetail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
             }
             if model.phase == .error {
                 Text(model.settingCheckAfterCollectionFailure ? "Previous attempt: \(model.errorMessage)" : model.errorMessage)
@@ -82,7 +82,7 @@ struct CollectionStatusPanel: View {
     }
 
     private var technicalDetails: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
             if !model.failureContext.isEmpty {
                 Text(model.failureContext).foregroundStyle(Brand.muted).textSelection(.enabled)
             }
@@ -124,7 +124,8 @@ struct CollectionStatusPanel: View {
                 Text(model.safeSupportCode).font(Brand.bodyFont(14)).textSelection(.enabled)
             }
         }
-        .font(Brand.bodyFont(16))
+        .font(Brand.bodyFont(15))
+        .brandControls()
     }
 
     private func clock(_ seconds: Int) -> String {
@@ -143,11 +144,8 @@ struct CollectionStatusPanel: View {
     private var activityWidget: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let elapsed = max(0, Int(context.date.timeIntervalSince(model.collectionStartedAt ?? context.date)))
-            VStack(alignment: .leading, spacing: 18) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 24) { activityHeading; Spacer(minLength: 0); elapsedClock(elapsed) }
-                    VStack(alignment: .leading, spacing: 12) { activityHeading; elapsedClock(elapsed) }
-                }
+            VStack(alignment: .leading, spacing: Brand.Space.section) {
+                activityHeading
                 if model.phase != .completing {
                     Button("Cancel collection") { model.disconnect() }
                         .buttonStyle(SecondaryButton())
@@ -170,19 +168,16 @@ struct CollectionStatusPanel: View {
                 .foregroundStyle(Brand.blue)
                 .padding(.horizontal, 18)
                 .accessibilityLabel("Local iPhone to Mac collection; this illustration is not a progress meter")
-                HStack(spacing: 6) {
-                    ForEach(stages.indices, id: \.self) { index in
-                        Text(stages[index])
-                            .font(.custom("Arial", size: 12).weight(index == activeStage ? .bold : .regular))
-                            .foregroundStyle(index == activeStage ? Brand.background : index < activeStage ? Brand.heading : Brand.muted)
-                            .frame(maxWidth: .infinity, minHeight: 32)
-                            .background(index == activeStage ? Brand.lime : index < activeStage ? Brand.blue.opacity(0.35) : Brand.panel,
-                                        in: RoundedRectangle(cornerRadius: 7))
+                stageChips
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Brand.Space.item)],
+                          alignment: .leading, spacing: Brand.Space.item) {
+                    elapsedClock(elapsed)
+                    if model.transferIsKnown && model.phase != .completing {
+                        metric("Received", CollectorModel.byteDescription(model.transferBytes))
+                        metric("Retained locally", CollectorModel.byteDescription(model.retainedBytes))
                     }
                 }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: activeStage)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Stage \(activeStage + 1) of \(stages.count): \(stages[activeStage])")
+                .brandWell()
                 if model.phase == .transferring && model.progressIsKnown {
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
@@ -197,7 +192,7 @@ struct CollectionStatusPanel: View {
                     .accessibilityLabel("iPhone-reported backup transfer")
                     .accessibilityValue("\(Int(model.progress)) percent")
                     Text("\(Int(model.progress))% reported by iPhone · backup transfer only")
-                        .font(.custom("Arial", size: 16).weight(.bold)).foregroundStyle(Brand.heading)
+                        .font(Brand.bodyFont(16).weight(.bold)).foregroundStyle(Brand.heading)
                 } else if model.phase != .completing {
                     HStack(spacing: 7) {
                         ForEach(0..<3) { index in
@@ -216,10 +211,6 @@ struct CollectionStatusPanel: View {
                                         : model.transferIsKnown ? "Receiving measured backup bytes" : "Waiting for first received byte")
                 }
                 if model.transferIsKnown && model.phase != .completing {
-                    HStack(alignment: .top, spacing: 10) {
-                        metric("Received", CollectorModel.byteDescription(model.transferBytes))
-                        metric("Retained locally", CollectorModel.byteDescription(model.retainedBytes))
-                    }
                     Text(model.phase == .processing
                          ? "Parsing copies: \(CollectorModel.byteDescription(model.processedBytes))"
                          : "Average received rate: \(CollectorModel.byteDescription(Int64(model.transferBytesPerSecond)))/s")
@@ -247,47 +238,63 @@ struct CollectionStatusPanel: View {
                         .foregroundStyle(Brand.muted)
                 }
                 Text("Temporary local bytes are not saved account records.")
-                    .font(Brand.bodyFont(12)).foregroundStyle(Brand.muted)
+                    .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
-            .font(Brand.bodyFont(16))
-            .padding(18)
-            .background(Brand.background.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Brand.border, lineWidth: 1))
+            .font(Brand.bodyFont(15))
         }
     }
 
+    private var stageChips: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 6)], spacing: 6) {
+            ForEach(stages.indices, id: \.self) { index in
+                Text(stages[index])
+                    .font(Brand.bodyFont(13).weight(.bold))
+                    .foregroundStyle(index == activeStage ? Brand.background : index < activeStage ? Brand.heading : Brand.muted)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, minHeight: 32)
+                    .background(index == activeStage ? Brand.lime : Brand.background, in: Capsule())
+                    .overlay(Capsule().stroke(index == activeStage ? Brand.lime : Brand.border, lineWidth: 1))
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: activeStage)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Stage \(activeStage + 1) of \(stages.count): \(stages[activeStage])")
+    }
+
     private var activityHeading: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
             Text("LOCAL PHONE PROCESS · \(activeStage + 1) OF \(stages.count)")
-                .font(.custom("Arial", size: 11).weight(.bold)).tracking(1.2).foregroundStyle(Brand.lime)
+                .font(Brand.bodyFont(13).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
             Text(model.phase == .transferring && !model.transferIsKnown
                  ? "Waiting for the first received byte" : model.phase == .processing && model.processedBytes == 0
                  ? "Reading available sources" : model.statusTitle)
-                .font(.custom("Arial", size: 23).weight(.bold)).foregroundStyle(Brand.heading)
+                .font(Brand.headingFont(23)).foregroundStyle(Brand.heading)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
+            Text(model.statusDetail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
         }
     }
 
     private func elapsedClock(_ seconds: Int) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(clock(seconds)).font(.custom("Arial", size: 32).weight(.bold)).monospacedDigit().foregroundStyle(Brand.heading)
-            Text("Elapsed · not time remaining").font(Brand.bodyFont(11)).foregroundStyle(Brand.muted)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(clock(seconds)).font(Brand.headingFont(28)).monospacedDigit().foregroundStyle(Brand.lime)
+            Text("Elapsed · not time remaining").font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
         }
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .brandRaisedCard()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Observed elapsed time \(seconds / 60) minutes, \(seconds % 60) seconds")
     }
 
     private func metric(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(label.uppercased()).font(.custom("Arial", size: 12).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
-            Text(value).font(.custom("Arial", size: 19).weight(.bold)).monospacedDigit().foregroundStyle(Brand.heading)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(value).font(Brand.headingFont(28)).monospacedDigit().foregroundStyle(Brand.heading)
                 .minimumScaleFactor(0.8).lineLimit(1)
+            Text(label.uppercased()).font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
         }
-        .frame(maxWidth: .infinity, minHeight: 60, alignment: .leading)
-        .padding(10)
-        .background(Brand.panel, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.border, lineWidth: 1))
+        .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+        .brandRaisedCard()
     }
 
     private func activityAge(at now: Date) -> String {

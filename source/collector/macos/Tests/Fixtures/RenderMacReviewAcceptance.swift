@@ -12,7 +12,8 @@ struct RenderMacReviewAcceptance {
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
         let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change"]
-        let allStates = ["main", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["setup", "password", "error", "completed", "no-selection", "unavailable", "connecting", "transferring", "processing", "completing", "cancelling"]
+        let allStates = ["main", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["setup", "consent", "password", "error", "completed", "no-selection", "unavailable", "connecting", "transferring", "processing", "completing", "cancelling"]
+        let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
         guard !states.isEmpty, states.allSatisfy({ allStates.contains($0) }) else { throw CocoaError(.validationMissingMandatoryProperty) }
         for state in states {
@@ -20,7 +21,7 @@ struct RenderMacReviewAcceptance {
             let model = CollectorModel(commandWriter: { commands.append($0) })
             let updater = CompanionUpdater(bundleInformation: [:])
             let start = Date()
-            if !["setup", "password", "error", "completed", "connecting", "transferring", "processing", "completing", "cancelling"].contains(state) {
+            if !["setup", "consent", "password", "error", "completed", "connecting", "transferring", "processing", "completing", "cancelling"].contains(state) {
                 let names = ["Priya Natarajan", "Marcus Bell", "Elena Fischer", "Sam Okafor", "Dana Whitfield", "Lin Zhao", "Omar Haddad", "Noor Khalil", "Grace Liu", "Tomás Rivera", "Aisha Bello", "Ruth Abara"]
                 let total = 5501
                 let rows: [[String: Any]] = (1...total).map { id in
@@ -126,19 +127,28 @@ struct RenderMacReviewAcceptance {
                 "saveReceiptPending": model.accountSaveAwaitingBrowserReceipt,
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
             timings[state] = Date().timeIntervalSince(start)
-            for (width, height) in [(375, 844), (768, 900), (1440, 1000), (1180, 680)] {
-                try render(ContentView(model: model, updater: updater), width: width, height: height,
+            for (width, height) in viewports {
+                if state == "consent" {
+                    guard model.beginBackupEncryptionStatusCheck() else { throw FixtureError.unexpectedState("Synthetic setting check did not begin") }
+                    model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                }
+                try render(ContentView(model: model, updater: updater,
+                           initialCollectionPreparation: state == "consent" ? .continueWithoutConfirmedCoverage : nil), width: width, height: height,
                            path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
-                if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), width != 1180 {
+                if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
                     try render(ContactReviewView(model: model, workspace: workspace, wellHeight: 322,
                                search: .constant(workspace.query), showingGroupTools: .constant(state == "review"), confirmingBulkMove: .constant(false))
                                .padding(20).background(Brand.panel).foregroundStyle(Brand.body).tint(Brand.lime),
                                width: width, height: 1000, path: output.appendingPathComponent("board-\(state)-\(width).png"))
                 }
             }
+            if ["local-review", "handoff", "save-receipt"].contains(state) {
+                try render(ContentView(model: model, updater: updater), width: 1440, height: 2400,
+                           path: output.appendingPathComponent("mac-\(state)-overview-1440x2400.png"))
+            }
         }
         let receipt: [String: Any] = ["renderer": "offscreen NSHostingView bitmap of production views", "contacts": 5501,
-            "viewports": [[375, 844], [768, 900], [1440, 1000], [1180, 680]], "states": states, "fixturePreparationSeconds": timings,
+            "viewports": viewports.map { [$0.0, $0.1] }, "states": states, "fixturePreparationSeconds": timings,
             "stateEvidence": stateEvidence,
             "font": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
             "screenCaptured": false, "windowCreated": false, "appActivated": false,
