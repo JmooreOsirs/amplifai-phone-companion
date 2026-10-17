@@ -122,10 +122,11 @@ class ReleaseBoundaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             release.validate_branch_custody(self.policy, protection, "* @attacker\n")
 
-    def test_checked_in_policy_denies_all_signing(self):
+    def test_unapproved_source_cannot_sign(self):
         policy = json.loads((Path(__file__).parent / "policy.json").read_text())
+        policy["activationApproved"] = True
         with patch.dict(release.os.environ, self.env), patch.object(release, "api", side_effect=[self.run, self.artifact, self.comparison]):
-            with self.assertRaisesRegex(ValueError, "inactive"):
+            with self.assertRaisesRegex(ValueError, "source/workflow not authorized"):
                 release.inspected(policy, self.request, signed=True)
 
     def test_previously_published_build_cannot_be_signed_as_new_candidate(self):
