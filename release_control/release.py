@@ -23,12 +23,15 @@ import urllib.request
 import urllib.error
 from urllib.parse import quote
 import zipfile
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_KEY = "vtvaNfb6+dVMP4tz6PeLMXTeVQH7lK7o1zzy4WeqUGs="
 IDENTITY = "Developer ID Application: Jeff Moore (WSBR54954W)"
 TEAM = "WSBR54954W"
 CERTIFICATE_SHA1 = "59300C81CAA8FEDF07F60970E4621524243F83F4"
+SPARKLE_ACCOUNT = "ai.satoris.amplifai.phone.candidate"
+NOTARY_PROFILE = "AMPLIFai-notary"
 CHANNELS = {
     "macos-arm64": ("arm64", "ai.satoris.amplifai.phone.candidate", "AMPLIFai Phone", "appcast.xml"),
     "macos-intel-test": ("x86_64", "ai.satoris.amplifai.phone.intel-candidate", "AMPLIFai Phone Intel Test", "intel-appcast.xml"),
@@ -60,11 +63,11 @@ def exact_json(data: bytes) -> dict:
     return result
 
 
-def command(args: list, *, input_data: bytes | None = None) -> str:
+def command(args: list, *, input_data: bytes | None = None, timeout: int = 1800) -> str:
     # Commands involving credentials must never appear in logs or exceptions.
     try:
         result = subprocess.run(list(map(str, args)), input=input_data,
-                                capture_output=True, timeout=1800)
+                                capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         raise ValueError(f"{Path(args[0]).name} unavailable or timed out; credential arguments suppressed") from None
     if result.returncode:
@@ -160,6 +163,22 @@ def validate_branch_custody(policy: dict, protection: dict, owners: str) -> None
         raise ValueError("branch custody requires current code-owner review, checks, admin enforcement and zero PR bypass grants")
 
 
+def validate_approved_source(policy: dict, request: dict, run: dict) -> dict:
+    approved = next((item for item in policy["approvedSources"]
+                     if item.get("sourceCommit") == request["sourceCommit"]
+                     and item.get("channel") == request["channel"]), None)
+    if (policy.get("activationApproved") is not True or approved is None
+            or approved.get("releaseAuthorized") is not True
+            or approved.get("buildWorkflow") != run.get("path")):
+        raise ValueError("signing inactive or source/workflow not authorized in reviewed control policy")
+    if (not isinstance(approved.get("build"), str) or not re.fullmatch(r"[0-9]{1,12}", approved["build"])
+            or int(approved["build"]) <= int(policy["releasedBuilds"][request["channel"]])
+            or not isinstance(approved.get("version"), str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", approved["version"])):
+        raise ValueError("candidate must be newer than the published channel build")
+    return approved
+
+
 def inspected(policy: dict, request: dict, *, signed: bool, custody: bool = True) -> tuple[dict, dict | None]:
     validate_context(policy, os.environ)
     repo = policy["repository"]
@@ -171,15 +190,7 @@ def inspected(policy: dict, request: dict, *, signed: bool, custody: bool = True
                      if item.get("sourceCommit") == request["sourceCommit"]
                      and item.get("channel") == request["channel"]), None)
     if signed:
-        if (policy.get("activationApproved") is not True or approved is None
-                or approved.get("releaseAuthorized") is not True
-                or approved.get("buildWorkflow") != run.get("path")):
-            raise ValueError("signing inactive or source/workflow not authorized in reviewed control policy")
-        if (not isinstance(approved.get("build"), str) or not re.fullmatch(r"[0-9]{1,12}", approved["build"])
-                or int(approved["build"]) <= int(policy["releasedBuilds"][request["channel"]])
-                or not isinstance(approved.get("version"), str)
-                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", approved["version"])):
-            raise ValueError("candidate must be newer than the published channel build")
+        approved = validate_approved_source(policy, request, run)
         environment = api(f"{repo}/environments/{policy['signingEnvironment']}")
         branches = api(f"{repo}/environments/{policy['signingEnvironment']}/deployment-branch-policies")
         protected = api(f"{repo}/branches/{policy['controlRef'].removeprefix('refs/heads/')}")
@@ -330,9 +341,11 @@ def notarize(path: Path, keychain: Path) -> None:
         raise ValueError("notarization not accepted")
 
 
-def sign_and_verify(path: Path, signer: Path, openssl: str, private: Path) -> str:
-    signature = command([signer, "--ed-key-file", "-", "-p", path],
-                        input_data=os.environ["SPARKLE_PRIVATE_KEY"].encode())
+def sign_and_verify(path: Path, signer: Path, openssl: str, private: Path, *,
+                    keychain_signer: Callable[[Path], str] | None = None) -> str:
+    signature = (keychain_signer(path) if keychain_signer is not None else
+                 command([signer, "--ed-key-file", "-", "-p", path],
+                         input_data=os.environ["SPARKLE_PRIVATE_KEY"].encode()))
     public = private / "public.der"
     public.write_bytes(bytes.fromhex("302a300506032b6570032100") + base64.b64decode(PUBLIC_KEY))
     sig = private / "signature"
@@ -344,14 +357,98 @@ def sign_and_verify(path: Path, signer: Path, openssl: str, private: Path) -> st
     return signature
 
 
+def _sign_package(app: Path, source: Path, output: Path, signer: Path, source_record: dict,
+                  openssl: str, private: Path, keychain: Path | None, *,
+                  keychain_signer: Callable[[Path], str] | None = None) -> dict:
+    codesign = "/usr/bin/codesign" if keychain is None else "codesign"
+    identity = CERTIFICATE_SHA1 if keychain is None else IDENTITY
+    keychain_args = [] if keychain is None else ["--keychain", keychain]
+    architecture_args = ["--all-architectures"] if keychain is None else []
+    sign_timeout = 60 if keychain is None else 1800
+    import producer
+    producer.validate_signing_input(source, app, source_record["sourceCommit"], source_record["channel"])
+    from verify_macos_architecture import MAGICS
+    nodes = []
+    for path in app.rglob("*"):
+        if path.is_symlink():
+            continue
+        if path.is_file():
+            with path.open("rb") as stream:
+                if stream.read(4) in MAGICS:
+                    nodes.append(path)
+        elif path.suffix in {".app", ".framework", ".xpc"}:
+            nodes.append(path)
+    for path in sorted(nodes, key=lambda node: len(node.parts), reverse=True) + [app]:
+        command([codesign, "--force", "--sign", identity, *keychain_args,
+                 "--timestamp", "--options", "runtime", path], timeout=sign_timeout)
+    command([codesign, "--verify", "--deep", "--strict", *architecture_args, app])
+    zipped = private / "notary.zip"
+    command(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zipped])
+    app_notarization = notarize_local(zipped) if keychain is None else notarize(zipped, keychain)
+    command(["xcrun", "stapler", "staple", app])
+    command(["xcrun", "stapler", "validate", app])
+    command(["spctl", "--assess", "--type", "execute", app])
+    image_root = private / "image"
+    image_root.mkdir()
+    command(["ditto", app, image_root / app.name])
+    (image_root / "Applications").symlink_to("/Applications")
+    import feeds
+    import finalize
+    names = feeds.names(source_record)
+    dmg = output / names["package"]
+    command(["hdiutil", "create", "-volname", app.stem, "-srcfolder", image_root, "-format", "UDZO", dmg])
+    command([codesign, "--sign", identity, *keychain_args, "--timestamp", dmg], timeout=sign_timeout)
+    dmg_notarization = notarize_local(dmg) if keychain is None else notarize(dmg, keychain)
+    command(["xcrun", "stapler", "staple", dmg])
+    command(["xcrun", "stapler", "validate", dmg])
+    command([codesign, "--verify", "--strict", *architecture_args, dmg])
+    command(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature", dmg])
+    if keychain is not None:
+        command(["security", "delete-keychain", keychain])
+    signature = sign_and_verify(dmg, signer, openssl, private, keychain_signer=keychain_signer)
+    (output / (dmg.name + ".sig")).write_text(signature + "\n")
+    inventory = {"files": [], "symlinks": []}
+    for path in sorted(app.rglob("*")):
+        relative = path.relative_to(app).as_posix()
+        if path.is_symlink():
+            inventory["symlinks"].append({"path": relative, "target": str(path.readlink())})
+        elif path.is_file():
+            inventory["files"].append({"path": relative, "bytes": path.stat().st_size, "sha256": digest(path)})
+    inventory_path = output / "final-signed-app-inventory.json"
+    inventory_path.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n")
+    source_zip = output / names["source"]
+    finalized = finalize.finalize_source(source, source_zip, inventory_path, source_record["sourceCommit"])
+    feed = feeds.prepare(source_record, dmg, source_zip, output / "feed", signer.parent.parent, openssl,
+                         keychain_signer=keychain_signer)
+    receipt = {"packageSha256": digest(dmg), "packageBytes": dmg.stat().st_size,
+               "sourceSha256": digest(source_zip), "developerId": IDENTITY, "sparklePublicKey": PUBLIC_KEY,
+               "finalSignedAppInventorySha256": digest(inventory_path), "sourceFinalizationRequired": False,
+               "sourceFinalization": finalized, "feed": feed,
+               "notarized": True, "published": False, "feedPrepared": True}
+    if keychain is None:
+        receipt.update(signingMode="local-keychain", appNotarization=app_notarization,
+                       dmgNotarization=dmg_notarization,
+                       signingIdentity={"developerId": IDENTITY, "certificateSha1": CERTIFICATE_SHA1,
+                                        "teamId": TEAM, "sparklePublicKey": PUBLIC_KEY,
+                                        "sparkleAccount": SPARKLE_ACCOUNT, "notaryProfile": NOTARY_PROFILE})
+    return receipt
+
+
+def signing_openssl() -> str:
+    openssl = next((path for path in ("/opt/homebrew/opt/openssl@3/bin/openssl", "/usr/local/opt/openssl@3/bin/openssl")
+                    if Path(path).is_file()), None)
+    if openssl is None:
+        raise ValueError("existing Ed25519 OpenSSL required")
+    return openssl
+
+
 def sign_candidate(app: Path, source: Path, output: Path, signer: Path, source_record: dict) -> dict:
     credential_names = ("APPLE_CERTIFICATE_P12_BASE64", "APPLE_CERTIFICATE_PASSWORD", "NOTARY_APPLE_ID",
                         "NOTARY_APP_PASSWORD", "SPARKLE_PRIVATE_KEY")
     if any(not os.environ.get(name) for name in credential_names):
         raise ValueError("existing authorized signing/notary credential configuration incomplete")
-    openssl = next((path for path in ("/opt/homebrew/opt/openssl@3/bin/openssl", "/usr/local/opt/openssl@3/bin/openssl")
-                    if Path(path).is_file()), None)
-    if openssl is None or digest(signer) != SIGN_UPDATE_SHA256:
+    openssl = signing_openssl()
+    if digest(signer) != SIGN_UPDATE_SHA256:
         raise ValueError("pinned signer and existing Ed25519 OpenSSL required")
     with tempfile.TemporaryDirectory(prefix="amplifai-ci-keys-", dir=os.environ["RUNNER_TEMP"]) as folder:
         private = Path(folder)
@@ -377,68 +474,64 @@ def sign_candidate(app: Path, source: Path, output: Path, signer: Path, source_r
                 raise ValueError("imported existing Developer ID identity differs")
             command(["xcrun", "notarytool", "store-credentials", "amplifai-ci", "--keychain", keychain,
                      "--apple-id", os.environ["NOTARY_APPLE_ID"], "--password", os.environ["NOTARY_APP_PASSWORD"], "--team-id", TEAM])
-            import producer
-            producer.validate_signing_input(source, app, source_record["sourceCommit"], source_record["channel"])
-            from verify_macos_architecture import MAGICS
-            nodes = []
-            for path in app.rglob("*"):
-                if path.is_symlink():
-                    continue
-                if path.is_file():
-                    with path.open("rb") as stream:
-                        if stream.read(4) in MAGICS:
-                            nodes.append(path)
-                elif path.suffix in {".app", ".framework", ".xpc"}:
-                    nodes.append(path)
-            for path in sorted(nodes, key=lambda node: len(node.parts), reverse=True) + [app]:
-                command(["codesign", "--force", "--sign", IDENTITY, "--keychain", keychain,
-                         "--timestamp", "--options", "runtime", path])
-            command(["codesign", "--verify", "--deep", "--strict", app])
-            zipped = private / "notary.zip"
-            command(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, zipped])
-            notarize(zipped, keychain)
-            command(["xcrun", "stapler", "staple", app])
-            command(["xcrun", "stapler", "validate", app])
-            command(["spctl", "--assess", "--type", "execute", app])
-            image_root = private / "image"
-            image_root.mkdir()
-            command(["ditto", app, image_root / app.name])
-            (image_root / "Applications").symlink_to("/Applications")
-            import feeds
-            import finalize
-            names = feeds.names(source_record)
-            dmg = output / names["package"]
-            command(["hdiutil", "create", "-volname", app.stem, "-srcfolder", image_root, "-format", "UDZO", dmg])
-            command(["codesign", "--sign", IDENTITY, "--keychain", keychain, "--timestamp", dmg])
-            notarize(dmg, keychain)
-            command(["xcrun", "stapler", "staple", dmg])
-            command(["xcrun", "stapler", "validate", dmg])
-            command(["codesign", "--verify", "--strict", dmg])
-            command(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature", dmg])
-            command(["security", "delete-keychain", keychain])
-            signature = sign_and_verify(dmg, signer, openssl, private)
-            (output / (dmg.name + ".sig")).write_text(signature + "\n")
-            inventory = {"files": [], "symlinks": []}
-            for path in sorted(app.rglob("*")):
-                relative = path.relative_to(app).as_posix()
-                if path.is_symlink():
-                    inventory["symlinks"].append({"path": relative, "target": str(path.readlink())})
-                elif path.is_file():
-                    inventory["files"].append({"path": relative, "bytes": path.stat().st_size, "sha256": digest(path)})
-            inventory_path = output / "final-signed-app-inventory.json"
-            inventory_path.write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n")
-            source_zip = output / names["source"]
-            finalized = finalize.finalize_source(source, source_zip, inventory_path, source_record["sourceCommit"])
-            feed = feeds.prepare(source_record, dmg, source_zip, output / "feed", signer.parent.parent, openssl)
-            return {"packageSha256": digest(dmg), "packageBytes": dmg.stat().st_size,
-                    "sourceSha256": digest(source_zip), "developerId": IDENTITY, "sparklePublicKey": PUBLIC_KEY,
-                    "finalSignedAppInventorySha256": digest(inventory_path), "sourceFinalizationRequired": False,
-                    "sourceFinalization": finalized, "feed": feed,
-                    "notarized": True, "published": False, "feedPrepared": True}
+            return _sign_package(app, source, output, signer, source_record, openssl, private, keychain)
         finally:
             # Failure must propagate if deletion fails; never silently retain keys.
             if keychain.exists():
                 command(["security", "delete-keychain", keychain])
+
+
+class KeychainSparkleSigner:
+    """Use the existing account without exporting or reading its private key."""
+    def __init__(self, signer: Path):
+        if signer.is_symlink() or digest(signer) != SIGN_UPDATE_SHA256:
+            raise ValueError("pinned Sparkle signer required")
+        self.signer = signer
+
+    def __call__(self, path: Path) -> str:
+        return command([self.signer, "--account", SPARKLE_ACCOUNT,
+                        "--disable-signing-warning", "-p", path], timeout=60)
+
+
+def sign_local_and_verify(path: Path, signer: Path, openssl: str, private_root: Path) -> str:
+    keychain_signer = KeychainSparkleSigner(signer)
+    with tempfile.TemporaryDirectory(prefix="amplifai-local-signature-", dir=private_root) as folder:
+        private = Path(folder)
+        private.chmod(0o700)
+        return sign_and_verify(path, signer, openssl, private, keychain_signer=keychain_signer)
+
+
+def notarize_local(path: Path) -> dict:
+    response = exact_json(command(["/usr/bin/xcrun", "notarytool", "submit", path,
+                                   "--keychain-profile", NOTARY_PROFILE,
+                                   "--wait", "--output-format", "json"]).encode())
+    if (response.get("status") != "Accepted" or not isinstance(response.get("id"), str)
+            or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", response["id"])):
+        raise ValueError("local notarization not accepted or submission ID missing")
+    return {"id": response["id"], "status": response["status"]}
+
+
+def sign_local_candidate(app: Path, source_zip: Path, output: Path, signer: Path,
+                         source_record: dict, temp_root: Path) -> dict:
+    """Sign reviewed data with existing local keys; caller enforces custody and provenance.
+
+    No candidate executable is launched. Temporary files contain only public probes,
+    signatures and packaging intermediates; Keychain keys remain in place.
+    """
+    openssl = signing_openssl()
+    keychain_signer = KeychainSparkleSigner(signer)
+    identities = command(["/usr/bin/security", "find-identity", "-v", "-p", "codesigning"], timeout=60)
+    if not re.search(r"\b" + CERTIFICATE_SHA1 + r'\s+"' + re.escape(IDENTITY) + r'"', identities):
+        raise ValueError("existing local Developer ID identity differs")
+    validate_app(app, source_record, source_record["channel"])
+    with tempfile.TemporaryDirectory(prefix="amplifai-local-signing-", dir=temp_root) as folder:
+        private = Path(folder)
+        private.chmod(0o700)
+        probe = private / "key-continuity-probe"
+        probe.write_bytes(b"AMPLIFai protected-release key-continuity probe\n")
+        sign_and_verify(probe, signer, openssl, private, keychain_signer=keychain_signer)
+        return _sign_package(app, source_zip, output, signer, source_record, openssl, private, None,
+                             keychain_signer=keychain_signer)
 
 
 def main() -> None:
