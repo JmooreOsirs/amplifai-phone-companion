@@ -1,0 +1,159 @@
+name: Protected Mac release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [dry-run, signed-candidate, publish]
+        default: dry-run
+        required: true
+      source_commit:
+        description: Exact reviewed native source SHA
+        type: string
+        required: true
+      build_run_id:
+        description: Successful secret-free native build run
+        type: string
+        required: true
+      artifact_id:
+        description: Immutable qualified delivery artifact ID
+        type: string
+        required: true
+      artifact_sha256:
+        description: Exact GitHub artifact ZIP digest
+        type: string
+        required: true
+      channel:
+        type: choice
+        options: [macos-arm64, macos-intel-test]
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: protected-macos-${{ inputs.channel }}
+  cancel-in-progress: false
+
+env:
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  BUILD_RUN_ID: ${{ inputs.build_run_id }}
+  BUILD_ARTIFACT_ID: ${{ inputs.artifact_id }}
+  ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  inspect:
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Inspect immutable input or authorize protected signing
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          mode=dry-run
+          if [ "$RELEASE_MODE" != dry-run ]; then mode=eligible; fi
+          python3 release_control/release.py "$mode" --output "$RUNNER_TEMP/inspection"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-release-inspection-${{ github.run_id }}
+          path: ${{ runner.temp }}/inspection/release-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    name: macos-sign-and-notarize
+    needs: inspect
+    if: inputs.mode != 'dry-run'
+    outputs:
+      artifact-id: ${{ steps.signed-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.signed-artifact.outputs.artifact-digest }}
+    # Exact protected main only; Jeff authorized no second run approval.
+    environment: amplifai-macos-signing
+    # Hosted, disposable runner; no persistent owner Mac or candidate scripts.
+    runs-on: ${{ inputs.channel == 'macos-arm64' && 'macos-15' || 'macos-15-intel' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Revalidate configuration before credential-bearing step
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
+        run: python3 release_control/release.py authorize --output "$RUNNER_TEMP/signing-authorization"
+      - name: Sign and notarize reviewed artifact without executing it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_APP_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: python3 release_control/release.py signed-candidate --output "$RUNNER_TEMP/signed-delivery"
+      - name: Remove any surviving temporary keychain after failure or cancellation
+        if: always()
+        shell: python
+        run: |
+          import os, pathlib, shutil, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']).resolve()
+          for path in root.glob('amplifai-ci-keys-*'):
+              if path.is_symlink() or path.resolve().parent != root:
+                  raise RuntimeError('Unexpected keychain cleanup path')
+              keychain = path / 'release.keychain-db'
+              if keychain.exists():
+                  subprocess.run(['security', 'delete-keychain', str(keychain)], check=True, capture_output=True)
+              shutil.rmtree(path)
+      - name: Retain qualified candidate only after success
+        id: signed-artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: signed-macos-${{ inputs.channel }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/signed-delivery/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    needs: sign
+    if: inputs.mode == 'publish'
+    environment: amplifai-release-publication
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      SIGNED_ARTIFACT_ID: ${{ needs.sign.outputs.artifact-id }}
+      SIGNED_ARTIFACT_SHA256: ${{ needs.sign.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify isolated signer delivery and publish immutable GitHub assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
+        run: python3 release_control/publish.py --output "$RUNNER_TEMP/publication-readback"
+      - name: Retain public-byte receipt and website handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-publication-receipt-${{ github.run_id }}
+          path: ${{ runner.temp }}/publication-readback/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

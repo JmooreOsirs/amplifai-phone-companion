@@ -39,6 +39,7 @@ struct CollectorFlowChecks {
         try localContactSuggestions()
         try mainReviewWorkspace()
         try allGroupWorkspaceActions()
+        try scopedSelectionAtScale()
         try reviewedAccountContinuation()
         try staleDestinationEventsCannotClearApprovedRequest()
         try firstReceiptDuringReconnectKeepsOldBinding()
@@ -384,6 +385,135 @@ struct CollectorFlowChecks {
                     "A replacement capture discards old group and selected-ID authority")
     }
 
+    private static func scopedSelectionAtScale() throws {
+        let total = 5_501
+        func name(_ id: Int) -> String { id > 4_800 ? "Acme LLC \(id)" : id % 50 == 0 ? "Smith \(id)" : "Person \(id)" }
+        let rows = (1...total).map { #"{"id":\#($0),"name":"\#(name($0))","phoneCount":1,"phoneEnds":["0000"]}"# }
+        var commands: [Data] = []
+        let model = CollectorModel(commandWriter: { commands.append($0) })
+        model.receive(try event(#"{"kind":"capture","query":"","cursor":0,"totalContacts":\#(total),"nextCursor":200,"contacts":[\#(rows.prefix(200).joined(separator: ","))]}"#))
+        model.prepareWorkspace()
+        let scan = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
+        let scanID = scan["scanId"] as! String
+        for cursor in stride(from: 0, to: total, by: 200) {
+            let end = min(cursor + 200, total)
+            let next = end == total ? "null" : String(end)
+            if cursor == 5_400 {
+                try require(model.workspace == nil && model.selectedIDs.isEmpty && model.suggestionVisited == 5_400,
+                            "The partial last page must verify before the full workspace or default selection is exposed")
+            }
+            model.receive(try event(#"{"kind":"contacts","scanId":"\#(scanID)","query":"","cursor":\#(cursor),"totalContacts":\#(total),"nextCursor":\#(next),"contacts":[\#(rows[cursor..<end].joined(separator: ","))]}"#))
+        }
+        guard let ready = model.workspace else { throw Failure.check("All 5,501 contacts must build one workspace") }
+        try require(ready.knownIDs.count == total && ready.mainCount == 4_800 && ready.reviewCount == 701 &&
+                    model.selectedIDs == ready.mainIDs,
+                    "5,501 contacts start with all 4,800 Main selected and 701 Review unselected across 28 pages")
+        try require(model.canSelectAllVerifiedContacts && model.canClearAllVerifiedContacts,
+                    "Include all and clearing everything are available from the default selection")
+
+        // Select all, then uncheck exceptions on the first and last page.
+        model.selectAllVerifiedContacts()
+        try require(model.selectedIDs.count == total, "Select all covers every page of 5,501 contacts")
+        model.showContactGroup(.all)
+        model.toggle(7)
+        for _ in 0..<27 { model.nextWorkspacePage() }
+        try require(model.workspace?.pageStart == 5_400 && model.workspace?.visible.count == 101 &&
+                    model.workspace?.visible.first?.id == 5_401 && model.workspace?.visible.last?.id == total &&
+                    model.workspace?.hasNextPage == false,
+                    "The last page exposes all 101 remaining contacts, including contact 5,501")
+        model.toggle(total)
+        try require(model.selectedIDs.count == 5_499 && !model.selectedIDs.contains(7) && !model.selectedIDs.contains(total),
+                    "Unchecking exceptions after select all removes only those contacts")
+        model.previousWorkspacePage()
+        try require(model.workspace?.pageStart == 5_200 && model.workspace?.visible.count == 200,
+                    "Previous page returns from a partial last page to the preceding full page")
+        model.nextWorkspacePage()
+        try require(model.workspace?.pageStart == 5_400 && model.selectedIDs.count == 5_499 &&
+                    !model.selectedIDs.contains(7) && !model.selectedIDs.contains(total),
+                    "Returning to the last page preserves first-page and last-page exclusions")
+        model.clearAllVerifiedContacts()
+        try require(model.selectedIDs.isEmpty && !model.canClearScopedContacts, "Clear selection empties every page")
+
+        // A group scope covers all of its pages and is labeled.
+        model.showContactGroup(.main)
+        try require(model.workspace?.isScoped == true && model.workspace?.hasNextPage == true &&
+                    model.workspace?.scopeLabel == "Main contacts · 4800 across all pages",
+                    "The Main scope is labeled and spans more than one page")
+        model.selectScopedContacts()
+        try require(model.selectedIDs.count == 4_800 && model.selectedScopedCount == 4_800 &&
+                    model.selectedIDs.isDisjoint(with: Set(4_801...total)) && !model.canSelectScopedContacts,
+                    "Selecting the Main scope selects all 4,800 Main contacts and no Review contact")
+        model.markContactForGroupMove(1)
+        model.nextWorkspacePage()
+        model.markContactForGroupMove(201)
+        try require(model.markedGroupMoveIDs == [1, 201] && model.selectedIDs == ready.mainIDs,
+                    "Marks span pages without changing the 4,800-contact import selection")
+
+        // A search scope covers every matching contact on every page.
+        model.searchWorkspace("person")
+        try require(model.workspace?.filteredCount == 4_704 && model.workspace?.hasNextPage == true &&
+                    model.workspace?.scopeLabel == "Main contacts matching “person” · 4704 across all pages" &&
+                    model.workspace?.pageStart == 0 && model.markedGroupMoveIDs == [1, 201],
+                    "A Main search counts every match, resets its page and preserves group marks")
+        model.clearScopedContacts()
+        try require(model.selectedIDs.count == 96 && model.selectedIDs.allSatisfy { $0 % 50 == 0 },
+                    "Clearing a search scope keeps only selections outside it")
+        model.searchWorkspace("SMITH")
+        try require(model.workspace?.filteredCount == 96 && model.selectedScopedCount == 96 &&
+                    model.markedGroupMoveIDs == [1, 201],
+                    "Search ignores case and preserves marks hidden by the current query")
+        model.toggle(100)
+        try require(model.selectedIDs.count == 95 && !model.selectedIDs.contains(100), "A search helps uncheck one exception")
+        model.searchWorkspace("")
+        model.showContactGroup(.review)
+        try require(model.markedGroupMoveIDs.isEmpty && model.selectedIDs.count == 95,
+                    "Changing group clears organizing marks while preserving selected contacts")
+        for _ in 0..<3 { model.nextWorkspacePage() }
+        try require(model.workspace?.pageStart == 600 && model.workspace?.visible.count == 101 &&
+                    model.workspace?.visible.last?.id == total,
+                    "Review has its own partial last page without dropping the final contact")
+        model.selectScopedContacts()
+        try require(model.selectedIDs.count == 796 && model.selectedScopedCount == 701,
+                    "Selecting from Review's last page adds all 701 Review contacts to earlier choices")
+        let selectionBeforeEmptySearch = model.selectedIDs
+        model.searchWorkspace("No such contact")
+        model.prepareWorkspace()
+        try require(model.workspace?.filteredCount == 0 && model.workspace?.visible.isEmpty == true &&
+                    !model.canSelectScopedContacts && !model.canClearScopedContacts &&
+                    model.selectedIDs == selectionBeforeEmptySearch,
+                    "Empty search and repeated workspace preparation retain selections without reapplying defaults")
+        model.searchWorkspace("")
+        try require(model.workspace?.pageStart == 0 && model.selectedIDs == selectionBeforeEmptySearch,
+                    "Clearing an empty search restores page one without changing the selection")
+
+        // Select all minus exceptions reaches the helper as one exact, multi-page review.
+        model.clearAllVerifiedContacts()
+        model.selectAllVerifiedContacts()
+        model.toggle(7)
+        model.toggle(total)
+        let expected = (1...total).filter { $0 != 7 && $0 != total }
+        model.reviewWorkspace()
+        let reviewID = try emittedReviewID(commands)
+        for start in stride(from: 0, to: expected.count, by: 1_000) {
+            let page = try JSONSerialization.jsonObject(with: commands.last!) as? [String: Any]
+            let end = min(start + 1_000, expected.count)
+            try require(page?["cursor"] as? Int == start && page?["total"] as? Int == expected.count &&
+                        (page?["ids"] as? [Int]) == Array(expected[start..<end]),
+                        "Review page at \(start) must carry exactly the next selected IDs")
+            model.receive(try event(#"{"kind":"review-page","reviewId":"\#(reviewID)","nextCursor":\#(end)}"#))
+        }
+        model.receive(try reviewEvent(reviewID, ids: expected))
+        try require(model.phase == .reviewing && !model.selectionNeedsReview && model.selectedIDs == Set(expected),
+                    "The exact 5,499-contact review across six helper pages authorizes the next step")
+        model.showContactGroup(.all)
+        model.searchWorkspace("Person")
+        model.nextWorkspacePage()
+        model.previousWorkspacePage()
+        try require(model.phase == .reviewing && !model.selectionNeedsReview && model.selectedIDs == Set(expected) &&
+                    model.workspace?.pageStart == 0,
+                    "Browsing groups, search and pages after local review preserves the reviewed selection")
+    }
+
     private static func allGroupWorkspaceActions() throws {
         let rows = (1...1205).map { id in
             #"{"id":\#(id),"name":"\#(id <= 600 ? "Person" : id <= 1200 ? "Acme LLC" : "Person") \#(id)","phoneCount":1,"phoneEnds":["0000"]}"#
@@ -401,8 +531,9 @@ struct CollectorFlowChecks {
             let next = end == rows.count ? "null" : String(end)
             model.receive(try event(#"{"kind":"contacts","scanId":"\#(scanID)","query":"","cursor":\#(cursor),"totalContacts":1205,"nextCursor":\#(next),"contacts":[\#(rows[cursor..<end].joined(separator: ","))]}"#))
         }
-        try require(model.workspace?.mainCount == 605 && model.workspace?.reviewCount == 600 && model.selectedIDs.isEmpty,
-                    "Review starts unselected after all 1,205 stable IDs are verified")
+        try require(model.workspace?.mainCount == 605 && model.workspace?.reviewCount == 600 &&
+                    model.selectedIDs == model.workspace?.mainIDs,
+                    "Main starts selected and Review unselected after all 1,205 stable IDs are verified")
         model.selectAllMain()
         try require(model.selectedIDs.count == 605 && !model.selectedIDs.contains(601),
                     "Main-only action must not silently select Review")

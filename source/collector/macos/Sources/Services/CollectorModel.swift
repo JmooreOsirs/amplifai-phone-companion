@@ -79,6 +79,7 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var contactQuery = ""
     @Published private(set) var contactSearchPending = false
     @Published var selectedIDs: Set<Int> = []
+    private var mainPreselected = false
     @Published private(set) var selectingAllContacts = false
     @Published private(set) var selectAllCancelRequested = false
     @Published private(set) var selectAllVisited = 0
@@ -330,6 +331,15 @@ final class CollectorModel: ObservableObject {
     }
     var selectedMainCount: Int { selectedIDs.intersection(workspace?.mainIDs ?? []).count }
     var selectedReviewCount: Int { selectedIDs.intersection(workspace?.reviewIDs ?? []).count }
+    var canSelectScopedContacts: Bool {
+        guard canEditWorkspace, let workspace, workspace.filteredCount > 0 else { return false }
+        return !workspace.filteredIDs.isSubset(of: selectedIDs)
+    }
+    var canClearScopedContacts: Bool {
+        guard canEditWorkspace, let workspace, workspace.filteredCount > 0 else { return false }
+        return !workspace.filteredIDs.isDisjoint(with: selectedIDs)
+    }
+    var selectedScopedCount: Int { selectedIDs.intersection(workspace?.filteredIDs ?? []).count }
     var pendingBulkMoveCount: Int { pendingBulkMove?.ids.count ?? 0 }
     var pendingBulkMoveTitle: String {
         guard let pendingBulkMove else { return "Move contact group?" }
@@ -556,6 +566,7 @@ final class CollectorModel: ObservableObject {
         lastErrorCode = nil
         lastErrorStage = nil
         selectedIDs = []
+        mainPreselected = false
         clearSelectAll()
         clearSuggestions()
         clearPendingReview()
@@ -711,6 +722,22 @@ final class CollectorModel: ObservableObject {
         groupUndo = nil
     }
 
+    /// Selects every contact in the current group and search, on every page.
+    func selectScopedContacts() {
+        guard canSelectScopedContacts, let workspace else { return }
+        guard invalidateSelectionForEdit() else { return }
+        selectedIDs.formUnion(workspace.filteredIDs)
+        groupUndo = nil
+    }
+
+    /// Clears every contact in the current group and search, on every page.
+    func clearScopedContacts() {
+        guard canClearScopedContacts, let workspace else { return }
+        guard invalidateSelectionForEdit() else { return }
+        selectedIDs.subtract(workspace.filteredIDs)
+        groupUndo = nil
+    }
+
     func showContactGroup(_ group: ContactGroup) {
         guard let workspace else { return }
         pendingBulkMove = nil
@@ -857,12 +884,22 @@ final class CollectorModel: ObservableObject {
         sendSuggestionScanPage()
     }
 
+    /// Main contacts start selected once per capture; Review contacts wait for the owner's choice.
+    private func applyDefaultSelection() {
+        guard !mainPreselected, let workspace else { return }
+        mainPreselected = true
+        if selectedIDs.isEmpty && handoffID.isEmpty && phase == .selecting {
+            selectedIDs = workspace.mainIDs
+        }
+    }
+
     func prepareWorkspace() {
         guard workspace == nil, !suggestionScanning,
               (phase == .selecting || phase == .reviewing), totalContacts > 0 else { return }
         if nextContactCursor == nil && currentContactCursor == 0 &&
             contactQuery.isEmpty && contacts.count == totalContacts {
             workspace = ContactWorkspace(previews: contacts, expectedCount: totalContacts)
+            applyDefaultSelection()
             suggestionMatches = [:]
             for contact in contacts {
                 for kind in ContactSuggestionKind.matches(contact.name) {
@@ -1138,6 +1175,7 @@ final class CollectorModel: ObservableObject {
         selectedIDs = []
         clearSelectAll()
         clearSuggestions()
+        mainPreselected = false
         workspace = nil
         groupUndo = nil
         clearPendingReview()
@@ -1506,6 +1544,7 @@ final class CollectorModel: ObservableObject {
             clearPendingReview()
             reviewedSelectionIDs = nil
             selectedIDs = []
+            mainPreselected = false
             resetHandoff()
             contacts = firstPage
             totalContacts = total
@@ -1558,6 +1597,7 @@ final class CollectorModel: ObservableObject {
                     workspace = ContactWorkspace(previews: workspaceBuilding,
                                                 expectedCount: totalContacts)
                     guard workspace != nil else { rejectContactPage(); return }
+                    applyDefaultSelection()
                     suggestionScanning = false
                     suggestionScanID = nil
                     suggestionSeenIDs = []

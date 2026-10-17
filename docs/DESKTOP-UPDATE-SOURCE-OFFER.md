@@ -9,6 +9,9 @@ diagnostics retained through partial success and local relaunch. Current facts
 are included in the transfer hashes; previous-run history stays local and is
 never attached to a new capture or Save. It retains compatible update discovery,
 native idle and unsaved review gates, and the bounded running-app status service.
+The Apple Silicon rc27 source also lets the local data bridge accept the
+website's account origin `https://amplifai.satoris.ai` alongside the original
+Vercel origin, binding each transfer to the first origin that pairs or connects.
 It preserves the
 collection, review, explicit account Save and acknowledgment boundaries. The
 source does not establish physical phone, customer account or hardware acceptance.

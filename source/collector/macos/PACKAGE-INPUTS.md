@@ -1,12 +1,13 @@
-# October 15 rc26 package inputs
+# October 16 combined RC28 package inputs
 
 The accepted source baseline is rc24; `docs/DESKTOP-UPDATE-SOURCE-PINS.json`
 records the released source archives and planned platform identities.
-This ARM source is versioned `2026.10.15-rc26`, build `26101526`;
+This ARM source is versioned `2026.10.16-rc28`, build `26101628`;
 it requires a newly signed/notarized app and newly frozen Python helper because
 the updater and independent running-app status protocol changed. Existing bundle identifier
 `ai.satoris.amplifai.phone.candidate` is preserved. No signing, notarization,
 publication, physical-device or authenticated browser proof is implied by this source file.
+RC28 combines the RC27 account-origin/contact-selection repairs with the qualified Mac design. Intel uses version `2026.10.16-rc28-intel1`, build `261016281`, in its existing separate channel. No intermediate RC27 release is planned.
 This source file alone is not distribution clearance. The native unchecked, operation-bound
 pre-Connect collection approval is now source/model qualified: Agree alone does
 not collect, and Connect/helper launch require its fresh run-bound receipt.
@@ -23,7 +24,7 @@ cannot replace this local collection approval.
   The top-level `script/build_and_run.sh --build-only` now compiles the packaging
   tool in an owned temporary directory, generates this icon and copies it into
   the matching bundle. The temporary generator inputs are removed on exit.
-  No alternate logo, font or generative asset is used.
+  The accepted logo is preserved. The Google/Fable design now bundles the pinned Open Sans font and OFL notice; no generative asset is used.
 - Keep the existing logo PNG resource for the in-window brand mark.
 - The rc12 review adds atomic all-page contact selection, a separately
   confirmed server-bound destination account for no-code Connection, a Copy

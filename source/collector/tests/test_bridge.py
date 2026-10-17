@@ -10,7 +10,10 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
-from amplifai_phone.bridge import BRIDGE_PORT, PILOT_ORIGIN, BridgeError, BridgeServer, selected_metadata
+from amplifai_phone.bridge import (
+    ACCOUNT_ORIGIN, BRIDGE_PORT, BROWSER_ORIGINS, PILOT_ORIGIN, BridgeError, BridgeServer, selected_metadata,
+)
+from amplifai_phone.companion_status import ALLOWED_ORIGINS as STATUS_ORIGINS
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import Contact, Interaction, SourceResult
 from amplifai_phone.paged_transfer import EMPTY_CHAIN, PagedTransfer
@@ -63,6 +66,9 @@ class BridgeTest(unittest.TestCase):
     def test_account_connection_requires_server_proof_native_approval_and_one_use_release(self) -> None:
         self.assertEqual(BRIDGE_PORT, 48751)
         self.assertEqual(PILOT_ORIGIN, "https://amplifai-database-engine.vercel.app")
+        self.assertEqual(ACCOUNT_ORIGIN, "https://amplifai.satoris.ai")
+        self.assertEqual(BROWSER_ORIGINS, {ACCOUNT_ORIGIN, PILOT_ORIGIN})
+        self.assertEqual(BROWSER_ORIGINS, STATUS_ORIGINS)
         proofs: list[tuple[str, dict[str, str]]] = []
         def account_proof(action: str, command: dict[str, str]) -> dict[str, object]:
             proofs.append((action, command))
@@ -482,7 +488,8 @@ class BridgeTest(unittest.TestCase):
                 bridge, "POST", "/v1/pair", {"code": bridge.code}
             )
             self.assertEqual(status, 200)
-            self.assertEqual(headers["Access-Control-Allow-Origin"], bridge.origin)
+            self.assertEqual(headers["Access-Control-Allow-Origin"], PILOT_ORIGIN)
+            self.assertEqual(bridge.bound_origin, PILOT_ORIGIN)
             token = json.loads(body)["token"]
             status, _, _ = self.request(
                 bridge, "GET", "/v1/metadata", authorization="Bearer wrong"
@@ -587,6 +594,102 @@ class BridgeTest(unittest.TestCase):
             status, headers, _ = self.request(bridge, "OPTIONS", "/v1/pair")
             self.assertEqual(status, 204)
             self.assertEqual(headers["Access-Control-Allow-Private-Network"], "true")
+        finally:
+            bridge.close()
+
+    def test_browser_origins_are_exact_and_single(self) -> None:
+        bridge = BridgeServer(fixture(), {1}, port=0)
+        bridge.start()
+        try:
+            for origin in ("https://amplifai.satoris.ai/", "http://amplifai.satoris.ai",
+                           "https://www.amplifai.satoris.ai", "https://amplifai.satoris.ai.evil.test",
+                           "https://AMPLIFAI.satoris.ai", "https://amplifai.satoris.ai:443", "null"):
+                status, headers, _ = self.request(bridge, "GET", "/v3/discover", origin=origin)
+                self.assertEqual(status, 403, origin)
+                self.assertNotIn("Access-Control-Allow-Origin", headers)
+            connection = http.client.HTTPConnection("127.0.0.1", bridge.port, timeout=2)
+            connection.putrequest("GET", "/v3/discover", skip_host=True, skip_accept_encoding=True)
+            connection.putheader("Host", f"127.0.0.1:{bridge.port}")
+            connection.putheader("Origin", ACCOUNT_ORIGIN)
+            connection.putheader("Origin", PILOT_ORIGIN)
+            connection.endheaders()
+            response = connection.getresponse()
+            response.read()
+            connection.close()
+            self.assertEqual(response.status, 403)
+            self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
+            self.assertEqual(self.request(bridge, "POST", "/v1/pair", {"code": bridge.code},
+                                          origin="https://amplifai.satoris.ai.evil.test")[0], 403)
+            self.assertIsNone(bridge.bound_origin)
+            self.assertEqual(bridge.attempts, 0)
+        finally:
+            bridge.close()
+
+    def test_only_a_successful_manual_pair_binds_its_origin(self) -> None:
+        bridge = BridgeServer(fixture(), {1}, port=0)
+        bridge.start()
+        try:
+            self.assertEqual(self.request(bridge, "POST", "/v1/pair", {"code": "wrong"}, origin=PILOT_ORIGIN)[0], 403)
+            self.assertIsNone(bridge.bound_origin)
+            status, headers, body = self.request(bridge, "POST", "/v1/pair", {"code": bridge.code},
+                                                 origin=ACCOUNT_ORIGIN)
+            self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (200, ACCOUNT_ORIGIN))
+            self.assertEqual(bridge.bound_origin, ACCOUNT_ORIGIN)
+            token = json.loads(body)["token"]
+            status, headers, _ = self.request(bridge, "GET", "/v1/metadata", origin=PILOT_ORIGIN,
+                                              authorization=f"Bearer {token}")
+            self.assertEqual(status, 403)
+            self.assertNotIn("Access-Control-Allow-Origin", headers)
+            self.assertEqual(self.request(bridge, "OPTIONS", "/v1/metadata", origin=PILOT_ORIGIN,
+                                          requested_method="GET")[0], 403)
+            self.assertEqual(self.request(bridge, "POST", "/v1/complete", origin=PILOT_ORIGIN,
+                                          authorization=f"Bearer {token}")[0], 403)
+            status, _, body = self.request(bridge, "GET", "/v1/metadata", origin=ACCOUNT_ORIGIN,
+                                           authorization=f"Bearer {token}")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["contacts"][0]["name"], "Ada Synthetic")
+        finally:
+            bridge.close()
+
+    def test_account_origin_connection_binds_the_whole_transfer(self) -> None:
+        def account_proof(action: str, _command: dict[str, str]) -> dict[str, object]:
+            return ({"destinationEmail": "owner@example.test", "destinationCourse": "Synthetic course"}
+                    if action == "claim" else {"consumed": True})
+        bridge = BridgeServer(fixture(), {1}, port=0, account_proof=account_proof)
+        bridge.start()
+        intent = "11111111-1111-4111-8111-111111111111"
+        capability = "A" * 43
+        try:
+            for origin in (ACCOUNT_ORIGIN, PILOT_ORIGIN):
+                status, headers, _ = self.request(bridge, "GET", "/v3/discover", origin=origin)
+                self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (200, origin))
+                status, headers, _ = self.request(bridge, "OPTIONS", "/v3/connect", origin=origin)
+                self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (204, origin))
+            self.assertIsNone(bridge.bound_origin)
+            command = {"intentId": intent, "capability": capability,
+                       "handoffId": bridge.handoff_id, "payloadSha256": bridge.payload_sha256}
+            status, headers, _ = self.request(bridge, "POST", "/v3/connect", command, origin=ACCOUNT_ORIGIN)
+            self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (200, ACCOUNT_ORIGIN))
+            self.assertEqual(bridge.bound_origin, ACCOUNT_ORIGIN)
+            status, headers, _ = self.request(bridge, "GET", "/v3/discover", origin=PILOT_ORIGIN)
+            self.assertEqual(status, 403)
+            self.assertNotIn("Access-Control-Allow-Origin", headers)
+            self.assertEqual(self.request(bridge, "OPTIONS", "/v3/release", origin=PILOT_ORIGIN)[0], 403)
+            self.assertEqual(self.request(bridge, "GET", "/v3/status", origin=PILOT_ORIGIN,
+                                          authorization="Bearer " + capability)[0], 403)
+            self.assertEqual(self.request(bridge, "POST", "/v1/pair", {"code": bridge.code},
+                                          origin=PILOT_ORIGIN)[0], 403)
+            self.assertEqual(bridge.attempts, 0)
+            self.assertTrue(bridge.approve_destination(intent, True))
+            release = {"intentId": intent, "capability": capability, "releaseCode": "B" * 43}
+            self.assertEqual(self.request(bridge, "POST", "/v3/release", release, origin=PILOT_ORIGIN)[0], 403)
+            status, headers, raw = self.request(bridge, "POST", "/v3/release", release, origin=ACCOUNT_ORIGIN)
+            self.assertEqual((status, headers["Access-Control-Allow-Origin"]), (200, ACCOUNT_ORIGIN))
+            token = json.loads(raw)["token"]
+            self.assertEqual(self.request(bridge, "GET", "/v1/metadata", origin=PILOT_ORIGIN,
+                                          authorization=f"Bearer {token}")[0], 403)
+            self.assertEqual(self.request(bridge, "GET", "/v1/metadata", origin=ACCOUNT_ORIGIN,
+                                          authorization=f"Bearer {token}")[0], 200)
         finally:
             bridge.close()
 
