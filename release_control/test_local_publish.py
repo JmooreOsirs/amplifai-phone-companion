@@ -86,8 +86,8 @@ class LocalPublicationTests(unittest.TestCase):
             publish.release_snapshot("fixture/repo", github=client)
 
     def test_mounted_app_inventory_is_verified_and_image_detaches_on_tamper(self):
-        for tampered in (False, True):
-            with self.subTest(tampered=tampered), tempfile.TemporaryDirectory() as folder:
+        for tampered, extra_mount in ((False, False), (True, False), (False, True)):
+            with self.subTest(tampered=tampered, extra_mount=extra_mount), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 source = self.fixture()[0]
                 certificate = b"public certificate fixture"
@@ -97,28 +97,42 @@ class LocalPublicationTests(unittest.TestCase):
                 calls = []
                 def command(args):
                     calls.append(list(map(str, args)))
-                    if "--extract-certificates" in args:
-                        prefix = args[args.index("--extract-certificates") + 1]
+                    if args[:2] == ["codesign", "--display"]:
+                        self.assertEqual(len(args), 4)
+                        self.assertTrue(args[2].startswith("--extract-certificates="))
+                        prefix = args[2].split("=", 1)[1]
                         Path(str(prefix) + "0").write_bytes(certificate)
                     if args[:2] == ["hdiutil", "attach"]:
                         mount = Path(args[args.index("-mountpoint") + 1])
                         binary = mount / "AMPLIFai Phone.app/Contents/MacOS/AmplifaiPhone"
                         binary.parent.mkdir(parents=True)
                         binary.write_bytes(b"evil" if tampered else b"good")
-                        return plistlib.dumps({"system-entities": [{"dev-entry": "/dev/disk900"},
-                            {"dev-entry": "/dev/disk900s1", "mount-point": str(mount)}]}).decode()
+                        entities = [
+                            {"dev-entry": "/dev/disk900", "content-hint": "GUID_partition_scheme"},
+                            {"dev-entry": "/dev/disk900s1", "content-hint": "Apple_APFS"},
+                            {"dev-entry": "/dev/disk901s1", "volume-kind": "apfs", "mount-point": str(mount)},
+                            {"dev-entry": "/dev/disk901", "content-hint": "EF57347C-0000-11AA-AA11-00306543ECAC"}]
+                        if extra_mount:
+                            entities.append({"dev-entry": "/dev/disk901s2", "mount-point": "/Volumes/unexpected"})
+                        return plistlib.dumps({"system-entities": entities}).decode()
                     return ""
                 with patch.object(release, "command", side_effect=command), \
                         patch.object(release, "CERTIFICATE_SHA1", hashlib.sha1(certificate).hexdigest().upper()), \
                         patch.object(release, "validate_app") as app_validation:
-                    if tampered:
+                    if extra_mount:
+                        with self.assertRaisesRegex(ValueError, "single private verification"):
+                            publish.verify_local_package(root, source, temp_root=root)
+                    elif tampered:
                         with self.assertRaisesRegex(ValueError, "mounted app differs"):
                             publish.verify_local_package(root, source, temp_root=root)
                     else:
                         receipt = publish.verify_local_package(root, source, temp_root=root)
                         self.assertTrue(receipt["mountedInventoryMatched"])
                         self.assertFalse(receipt["targetCodeExecuted"])
-                    app_validation.assert_called_once()
+                    if extra_mount:
+                        app_validation.assert_not_called()
+                    else:
+                        app_validation.assert_called_once()
                 self.assertEqual(calls[-1], ["hdiutil", "detach", "/dev/disk900"])
                 self.assertFalse(list(root.glob("amplifai-local-verify-*")))
                 self.assertTrue(all("--all-architectures" in call for call in calls if call[:2] == ["codesign", "--verify"]))
@@ -129,8 +143,10 @@ class LocalPublicationTests(unittest.TestCase):
             calls = []
             def command(args):
                 calls.append(args)
-                if "--extract-certificates" in args:
-                    Path(str(args[args.index("--extract-certificates") + 1]) + "0").write_bytes(b"wrong public certificate")
+                if args[:2] == ["codesign", "--display"]:
+                    self.assertEqual(len(args), 4)
+                    self.assertTrue(args[2].startswith("--extract-certificates="))
+                    Path(args[2].split("=", 1)[1] + "0").write_bytes(b"wrong public certificate")
                 return ""
             with patch.object(release, "command", side_effect=command):
                 with self.assertRaisesRegex(ValueError, "certificate differs"):
