@@ -1,4 +1,4 @@
-# rc27 native integration
+# RC27 integration and combined RC28 release
 
 ## Initial integration work agreement
 
@@ -113,7 +113,7 @@ The source specification at Fable commit `b1a5247f8d6b74d13e085076a6b81158196b05
 
 The existing service/workspace, collection protocol, bridge, updater identity, disclosure version and signing keys are untouched. The view initializer accepts an optional initial presentation choice solely for rendering the unchecked consent screen; it does not approve collection or bypass the model's consent guard.
 
-Release naming remains a coordinator-owned decision: combined RC28 versus RC27 then RC28. The proposed 26101528 is not activated here; Intel needs a coherent architecture-specific identity. No release identifier or feed is changed by this design slice.
+At this design checkpoint, release naming was still a coordinator-owned decision and no identity or feed changed. The combined RC28 agreement below resolves it and supersedes the proposed 26101528.
 
 Android later-parity sources are now located but differ: canonical native main tracks `source/collector/android/app/src/main/java/ai/satoris/amplifai/phone/MainActivity.java` at Android commit 634dcdac0697cf12e0690560f4b50ad7c17c1aab, version 26092802 / 2026.09.28-rc2; the website checkout separately tracks `collector/android` at 28e2cce, version 26100101 / 2026.10.01-rc1. The coordinator verified those pointers. Neither baseline is imported here or asserted to match the public APK. Public release provenance is the next Android dependency; Mac acceptance comes first.
 
@@ -158,7 +158,47 @@ coordinator-supplied website receipt, not native runtime or production evidence.
 Current web reference:
 https://amplifai-database-engine-lf4vde9kz-osirs.vercel.app/design/account?state=week2-review
 
-The design-phase return milestone is met. Recommend ordinary Sol/High for release
-execution through the coordinator; no model restoration is claimed here. PR4/PR5
-independent approval, version resolution, protected credential custody and actual
+The design-phase return milestone was met and ordinary Sol/High was recommended;
+no restoration occurred. Jeff subsequently retained Astra/Ultra for the combined
+RC28 phase below. Independent approval, protected credential custody and actual
 sign/notary/publication remain open. Public RC26 and installed apps are unchanged.
+
+
+## Combined RC28 release agreement — October 16
+
+Jeff chose one combined RC28 release containing the RC27 functional repairs and
+qualified Mac presentation. No intermediate RC27 will be published. Astra/Ultra
+remains explicitly selected for this phase; the earlier Sol/High return was only
+a recommendation and was not applied. Standing authority is to deploy once the
+required checks pass, without another routine deployment approval.
+
+Next finite milestone: commit coherent identities, qualify the actual changed ARM
+and Intel packages, and finish independent protected-release/signing preparation.
+Completion evidence must bind each exact source, workflow, package and source
+archive hash; signing/notarization/publication and physical acceptance remain
+separate later receipts. No installed-app replacement or personal source Save is
+included in this preparation.
+
+| Channel | Version | Build | Release tag |
+| --- | --- | --- | --- |
+| macos-arm64 | 2026.10.16-rc28 | 26101628 | macos-2026.10.16-rc28-release |
+| macos-intel-test | 2026.10.16-rc28-intel1 | 261016281 | macos-2026.10.16-rc28-intel1-test |
+
+These identities use October 16 in America/Denver and exceed the live RC26
+channel builds. Existing bundle IDs, Sparkle public key/feed hosts, app data,
+Developer ID and Windows RC19 identities remain pinned. The checked-in released
+build/feed policy records remain RC26 until actual publication. The active Intel
+baseline moves to INTEL-RC28-BASELINE.json with unchanged dependency hashes.
+
+The source checkout must be clean and the new source freeze must bind the final
+post-version commit. Preview qualification grants no protected signing authority.
+PR4 and PR5 still require independent code-owner review, followed by reviewed
+exact-source authorization. Owner-native existing-key provisioning and the
+separate scoped audit credential remain explicit custody dependencies.
+
+Website support may recognize these exact identities after qualification. Its
+feed and download metadata may advertise RC28 only after signed/notarized public
+bytes are independently verified. Jeff remains the physical iPhone transfer and
+explicit review/Save operator; synthetic acceptance does not replace that step.
+
+Round 5: both full SITEWIDE and COMPANION handoff prompts at Fable b1a5247 were read. Existing implementation already satisfies the resolved Mac scope; no completed presentation work was repeated. The prompts' stale proposed 26101528 and inconsistent October 17 version are superseded by the coherent October 16 identities above. Website Production authority is coordinator-owned; native download/feed promotion remains gated by verified public bytes.

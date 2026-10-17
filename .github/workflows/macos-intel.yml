@@ -166,7 +166,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: macos-intel-rc27-failure-${{ github.sha }}
+          name: macos-intel-rc28-failure-${{ github.sha }}
           path: ${{ runner.temp }}/intel-failure/
           if-no-files-found: warn
           retention-days: 7

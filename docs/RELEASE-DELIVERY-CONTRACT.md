@@ -1,6 +1,6 @@
 # Native delivery and website promotion contracts
 
-This is the integration contract for PR #4. Its native helpers are implemented but inactive. Current source branches do not yet emit the required source-map artifact; the website has no promotion endpoint/job. Neither dependency may be replaced with an invented passing receipt.
+This is the integration contract for pending control PR #4 and native PR #5. Their helpers are implemented but inactive. Protected `release/native` exists at qualified baseline `02670fa2ea2c4fbb09b422e7b8cc183e45126e52`; integration still requires independent review. Historical ARM and Intel deliveries include source-map/Legal qualification evidence, and the existing website owner has supplied adapter/Preview work. Final RC28 source qualification, hosted credential-bearing release and signed-byte production promotion remain pending. Neither historical artifacts nor Preview evidence qualifies the new final bytes.
 
 ## Native build owner hook
 
@@ -26,7 +26,9 @@ Use the existing hash-locked Python environment for this CLI. It executes the co
 
 5. Upload only `qualified-delivery/` with the existing pinned upload-artifact action (`ea165f8d65b6e75b540449e92b4886f43607fa02`), `if-no-files-found: error`, no `always()` success artifact on failure. Retain the artifact ID and server digest; the release dispatcher takes these exact values. `qualification.json`, `app.zip` and `source.zip` are the only three root files. No human approves those generated hashes again.
 
-The missing native integration work is specific: preserve/integrate the newer product fixes, update the old source-workflow branch/version pins through PR review, add the source-closure/map emitter and five-file Legal staging for the **actual new app**, then call the producer and retain its output. Current ARM build-only CI does not upload this qualified artifact. This draft does not silently select rc26/rc27 as an authorized release.
+PR #5 implements the source-closure/map emitter, five-file Legal staging and producer/upload hook while preserving the newer product fixes and later Windows/Intel work. Historical ARM evidence and Intel run `38926522970` at source `f9a0da3e10f6335be637fc72cea10491fb23f040` demonstrate earlier candidate qualification. The final RC28 commit must be clean, normally reviewed/merged and built/qualified anew for each architecture after the UI/font/version/doc changes are frozen. No historical app or successful test suite substitutes for that exact-source delivery.
+
+Confirmed planned identities are ARM `2026.10.16-rc28` / `26101628` and Intel `2026.10.16-rc28-intel1` / `261016281`. The source audit confirmed channel compatibility and monotonic ordering; live feeds still match the retained RC26 hashes. The new packages remain unpublished and unqualified. These identities are not source authorization entries. Keep control `activationApproved=false`, `publicationEnabled=false` and `approvedSources=[]` for the current preparation slice; the eventual protected policy record must bind the confirmed identities to the exact final source and trusted workflows.
 
 ## Complete pre-sign source ZIP
 
@@ -67,11 +69,11 @@ Only the separate publication job has `contents:write`; it receives no Apple/Spa
 
 ## Website owner packet
 
-The successful native publication output includes `website-handoff.json`, not a fabricated website deployment receipt. It contains exact source/control commits, channel/CPU/bundle/version/build, public native release URL, signed Actions artifact ID/digest/run/attempt, package/source public URLs and exact byte records, feed public URL and canonical website path, and the expected previous feed hash/size with its retained rollback location. It explicitly says `websitePublisherImplemented=false` and `websitePromoted=false`.
+The successful native publication output includes `website-handoff.json`, not a fabricated website deployment receipt. It contains exact source/control commits, channel/CPU/bundle/version/build, public native release URL, signed Actions artifact ID/digest/run/attempt, package/source public URLs and exact byte records, feed public URL and canonical website path, and the expected previous feed hash/size with its retained rollback location. The current native emitter still writes `websitePublisherImplemented=false` and `websitePromoted=false`; preserve that raw packet and record the independently supplied website adapter evidence separately. The implementation flag is a historical limitation of this emitter, not a production-promotion receipt. Only the website owner's actual verified signed-byte deployment can establish promotion; no documentation edit changes those emitted flags.
 
-The root's read-only website audit verified the current owner checkout is `amplify-database-engine-account-release-oct14`, branch `codex/course-shell-integration-oct14`, source `7746f48`. Preserve that owner; do not use the stale base checkout or open a duplicate execution lane.
+The earlier read-only website audit recorded checkout `amplify-database-engine-account-release-oct14`, branch `codex/course-shell-integration-oct14`, source `7746f48`. That is historical audit provenance, not a claim about the current website head. Reconcile the existing website owner's supplied adapter/Preview receipt and current canonical checkout before final handoff; do not open a duplicate execution lane.
 
-| Surface | Current exact contract |
+| Surface | Retained audit contract; refresh before final promotion |
 | --- | --- |
 | ARM feed | `public/phone/macos/appcast.xml`; rc26 / `26101526`; 1,561 bytes; SHA256 `afd0ede099c9219853c4626f1466cff4cde6dfd95e7c42abd9a1164d89b72b13` |
 | Intel feed | `public/phone/macos/intel-appcast.xml`; rc26-intel1 / `261015261`; 1,667 bytes; SHA256 `6207d5831dc6f0f638445458379393ac3a9fa7539d7d892e42b54846ec76031c` |
@@ -80,8 +82,15 @@ The root's read-only website audit verified the current owner checkout is `ampli
 | Exact feed tests | `tests/macos-arm-update-feed.test.ts`, `tests/macos-intel-update-feed.test.ts`: exact bytes/hash/key/channel/source/enclosure |
 | Download/status fixtures | `tests/native-download-metadata.test.ts`, `tests/companion-update-status-ui.test.ts`: version/build/URLs and old/current/newer expectations; preserve Android/Windows |
 | Diagnostic/telemetry admission | `src/lib/telemetry/events.ts` and `src/app/api/v1/companion-diagnostics/route.ts`: separate exact build allowlists must agree |
-| Admission negative fixtures | `tests/telemetry.test.ts`, `tests/companion-diagnostics-route.test.ts`: currently reject `26101527`; when approving that build, replace the neighboring negative fixture and retain private-field rejection |
+| Admission negative fixtures | `tests/telemetry.test.ts`, `tests/companion-diagnostics-route.test.ts`: the earlier audit rejected `26101527`; reconcile current RC28 admission/negative fixtures with both confirmed architecture-specific builds and retain private-field rejection |
 | Routing/cache | Existing anonymous GET/HEAD handling in `proxy.ts`; no-store headers in `next.config.ts` |
 | Observed public origins | `https://amplifai.satoris.ai` and `https://amplifai-database-engine.vercel.app`; both exact files returned 200/no-store at the audit |
 
-No narrow website promotion interface exists. The website owner must implement a protected receipt-consuming adapter that updates feed, acquisition, release-pinned tests and diagnostic allowlists together. It must independently verify the signed feed/key/channel/CPU/newer build, official immutable assets, current highest published channel build and expected previous website feed. Deployment promotion needs a real expected-state/CAS or serialized equivalent to reject stale/concurrent packets, then both-origin feed/download readback and exact rollback custody. Native CI should receive only scoped dispatch/artifact authority for that interface, never general website deployment credentials. No new feed host or feed-only copying shortcut is part of this work.
+The existing website owner has supplied a receipt-consuming adapter and Preview evidence. Final acceptance must verify that the supplied implementation updates feed, acquisition, release-pinned tests and diagnostic allowlists together for the **actual signed public RC28 bytes**. It must independently verify the signed feed/key/channel/CPU/newer build, official immutable assets, current highest published channel build and expected previous website feed. Deployment promotion needs a real expected-state/CAS or serialized equivalent to reject stale/concurrent packets, then both-origin feed/download readback and exact rollback custody. Native CI should receive only scoped dispatch/artifact authority for that interface, never general website deployment credentials. No new feed host or feed-only copying shortcut is part of this work.
+
+
+## Custody and enforcement handoff
+
+Follow [PROTECTED-MAC-RELEASE.md](PROTECTED-MAC-RELEASE.md#runtime-enforcement-verification-plan--not-yet-executed) for the bounded noncredential denial checks and owner-operated existing-key provisioning commands. Product secrets remain absent until effective reviewed branch/environment custody is qualified. The audit credential goes to both exact named environments; Apple/Sparkle material goes only to signing. Record metadata-only provisioning receipts, never secret values or export contents.
+
+Release readiness requires separate receipts for the exact source/build delivery, hosted signing/notarization, public package/source/feed bytes, website production promotion, installed app identity and Jeff's physical iPhone transfer plus explicit source review/Save. None implies the next. Existing deployment authority carries through these technical checks without another routine deployment permission request.
