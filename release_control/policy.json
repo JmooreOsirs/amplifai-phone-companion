@@ -6,8 +6,8 @@
   "qualifiedAncestor": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
   "signingEnvironment": "amplifai-macos-signing",
   "publicationEnvironment": "amplifai-release-publication",
-  "activationApproved": false,
-  "publicationEnabled": false,
+  "activationApproved": true,
+  "publicationEnabled": true,
   "releaseAuthority": "reviewed-source-independent-release",
   "requiredChecks": ["release-control-checks"],
   "codeOwners": "* @JmooreOsirs @bac1876\n",
@@ -18,5 +18,8 @@
   },
   "operators": ["JmooreOsirs", "bac1876"],
   "buildWorkflows": [".github/workflows/macos-arm64-check.yml", ".github/workflows/macos-intel.yml"],
-  "approvedSources": []
+  "approvedSources": [
+    {"sourceCommit": "8f7ec4d3de4235ab5d36d5175c29121e3a26548a", "channel": "macos-arm64", "version": "2026.10.16-rc28", "build": "26101628", "buildWorkflow": ".github/workflows/macos-arm64-check.yml", "releaseAuthorized": true},
+    {"sourceCommit": "8f7ec4d3de4235ab5d36d5175c29121e3a26548a", "channel": "macos-intel-test", "version": "2026.10.16-rc28-intel1", "build": "261016281", "buildWorkflow": ".github/workflows/macos-intel.yml", "releaseAuthorized": true}
+  ]
 }
