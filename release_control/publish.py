@@ -182,7 +182,7 @@ def verify_local_package(root: Path, source: dict, *, temp_root: Path) -> dict:
         args = ["codesign", "--verify", "--strict", "--all-architectures"]
         release.command(args + (["--deep"] if deep else []) + [path])
         prefix = work / (label + "-certificate-")
-        release.command(["codesign", "--display", "--extract-certificates", prefix, path])
+        release.command(["codesign", "--display", "--extract-certificates=" + str(prefix), path])
         leaf = Path(str(prefix) + "0")
         if (leaf.is_symlink() or not leaf.is_file() or not 0 < leaf.stat().st_size <= 65536
                 or hashlib.sha1(leaf.read_bytes()).hexdigest().upper() != release.CERTIFICATE_SHA1):
@@ -197,7 +197,13 @@ def verify_local_package(root: Path, source: dict, *, temp_root: Path) -> dict:
         entities = attached.get("system-entities", [])
         devices = [item.get("dev-entry", "") for item in entities
                    if re.fullmatch(r"/dev/disk[0-9]+", item.get("dev-entry", ""))]
-        if len(devices) == 1:
+        physical = [item["dev-entry"] for item in entities
+                    if item.get("dev-entry") in devices
+                    and item.get("content-hint") in {"GUID_partition_scheme", "Apple_partition_scheme"}]
+        # APFS adds a synthesized whole disk; detach the image's physical parent.
+        if len(physical) == 1:
+            device = physical[0]
+        elif not physical and len(devices) == 1:
             device = devices[0]
         if device is None or {item["mount-point"] for item in entities if "mount-point" in item} != {str(mount)}:
             raise ValueError("signed image did not mount at its single private verification location")
