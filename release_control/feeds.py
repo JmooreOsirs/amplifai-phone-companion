@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from typing import Callable
 
 import release
 
@@ -18,7 +19,8 @@ def names(source: dict) -> dict:
             "tag": "macos-" + source["version"] + ("-release" if cpu == "Apple-Silicon" else "-test")}
 
 
-def prepare(source: dict, package: Path, source_zip: Path, output: Path, tools: Path, openssl: str) -> dict:
+def prepare(source: dict, package: Path, source_zip: Path, output: Path, tools: Path, openssl: str, *,
+            keychain_signer: Callable[[Path], str] | None = None) -> dict:
     policy = release.exact_json((release.ROOT / "release_control/policy.json").read_bytes())
     channel = source["channel"]
     planned = names(source)
@@ -42,6 +44,8 @@ def prepare(source: dict, package: Path, source_zip: Path, output: Path, tools: 
 
     class ExistingKeySigner(existing.SparkleSigner):
         def sign(self, path):
+            if keychain_signer is not None:
+                return keychain_signer(path)
             return release.command([self.directory / "bin/sign_update", "--ed-key-file", "-",
                                     "--disable-signing-warning", "-p", path],
                                    input_data=os.environ["SPARKLE_PRIVATE_KEY"].encode())

@@ -236,6 +236,9 @@ class PipelineTests(unittest.TestCase):
             create = next(args for args in calls if args[:3] == ["gh", "release", "create"])
             self.assertIn("--verify-tag", create)
             self.assertNotIn("--target", create)
+            for args in calls:
+                if args[:2] == ["gh", "release"]:
+                    self.assertEqual(args[args.index("--repo") + 1], "github.com/fixture/repo")
             self.assertEqual(any(args[:3] == ["gh", "release", "edit"] for args in calls), not moved)
 
     def test_website_packet_binds_exact_previous_feed_without_claiming_promotion(self):

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import plistlib
 import re
 import shutil
 import stat
@@ -76,9 +78,17 @@ def validate_release_order(source: dict, releases: list, *, own_draft: str | Non
             raise ValueError("same/newer published or draft channel release exists; do not publish out of order")
 
 
-def release_snapshot(repository: str) -> list:
+def release_snapshot(repository: str, *, github=None) -> list:
     result = []
     for page in range(1, 11):
+        if github is not None:
+            rows = github.request_json(f"repos/{repository}/releases?per_page=100&page={page}")
+            if not isinstance(rows, list):
+                raise ValueError("live release list unavailable")
+            result.extend(rows)
+            if len(rows) < 100:
+                return result
+            continue
         request = urllib.request.Request(f"https://api.github.com/repos/{repository}/releases?per_page=100&page={page}", headers={
             "Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/vnd.github+json"})
         try:
@@ -110,10 +120,16 @@ def verify_previous_feed(source: dict, root: Path) -> None:
                      target, rollback["sha256"], rollback["bytes"])
 
 
-def validate_delivery(root: Path, source: dict, request: dict, env: dict) -> tuple[dict, list[Path]]:
+def validate_delivery(root: Path, source: dict, request: dict, env: dict | None = None,
+                      *, control_commit: str | None = None) -> tuple[dict, list[Path]]:
+    if (env is None) == (control_commit is None):
+        raise ValueError("exactly one real hosted or local control identity required")
+    expected_control = env["GITHUB_SHA"] if env is not None else control_commit
+    if not isinstance(expected_control, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_control):
+        raise ValueError("exact control commit required")
     receipt = release.exact_json((root / "release-receipt.json").read_bytes())
     signed = receipt.get("signing", {})
-    if (receipt.get("request") != request or receipt.get("controlCommit") != env["GITHUB_SHA"]
+    if (receipt.get("request") != request or receipt.get("controlCommit") != expected_control
             or receipt.get("signingApproved") is not True or signed.get("notarized") is not True
             or signed.get("sourceFinalizationRequired") is not False or signed.get("feedPrepared") is not True
             or signed.get("developerId") != release.IDENTITY or signed.get("sparklePublicKey") != release.PUBLIC_KEY):
@@ -150,9 +166,76 @@ def validate_delivery(root: Path, source: dict, request: dict, env: dict) -> tup
                   root / "release-descriptor.json", root / "release-receipt.json", root / "final-signed-app-inventory.json"]
 
 
-def absent_release_and_tag(repository: str, tag: str) -> None:
+def verify_local_package(root: Path, source: dict, *, temp_root: Path) -> dict:
+    """Reopen the signed image as data and verify the app actually being published."""
+    if (not temp_root.is_dir() or temp_root.is_symlink() or temp_root.stat().st_uid != os.getuid()
+            or stat.S_IMODE(temp_root.stat().st_mode) & 0o077):
+        raise ValueError("local verification requires an owner-only temporary directory")
+    work = Path(tempfile.mkdtemp(prefix="amplifai-local-verify-", dir=temp_root))
+    work.chmod(0o700)
+    mount = work / "mounted"
+    mount.mkdir()
+    device = None
+    package = root / feeds.names(source)["package"]
+
+    def identity(path: Path, label: str, *, deep: bool = False) -> None:
+        args = ["codesign", "--verify", "--strict", "--all-architectures"]
+        release.command(args + (["--deep"] if deep else []) + [path])
+        prefix = work / (label + "-certificate-")
+        release.command(["codesign", "--display", "--extract-certificates", prefix, path])
+        leaf = Path(str(prefix) + "0")
+        if (leaf.is_symlink() or not leaf.is_file() or not 0 < leaf.stat().st_size <= 65536
+                or hashlib.sha1(leaf.read_bytes()).hexdigest().upper() != release.CERTIFICATE_SHA1):
+            raise ValueError("published package/app certificate differs from pinned Developer ID")
+        release.command(["xcrun", "stapler", "validate", path])
+
+    try:
+        identity(package, "package")
+        release.command(["spctl", "--assess", "--type", "open", "--context", "context:primary-signature", package])
+        attached = plistlib.loads(release.command(["hdiutil", "attach", "-readonly", "-nobrowse", "-plist",
+                                                   "-mountpoint", mount, package]).encode())
+        entities = attached.get("system-entities", [])
+        devices = [item.get("dev-entry", "") for item in entities
+                   if re.fullmatch(r"/dev/disk[0-9]+", item.get("dev-entry", ""))]
+        if len(devices) == 1:
+            device = devices[0]
+        if device is None or {item["mount-point"] for item in entities if "mount-point" in item} != {str(mount)}:
+            raise ValueError("signed image did not mount at its single private verification location")
+        app = mount / (release.CHANNELS[source["channel"]][2] + ".app")
+        if app.is_symlink() or not app.is_dir():
+            raise ValueError("signed image lacks the exact channel app")
+        identity(app, "app", deep=True)
+        release.validate_app(app, source, source["channel"])
+        release.command(["spctl", "--assess", "--type", "execute", app])
+        inventory = {"files": [], "symlinks": []}
+        for path in sorted(app.rglob("*")):
+            name = path.relative_to(app).as_posix()
+            if path.is_symlink():
+                inventory["symlinks"].append({"path": name, "target": str(path.readlink())})
+            elif path.is_file():
+                inventory["files"].append({"path": name, "bytes": path.stat().st_size, "sha256": release.digest(path)})
+        expected = release.exact_json((root / "final-signed-app-inventory.json").read_bytes())
+        if inventory != expected:
+            raise ValueError("mounted app differs from final signed inventory and corresponding source")
+    finally:
+        if device is not None:
+            release.command(["hdiutil", "detach", device])
+        elif mount.is_mount():
+            release.command(["hdiutil", "detach", mount])
+        shutil.rmtree(work)
+    return {"packageSignatureVerified": True, "mountedAppSignatureVerified": True,
+            "certificateSha1": release.CERTIFICATE_SHA1, "mountedInventoryMatched": True,
+            "candidateArchitecture": release.CHANNELS[source["channel"]][0],
+            "mountedImageDetached": True, "targetCodeExecuted": False}
+
+
+def absent_release_and_tag(repository: str, tag: str, *, github=None) -> None:
     # Only an explicit 404 establishes absence; auth/outage errors never do.
     for path in (f"releases/tags/{tag}", f"git/ref/tags/{tag}"):
+        if github is not None:
+            if github.get_optional(f"repos/{repository}/{path}") is not None:
+                raise ValueError("release/tag already exists; never overwrite immutable artifacts")
+            continue
         request = urllib.request.Request(f"https://api.github.com/repos/{repository}/{path}", headers={
             "Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/vnd.github+json"})
         try:
@@ -169,7 +252,12 @@ def absent_release_and_tag(repository: str, tag: str) -> None:
         raise ValueError("release/tag already exists; never overwrite immutable artifacts")
 
 
-def create_exact_tag(repository: str, tag: str, commit: str) -> None:
+def create_exact_tag(repository: str, tag: str, commit: str, *, github=None) -> None:
+    if github is not None:
+        created = github.request_json(f"repos/{repository}/git/refs", method="POST",
+                                      payload={"ref": "refs/tags/" + tag, "sha": commit})
+        validate_tag(created, tag, commit)
+        return
     request = urllib.request.Request(f"https://api.github.com/repos/{repository}/git/refs", method="POST",
         data=json.dumps({"ref": "refs/tags/" + tag, "sha": commit}).encode(), headers={
             "Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/vnd.github+json",
@@ -196,39 +284,42 @@ def validate_tag(ref: dict, tag: str, commit: str) -> None:
         raise ValueError("tag does not resolve directly to the authorized immutable source commit")
 
 
-def verify_exact_tag(repository: str, tag: str, commit: str) -> None:
-    validate_tag(release.api(f"{repository}/git/ref/tags/{tag}"), tag, commit)
+def verify_exact_tag(repository: str, tag: str, commit: str, *, github=None) -> None:
+    ref = (release.api(f"{repository}/git/ref/tags/{tag}") if github is None else
+           github.request_json(f"repos/{repository}/git/ref/tags/{tag}"))
+    validate_tag(ref, tag, commit)
 
 
-def publish(source: dict, files: list[Path], root: Path, output: Path, repository: str) -> dict:
+def publish(source: dict, files: list[Path], root: Path, output: Path, repository: str, *, github=None) -> dict:
     names = feeds.names(source)
     tag = names["tag"]
-    validate_release_order(source, release_snapshot(repository))
-    absent_release_and_tag(repository, tag)
+    cli_repository = "github.com/" + repository
+    validate_release_order(source, release_snapshot(repository, github=github))
+    absent_release_and_tag(repository, tag, github=github)
     verify_previous_feed(source, root)
-    create_exact_tag(repository, tag, source["sourceCommit"])
-    verify_exact_tag(repository, tag, source["sourceCommit"])
+    create_exact_tag(repository, tag, source["sourceCommit"], github=github)
+    verify_exact_tag(repository, tag, source["sourceCommit"], github=github)
     notes = root / "release-notes.txt"
     notes.write_text(f"AMPLIFai Phone {source['version']} ({source['channel']})\nReviewed source: {source['sourceCommit']}\n"
                      "Signed/notarized package and matching source. Physical acceptance and website promotion have separate receipts.\n")
-    release.command(["gh", "release", "create", tag, "--repo", repository, "--draft", "--verify-tag",
+    release.command(["gh", "release", "create", tag, "--repo", cli_repository, "--draft", "--verify-tag",
                      "--title", "AMPLIFai Phone " + source["version"], "--notes-file", notes])
-    release.command(["gh", "release", "upload", tag, *files, "--repo", repository])
+    release.command(["gh", "release", "upload", tag, *files, "--repo", cli_repository])
     # Read uploaded draft bytes back before making the release public.
     downloaded = root / "uploaded-readback"
     downloaded.mkdir()
     assets = []
     for path in files:
-        release.command(["gh", "release", "download", tag, "--repo", repository, "--pattern", path.name, "--dir", downloaded])
+        release.command(["gh", "release", "download", tag, "--repo", cli_repository, "--pattern", path.name, "--dir", downloaded])
         actual = downloaded / path.name
         if release.digest(actual) != release.digest(path) or actual.stat().st_size != path.stat().st_size:
             raise ValueError("draft uploaded bytes differ; draft remains unpublished")
         assets.append({"name": path.name, "bytes": path.stat().st_size, "sha256": release.digest(path)})
-    validate_release_order(source, release_snapshot(repository), own_draft=tag)
+    validate_release_order(source, release_snapshot(repository, github=github), own_draft=tag)
     verify_previous_feed(source, root)
-    verify_exact_tag(repository, tag, source["sourceCommit"])
+    verify_exact_tag(repository, tag, source["sourceCommit"], github=github)
     intel = source["channel"] == "macos-intel-test"
-    release.command(["gh", "release", "edit", tag, "--repo", repository, "--draft=false",
+    release.command(["gh", "release", "edit", tag, "--repo", cli_repository, "--draft=false",
                      "--prerelease=" + str(intel).lower(), "--latest=" + str(not intel).lower()])
     prefix = f"https://github.com/{repository}/releases/download/{tag}/"
     for asset in assets:
@@ -243,7 +334,27 @@ def publish(source: dict, files: list[Path], root: Path, output: Path, repositor
     return result
 
 
-def website_handoff(source: dict, spec: dict, signed: dict, published: dict, env: dict) -> dict:
+def website_handoff(source: dict, spec: dict, signed: dict, published: dict, env: dict | None = None,
+                    *, local_provenance: dict | None = None) -> dict:
+    if (env is None) == (local_provenance is None):
+        raise ValueError("exactly one real hosted or local signing provenance required")
+    if local_provenance is not None:
+        request = signed.get("request", {})
+        if (local_provenance.get("kind") != "local-keychain"
+                or local_provenance != signed.get("localProvenance")
+                or local_provenance.get("controlCommit") != signed.get("controlCommit")
+                or local_provenance.get("operator") != signed.get("operator")
+                or local_provenance.get("qualification") != {
+                    "runId": request.get("runId"), "artifactId": request.get("artifactId"),
+                    "sha256": request.get("artifactSha256"), "sourceCommit": source["sourceCommit"]}
+                or any(key in local_provenance for key in ("signedArtifact", "runId", "attempt", "artifactId"))):
+            raise ValueError("local handoff must preserve verified local and qualification provenance")
+        control_commit = local_provenance["controlCommit"]
+        execution = {"executionMode": "local-keychain", "localSigning": copy.deepcopy(local_provenance)}
+    else:
+        control_commit = env["GITHUB_SHA"]
+        execution = {"signedArtifact": {"runId": int(env["GITHUB_RUN_ID"]), "attempt": int(env["GITHUB_RUN_ATTEMPT"]),
+                                         "artifactId": int(env["SIGNED_ARTIFACT_ID"]), "sha256": env["SIGNED_ARTIFACT_SHA256"]}}
     channel = source["channel"]
     feed = signed["signing"]["feed"]
     rollback = feed["rollback"]
@@ -251,15 +362,25 @@ def website_handoff(source: dict, spec: dict, signed: dict, published: dict, env
     tag = feeds.names(source)["tag"]
     prefix = f"https://github.com/{repository}/releases/download/{tag}/"
     assets = {row["name"]: row for row in published["assets"]}
+    if local_provenance is not None:
+        local_evidence = {}
+        for field, name in (("manifest", "local-signing-manifest.json"),
+                            ("signature", "local-signing-manifest.json.sig"),
+                            ("delivery", "local-signed-delivery.zip")):
+            asset = assets.get(name)
+            if (not isinstance(asset, dict) or type(asset.get("bytes")) is not int or asset["bytes"] <= 0
+                    or not re.fullmatch(r"[0-9a-f]{64}", asset.get("sha256", ""))):
+                raise ValueError("published local provenance manifest and signature plus complete delivery required")
+            local_evidence[field] = dict(asset, url=prefix + name)
+        execution["localSigningEvidence"] = local_evidence
     feed_name = release.CHANNELS[channel][3]
     if feed_name not in assets or assets[feed_name]["sha256"] != feed["feedSha256"]:
         raise ValueError("published feed bytes differ from signer handoff")
     return {"schema": 1, "status": "website-owner-integration-required", "sourceCommit": source["sourceCommit"],
-            "controlCommit": env["GITHUB_SHA"], "channel": channel, "version": source["version"], "build": source["build"],
+            "controlCommit": control_commit, "channel": channel, "version": source["version"], "build": source["build"],
             "architecture": release.CHANNELS[channel][0], "bundleId": release.CHANNELS[channel][1],
             "releaseUrl": published["releaseUrl"],
-            "signedArtifact": {"runId": int(env["GITHUB_RUN_ID"]), "attempt": int(env["GITHUB_RUN_ATTEMPT"]),
-                               "artifactId": int(env["SIGNED_ARTIFACT_ID"]), "sha256": env["SIGNED_ARTIFACT_SHA256"]},
+            **execution,
             "feed": {"path": "public/phone/macos/" + feed_name, "url": prefix + feed_name,
                      "bytes": feed["feedBytes"], "sha256": feed["feedSha256"], "signature": "embedded-sparkle-xml-comment"},
             "package": dict(spec["package"], url=spec["installerUrl"]),

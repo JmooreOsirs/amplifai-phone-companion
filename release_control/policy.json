@@ -8,6 +8,17 @@
   "publicationEnvironment": "amplifai-release-publication",
   "activationApproved": true,
   "publicationEnabled": true,
+  "localRelease": {
+    "enabled": true,
+    "operators": ["JmooreOsirs"],
+    "notaryProfile": "AMPLIFai-notary",
+    "sparkleAccount": "ai.satoris.amplifai.phone.candidate",
+    "crossSigning": {
+      "signerHost": "arm64",
+      "candidate": "x86_64",
+      "qualificationRunner": "macos-15-intel"
+    }
+  },
   "releaseAuthority": "reviewed-source-independent-release",
   "requiredChecks": ["release-control-checks"],
   "codeOwners": "* @JmooreOsirs @bac1876\n",
