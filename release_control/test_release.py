@@ -37,7 +37,8 @@ class ReleaseBoundaryTests(unittest.TestCase):
         self.branches = {"branch_policies": [{"name": "main", "type": "branch"}]}
         self.source = {"sourceCommit": "a" * 40, "channel": "macos-arm64", "releaseAuthorized": True,
                        "buildWorkflow": ".github/workflows/macos-arm64-check.yml",
-                       "version": "2026.10.16-rc28", "build": "26101628"}
+                       "version": "2026.10.19-rc29", "build": "26101929",
+                       "qualificationProfile": release.PHONE_RUN_QUALIFICATION}
         self.protection = {"enforce_admins": {"enabled": True},
                            "required_pull_request_reviews": {"dismiss_stale_reviews": True, "require_code_owner_reviews": True,
                                "require_last_push_approval": True, "required_approving_review_count": 1,
@@ -173,9 +174,10 @@ class ReleaseBoundaryTests(unittest.TestCase):
             self.authorize(protection=weak)
 
     def test_ci_qualification_binds_exact_run_source_and_all_required_checks(self):
-        record = {"schema": 1, "sourceCommit": "a" * 40, "channel": "macos-arm64", "version": self.source["version"],
+        record = {"schema": 2, "sourceCommit": "a" * 40, "channel": "macos-arm64", "version": self.source["version"],
                   "build": self.source["build"], "buildRunId": 11, "privateDataUsed": False,
-                  "checks": {"functional": True, "architecture": True, "frozenHelper": True, "sourceClosure": True, "legal": True},
+                  "qualificationProfile": release.PHONE_RUN_QUALIFICATION,
+                  "checks": release.qualification_checks(self.source),
                   "appArchive": {"name": "app.zip", "bytes": 100, "sha256": "c" * 64},
                   "sourceArchive": {"name": "source.zip", "bytes": 200, "sha256": "d" * 64}}
         release.validate_delivery_record(record, self.source, self.request)

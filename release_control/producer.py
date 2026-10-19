@@ -16,6 +16,30 @@ import release
 
 MAX_SOURCE = 4 * 1024**3
 APPEND_PATHS = ["release-evidence/final-signed-app-inventory.json", "release-evidence/source-finalization.json"]
+PHONE_RUN_MODULES = ("test_bridge_run_timing", "test_bridge_recovery")
+PHONE_RUN_SCRIPTS = ("check_model.sh", "check_window_lifecycle.sh")
+
+
+def require_secret_free_job() -> None:
+    if any(os.environ.get(key) for key in ("APPLE_CERTIFICATE_P12_BASE64", "SPARKLE_PRIVATE_KEY", "NOTARY_APP_PASSWORD")):
+        raise ValueError("native build/qualification job must not receive product secrets")
+
+
+def run_phone_run_checks(checkout: Path) -> None:
+    """Shared by protected qualification and the native premerge gate; never skip missing tests."""
+    require_secret_free_job()
+    paths = [checkout / "source/collector/tests" / (name + ".py") for name in PHONE_RUN_MODULES]
+    paths += [checkout / "source/collector/macos/Tests" / name for name in PHONE_RUN_SCRIPTS]
+    for path in paths:
+        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(checkout.resolve()):
+            raise ValueError("required phone-run qualification file missing or unsafe: " + path.name)
+    env = dict(os.environ, PYTHONPATH=str(checkout / "source/collector") + ":" + str(checkout / "source/collector/tests"),
+               PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1")
+    subprocess.run([sys.executable, "-m", "unittest", *PHONE_RUN_MODULES, "-v"],
+                   cwd=checkout, env=env, check=True, timeout=1200)
+    for script in PHONE_RUN_SCRIPTS:
+        subprocess.run(["sh", str(checkout / "source/collector/macos/Tests" / script)],
+                       cwd=checkout, env=env, check=True, timeout=1200)
 
 
 def source_members(archive: zipfile.ZipFile) -> dict:
@@ -90,9 +114,12 @@ def validate_source(archive_path: Path, checkout: Path, app: Path, commit: str, 
 
 
 def qualification_record(source: dict, run_id: int, app_zip: Path, source_zip: Path) -> dict:
+    profile = release.qualification_profile(source)
     record = {key: source[key] for key in ("sourceCommit", "channel", "version", "build")}
-    record.update(schema=1, buildRunId=run_id, privateDataUsed=False,
-                  checks={"functional": True, "architecture": True, "frozenHelper": True, "sourceClosure": True, "legal": True})
+    record.update(schema=2 if profile else 1, buildRunId=run_id, privateDataUsed=False,
+                  checks=release.qualification_checks(source))
+    if profile:
+        record["qualificationProfile"] = profile
     for key, path in (("appArchive", app_zip), ("sourceArchive", source_zip)):
         record[key] = {"name": path.name, "bytes": path.stat().st_size, "sha256": release.digest(path)}
     return record
@@ -113,12 +140,14 @@ def validate_signing_input(source_zip: Path, app: Path, commit: str, channel: st
 
 def qualify(source: dict, checkout: Path, app: Path, source_zip: Path, output: Path, run_id: int) -> None:
     # The build job must not have product credentials, even by misconfiguration.
-    if any(os.environ.get(key) for key in ("APPLE_CERTIFICATE_P12_BASE64", "SPARKLE_PRIVATE_KEY", "NOTARY_APP_PASSWORD")):
-        raise ValueError("native build/qualification job must not receive product secrets")
+    require_secret_free_job()
+    profile = release.qualification_profile(source)
     if app.name != release.CHANNELS[source["channel"]][2] + ".app":
         raise ValueError("delivery app name differs from the channel bundle contract")
     release.validate_app(app, source, source["channel"])
     from verify_macos_architecture import audit
+    if profile:
+        run_phone_run_checks(checkout)
     env = dict(os.environ, PYTHONPATH=str(checkout / "source/collector") + ":" + str(checkout / "source/collector/tests"))
     modules = ["test_metadata", "test_ios_backup", "test_agent", "test_bridge", "test_bridge_ack",
                "test_workspace", "test_backup_capacity", "test_backup_stream", "test_backup_watchdog",
