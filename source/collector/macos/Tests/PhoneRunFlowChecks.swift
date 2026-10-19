@@ -137,6 +137,8 @@ enum PhoneRunFlowChecks {
         try currentStatusRecoveryAndVersionFences()
         try currentStatusPausesAndStopsAdmission()
         try authenticatedPendingSupersession()
+        try explicitApprovalAdoption()
+        try replacementCannotBroadenOrRewriteSameApproval()
         try longReleasedTransferCompletesWithoutFocus()
         try handoffAfterBindWithoutReceived()
         try finalAcknowledgementRetryKeepsHandoff()
@@ -401,8 +403,8 @@ enum PhoneRunFlowChecks {
         let (changedModel, changedRun) = try approvedModel(changed, Wire())
         changed.replace(changedRun.runID, course: "Another course", categories: ["contacts"])
         try start(changedModel)
-        try require(changedModel.operationID == nil && changedModel.runApproval == .refused,
-                    "A claim that changed since approval does not start")
+        try require(changedModel.operationID == nil && changedModel.runStatus == .replacementRequired && changedModel.phoneRun != nil,
+                    "A changed approval pauses Start without silently adopting it")
 
         // Uncertain: not confirmed, Retry resends identical bytes.
         let flaky = SimulatedPhoneRunServer()
@@ -635,8 +637,8 @@ enum PhoneRunFlowChecks {
         let (model, server, wire, run) = try boundModel()
         guard let bind = server.requests.last(where: { $0.path == PhoneRunContract.bindPath }),
               let body = try JSONSerialization.jsonObject(with: bind.body) as? [String: String] else { throw Failure.check("bind") }
-        try require(Set(body.keys) == ["runId", "capability", "handoffId", "payloadSha256"] && body["runId"] == run.runID &&
-                    body["handoffId"] == handoff && body["payloadSha256"] == digest && body["capability"] == model.phoneRun?.capability,
+        try require(Set(body.keys) == ["runId", "capability", "handoffId", "payloadSha256", "previousApprovalId"] && body["runId"] == run.runID &&
+                    body["handoffId"] == handoff && body["payloadSha256"] == digest && body["capability"] == model.phoneRun?.capability && body["previousApprovalId"] == model.phoneRun?.claim.approvalID,
                     "The bind names exactly this run, its capability, the helper handoff and its digest")
         try require(model.phoneRun?.boundHandoffID == handoff && model.collectionApprovalRunID.uuidString.lowercased() != run.runID &&
                     run.runID != handoff, "The server run, the local approval and the handoff stay distinct")
@@ -695,13 +697,14 @@ enum PhoneRunFlowChecks {
         try reviewed(model, wire)
         server.replace(run.runID, course: "Replacement course", categories: ["contacts", "calls"])
         try paired(model, wire)
-        try require(!model.handoffBound && model.phoneRun == nil && model.runStatus == .replacementRequired,
-                    "Changed course or scope cannot rewrite a started run's original authority")
+        try require(!model.handoffBound && model.phoneRun != nil && model.runStatus == .replacementRequired && model.selectedIDs == [3],
+                    "A replacement before the first immutable bind retains review for account recovery")
         let (other, otherServer, otherWire, _) = try startedModel()
         try capture(other)
         try reviewed(other, otherWire)
-        otherServer.replyOverrides[PhoneRunContract.bindPath] = ["enrollmentId": "00000000-0000-4000-8000-0000000000ee",
-            "destinationEmail": email, "destinationCourse": course, "categories": ["contacts"]]
+        var wrongBinding = bindingReply(other)
+        wrongBinding["enrollmentId"] = "00000000-0000-4000-8000-0000000000ee"
+        otherServer.replyOverrides[PhoneRunContract.bindPath] = wrongBinding
         try paired(other, otherWire)
         try require(other.runBinding == .refused && other.accountNavigation == nil,
                     "A bind reply for another enrollment is refused")
@@ -762,7 +765,7 @@ enum PhoneRunFlowChecks {
             try pending(model)
         }, "A server binding for another digest is denied")
         try denied({ model, server, _ in
-            server.replyOverrides[PhoneRunContract.verifyIntentPath] = ["enrollmentId": "00000000-0000-4000-8000-0000000000ee",
+            server.replyOverrides[PhoneRunContract.verifyIntentPath] = ["approvalId": model.phoneRun!.claim.approvalID, "enrollmentId": "00000000-0000-4000-8000-0000000000ee",
                 "destinationEmail": email, "destinationCourse": course, "categories": ["contacts"]]
             try pending(model)
         }, "Another enrollment is denied")
@@ -861,6 +864,88 @@ enum PhoneRunFlowChecks {
                     "Only the successful helper exit completes native cleanup")
     }
 
+    static func bindingReply(_ model: CollectorModel) -> [String: Any] {
+        let claim = model.phoneRun!.claim
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return ["previousApprovalId": claim.approvalID, "approvalId": claim.approvalID,
+            "enrollmentId": claim.enrollmentID, "destinationEmail": claim.email, "destinationCourse": claim.course,
+            "categories": claim.categories, "disclosureVersion": claim.disclosureVersion,
+            "expiresAt": formatter.string(from: claim.expiresAt)]
+    }
+
+    static func explicitApprovalAdoption() throws {
+        let (model, server, wire, run) = try boundModel()
+        try pending(model)
+        let original = model.phoneRun!
+        let nextEnrollment = "00000000-0000-4000-8000-0000000000ee"
+        server.replace(run.runID, course: "Owner replacement", categories: ["contacts"], enrollmentID: nextEnrollment)
+        server.faultsByPath[PhoneRunContract.bindPath] = [.loseReply, .malformed, .dropRequest]
+        model.refreshRunStatus()
+        try require(model.phoneRun?.claim == original.claim && model.runStatus == .uncertain &&
+                    model.handoffID == handoff && model.selectedIDs == [3] && model.canRetryApprovalAdoption,
+                    "Status and lost bind replies never adopt replacement authority or discard captured work")
+        let uncertainBodies = server.requests.filter { $0.path == PhoneRunContract.bindPath }.suffix(3).map(\.body)
+        model.retryApprovalAdoption()
+        let adopted = model.phoneRun!
+        try require(adopted.claim.approvalID != original.claim.approvalID && adopted.enrollmentID == nextEnrollment &&
+                    adopted.course == "Owner replacement" && adopted.categories == ["contacts"] &&
+                    adopted.boundHandoffID == original.boundHandoffID && adopted.boundPayloadSha256 == original.boundPayloadSha256 &&
+                    adopted.claim.expiresAt == original.claim.expiresAt && adopted.startDeadline == original.startDeadline &&
+                    !model.hasStartableRun && model.runStatus == .current,
+                    "Only explicit bind proof adopts a narrower owner replacement on the same captured handoff")
+        try require(Set(uncertainBodies + [server.requests.last!.body]).count == 1 &&
+                    model.destinationIntentID.isEmpty && !model.destinationApproved && wire.count("pair") == 1,
+                    "Lost reply retry uses the persisted previous approval and invalidates obsolete pre-consume decisions")
+        let nextIntent = "00000000-0000-4000-8000-0000000000cc"
+        try pending(model, intentID: nextIntent, course: "Owner replacement")
+        let verification = server.requests.last { $0.path == PhoneRunContract.verifyIntentPath }!
+        let fields = try JSONSerialization.jsonObject(with: verification.body) as! [String: String]
+        try require(fields["expectedApprovalId"] == adopted.claim.approvalID &&
+                    wire.decisions.last?["intentId"] as? String == nextIntent && wire.decisions.last?["approved"] as? Bool == true,
+                    "New verification is pinned to the persisted explicit approval identity")
+        try pending(model)
+        try require(model.destinationIntentID == nextIntent, "Superseded approval intent cannot return")
+
+        server.consume(run.runID)
+        model.receive(try handoffEvent("received"))
+        let consumedEnrollment = model.phoneRun!.enrollmentID
+        server.replace(run.runID, course: "Receipt recovery", categories: ["contacts"])
+        model.refreshRunStatus()
+        try require(model.phoneRun?.enrollmentID == consumedEnrollment && model.browserReceived &&
+                    model.destinationIntentID == nextIntent && wire.count("pair") == 1,
+                    "Consumed same-transfer recovery preserves its enrollment, handoff and receipt identity")
+    }
+
+    static func replacementCannotBroadenOrRewriteSameApproval() throws {
+        let server = SimulatedPhoneRunServer()
+        let wire = Wire()
+        let (model, run) = try approvedModel(server, wire, categories: ["contacts"])
+        try start(model)
+        try capture(model)
+        try reviewed(model, wire)
+        try paired(model, wire)
+        let original = model.phoneRun!
+        server.replace(run.runID, course: course, categories: ["contacts", "calls"])
+        model.refreshRunStatus()
+        try require(model.phoneRun?.claim == original.claim && model.runStatus == .replacementRequired && model.handoffBound,
+                    "Replacement cannot broaden the already captured run's save authority")
+
+        let (same, sameServer, _, sameRun) = try boundModel()
+        let before = same.phoneRun!.claim
+        sameServer.changeApproval(sameRun.runID)
+        var forged = bindingReply(same)
+        forged["destinationCourse"] = "Silently rewritten"
+        // A parsed success must still fail native identity checks, even if a server erroneously supplies it.
+        sameServer.faultsByPath[PhoneRunContract.bindPath] = [.dropRequest, .dropRequest, .dropRequest]
+        same.refreshRunStatus()
+        sameServer.replace(sameRun.runID, course: course, categories: ["contacts"])
+        sameServer.replyOverrides[PhoneRunContract.bindPath] = forged
+        same.retryApprovalAdoption()
+        try require(same.phoneRun?.claim == before && same.runStatus != .current,
+                    "An unchanged approval ID cannot silently change course or scope")
+    }
+
     static func currentStatusRecoveryAndVersionFences() throws {
         for version in ["phone-run-v1", "phone-run-v2"] {
             let server = SimulatedPhoneRunServer()
@@ -901,7 +986,7 @@ enum PhoneRunFlowChecks {
             "expiresAt": formatter.string(from: original.expiresAt),
             "startExpiresAt": formatter.string(from: start.addingTimeInterval(60)), "state": "current"]
         clockModel.refreshRunStatus()
-        try require(clockModel.runStatus == .replacementRequired && clockModel.phoneRun == nil,
+        try require(clockModel.runStatus == .uncertain && clockModel.phoneRun?.claim == original,
                     "A contradictory current status cannot renew the original Start deadline")
         let legacy = SimulatedPhoneRunServer()
         let wire = Wire()
@@ -949,9 +1034,9 @@ enum PhoneRunFlowChecks {
         let (started, changed, changedWire, changedRun) = try startedModel()
         changed.changeApproval(changedRun.runID)
         started.refreshRunStatus()
-        try require(started.runStatus == .replacementRequired && started.phoneRun == nil &&
-                    changedWire.last?["action"] as? String == "disconnect",
-                    "Changed receipt/session/reset fences stop a started collection")
+        try require(started.runStatus == .replacementRequired && started.phoneRun?.runID == changedRun.runID &&
+                    changedWire.count("disconnect") == 0,
+                    "Changed authority pauses admission while the originally authorized capture is retained")
     }
 
     static func authenticatedPendingSupersession() throws {
@@ -1194,6 +1279,11 @@ enum PhoneRunFlowChecks {
         try require(Set(statusBody.keys) == ["runId", "capability"] &&
                     URLSessionPhoneRunTransport.request(path: PhoneRunContract.statusPath, body: statusRequest.body)?.url?.host == PhoneRunContract.host,
                     "Status sends only the original run/capability to the fixed authority")
+        try require(PhoneRunContract.privacyURL(disclosureVersion: "phone-run-v1")?.absoluteString ==
+                    "https://amplifai.satoris.ai/experience/account-privacy?version=account-2026-10-v6" &&
+                    PhoneRunContract.privacyURL(disclosureVersion: "phone-run-v2")?.absoluteString ==
+                    "https://amplifai.satoris.ai/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving",
+                    "Each receipt links to its exact immutable notice with only a verified section anchor")
         let base: [String: Any] = ["approvalId": intent, "enrollmentId": handoff, "destinationEmail": email,
             "destinationCourse": course, "categories": ["contacts"], "disclosureVersion": "phone-run-v2",
             "expiresAt": "2026-10-19T23:00:00Z", "startExpiresAt": "2026-10-19T11:10:00Z", "state": "current"]

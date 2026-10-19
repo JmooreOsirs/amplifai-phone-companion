@@ -28,7 +28,8 @@ enum PhoneRunContract {
         // v1 shipped against the immutable v6 account notice; never relabel that receipt as v2/v7.
         guard supportedDisclosureVersions.contains(disclosureVersion) else { return nil }
         let policy = disclosureVersion == "phone-run-v1" ? "account-2026-10-v6" : "account-2026-10-v7"
-        return URL(string: "https://amplifai.satoris.ai/experience/account-privacy?version=\(policy)#phone-collection-and-saving")
+        let fragment = disclosureVersion == "phone-run-v2" ? "#phone-collection-and-saving" : ""
+        return URL(string: "https://amplifai.satoris.ai/experience/account-privacy?version=\(policy)\(fragment)")
     }
     static let categories = ["contacts", "calls", "messages"]
     static let maximumResponseBytes = 2048
@@ -127,12 +128,20 @@ enum PhoneRunContract {
     }
 
     static func destination(_ body: Data?) -> PhoneRunDestination? {
-        guard let object = object(body, keys: ["enrollmentId", "destinationEmail", "destinationCourse", "categories"]),
+        guard let object = object(body, keys: ["approvalId", "enrollmentId", "destinationEmail", "destinationCourse", "categories"]),
+              let approval = object["approvalId"] as? String, isID(approval),
               let enrollment = object["enrollmentId"] as? String, isID(enrollment),
               let email = object["destinationEmail"] as? String, isEmail(email),
               let course = object["destinationCourse"] as? String, isCourse(course),
               let categories = categories(object["categories"]) else { return nil }
-        return PhoneRunDestination(enrollmentID: enrollment, email: email, course: course, categories: categories)
+        return PhoneRunDestination(approvalID: approval, enrollmentID: enrollment, email: email, course: course, categories: categories)
+    }
+
+    static func boundApproval(_ body: Data?) -> PhoneRunBoundApproval? {
+        guard let fields = object(body, keys: claimKeys.union(["previousApprovalId"])),
+              let previous = fields["previousApprovalId"] as? String, isID(previous),
+              let claim = claimFields(fields, startRequired: false) else { return nil }
+        return PhoneRunBoundApproval(previousApprovalID: previous, claim: claim)
     }
 
     /// Fixed request bytes: prepared once, then sent unchanged on every attempt.
@@ -173,7 +182,13 @@ struct PhoneRunStatusRequest: Equatable {
 }
 
 /// What bind and verify-intent return: the account, course and categories the run currently saves to.
+struct PhoneRunBoundApproval: Equatable {
+    let previousApprovalID: String
+    let claim: PhoneRunClaim
+}
+
 struct PhoneRunDestination: Equatable {
+    let approvalID: String
     let enrollmentID: String
     let email: String
     let course: String
@@ -198,16 +213,18 @@ struct PhoneRunClaimRequest: Equatable {
 }
 
 struct PhoneRunBindRequest: Equatable {
+    let previousApprovalID: String
     let runID: String
     let handoffID: String
     let payloadSha256: String
     let body: Data
 
-    init?(runID: String, capability: String, handoffID: String, payloadSha256: String) {
-        guard PhoneRunContract.isID(runID), PhoneRunContract.isCapability(capability),
+    init?(runID: String, capability: String, handoffID: String, payloadSha256: String, previousApprovalID: String) {
+        guard PhoneRunContract.isID(runID), PhoneRunContract.isID(previousApprovalID), PhoneRunContract.isCapability(capability),
               PhoneRunContract.isID(handoffID), PhoneRunContract.isDigest(payloadSha256),
               let body = PhoneRunContract.body(["runId": runID, "capability": capability, "handoffId": handoffID,
-                                                "payloadSha256": payloadSha256]) else { return nil }
+                                                "payloadSha256": payloadSha256, "previousApprovalId": previousApprovalID]) else { return nil }
+        self.previousApprovalID = previousApprovalID
         self.runID = runID
         self.handoffID = handoffID
         self.payloadSha256 = payloadSha256
@@ -216,17 +233,21 @@ struct PhoneRunBindRequest: Equatable {
 }
 
 struct PhoneRunVerifyRequest: Equatable {
+    let expectedApprovalID: String
     let runID: String
     let intentID: String
     let handoffID: String
     let payloadSha256: String
     let body: Data
 
-    init?(runID: String, capability: String, intentID: String, handoffID: String, payloadSha256: String) {
-        guard PhoneRunContract.isID(runID), PhoneRunContract.isCapability(capability), PhoneRunContract.isID(intentID),
+    init?(runID: String, capability: String, intentID: String, handoffID: String, payloadSha256: String, expectedApprovalID: String) {
+        guard PhoneRunContract.isID(runID), PhoneRunContract.isID(expectedApprovalID),
+              PhoneRunContract.isCapability(capability), PhoneRunContract.isID(intentID),
               PhoneRunContract.isID(handoffID), PhoneRunContract.isDigest(payloadSha256),
               let body = PhoneRunContract.body(["runId": runID, "capability": capability, "intentId": intentID,
-                                                "handoffId": handoffID, "payloadSha256": payloadSha256]) else { return nil }
+                                                "handoffId": handoffID, "payloadSha256": payloadSha256,
+                                                "expectedApprovalId": expectedApprovalID]) else { return nil }
+        self.expectedApprovalID = expectedApprovalID
         self.runID = runID
         self.intentID = intentID
         self.handoffID = handoffID
@@ -260,7 +281,7 @@ enum PhoneRunTransportResult: Equatable {
 @MainActor protocol RunAuthority: AnyObject {
     func claim(_ request: PhoneRunClaimRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void)
     func status(_ request: PhoneRunStatusRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunStatus>) -> Void)
-    func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void)
+    func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunBoundApproval>) -> Void)
     func verifyIntent(_ request: PhoneRunVerifyRequest,
                       completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void)
 }
@@ -298,8 +319,8 @@ enum PhoneRunTransportResult: Equatable {
         send(PhoneRunContract.statusPath, request.body, parse: PhoneRunContract.status, attempt: 1, completion: completion)
     }
 
-    func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void) {
-        send(PhoneRunContract.bindPath, request.body, parse: PhoneRunContract.destination, attempt: 1, completion: completion)
+    func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunBoundApproval>) -> Void) {
+        send(PhoneRunContract.bindPath, request.body, parse: PhoneRunContract.boundApproval, attempt: 1, completion: completion)
     }
 
     func verifyIntent(_ request: PhoneRunVerifyRequest,

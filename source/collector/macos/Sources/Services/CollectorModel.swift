@@ -183,6 +183,8 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var candidateNotice = ""
     private var pendingClaimStartedAt = Date.distantPast
     private var pendingBind: PhoneRunBindRequest?
+    private var pendingAdoption: PhoneRunBindRequest?
+    @Published private(set) var approvalAdoptionPending = false
     private var pairingPayloadSha256 = ""
     private var startAfterSettingCheck = false
     private let runAuthority: RunAuthority?
@@ -573,6 +575,8 @@ final class CollectorModel: ObservableObject {
         pendingClaim = nil
         pendingClaimBrowser = nil
         pendingBind = nil
+        pendingAdoption = nil
+        approvalAdoptionPending = false
         runApproval = .none
         runApprovalMessage = ""
         runBinding = .none
@@ -711,17 +715,32 @@ final class CollectorModel: ObservableObject {
                 guard status.state == .current else {
                     self.stopForRunStatus(status.state)
                     completion(false)
+                    if status.state == .replacementRequired { self.retryApprovalAdoption() }
+                    return
+                }
+                guard status.claim.expiresAt > self.now() else {
+                    self.stopForRunStatus(.expired)
+                    completion(false)
+                    return
+                }
+                guard status.claim.expiresAt == active.claim.expiresAt,
+                      active.claim.startExpiresAt == nil || status.claim.startExpiresAt == active.claim.startExpiresAt else {
+                    self.runStatus = .uncertain
+                    self.runStatusMessage = "Approval deadlines could not be reconciled. This connection stays paused."
+                    self.synchronizeBridgeAuthority(paused: true)
+                    completion(false)
                     return
                 }
                 let same = status.claim.approvalID == active.claim.approvalID &&
                     status.claim.enrollmentID == active.enrollmentID && status.claim.email == active.email &&
                     status.claim.course == active.claim.course && status.claim.categories == active.claim.categories &&
-                    status.claim.disclosureVersion == active.claim.disclosureVersion &&
-                    status.claim.expiresAt == active.claim.expiresAt &&
-                    (active.claim.startExpiresAt == nil || status.claim.startExpiresAt == active.claim.startExpiresAt)
-                guard same, status.claim.expiresAt > self.now() else {
-                    self.stopForRunStatus(status.claim.expiresAt <= self.now() ? .expired : .replacementRequired)
+                    status.claim.disclosureVersion == active.claim.disclosureVersion
+                guard same else {
+                    self.stopForRunStatus(.replacementRequired)
                     completion(false)
+                    // Status is observation only. The separate bind transition proves the owner's explicit
+                    // replacement, starting from the approval already persisted by this Mac.
+                    self.retryApprovalAdoption()
                     return
                 }
                 active.claim = status.claim
@@ -752,6 +771,12 @@ final class CollectorModel: ObservableObject {
     }
 
     private func stopForRunStatus(_ state: PhoneRunStatus.State) {
+        if state == .replacementRequired || state == .current {
+            runStatus = .replacementRequired
+            runStatusMessage = "This connection is paused. Check the approval in your AMPLIFai account; this Mac keeps your collection."
+            synchronizeBridgeAuthority(paused: true)
+            return
+        }
         let wasStarted = phoneRun?.collectionStarted == true
         if wasStarted { disconnect() }
         else { declineLocalCollection(); refuseRun(Self.runRefusedMessage) }
@@ -1726,7 +1751,7 @@ final class CollectorModel: ObservableObject {
     private func bindHandoff() {
         guard let run = phoneRun, run.collectionStarted, let authority = runAuthority,
               let request = PhoneRunBindRequest(runID: run.runID, capability: run.capability, handoffID: handoffID,
-                                                payloadSha256: pairingPayloadSha256) else {
+                                                payloadSha256: pairingPayloadSha256, previousApprovalID: run.claim.approvalID) else {
             refuseBinding(Self.missingRunMessage)
             return
         }
@@ -1752,7 +1777,7 @@ final class CollectorModel: ObservableObject {
         }
     }
 
-    private func bindFinished(_ request: PhoneRunBindRequest, _ outcome: PhoneRunOutcome<PhoneRunDestination>) {
+    private func bindFinished(_ request: PhoneRunBindRequest, _ outcome: PhoneRunOutcome<PhoneRunBoundApproval>) {
         guard pendingBind == request, runBinding == .binding, var run = phoneRun, run.runID == request.runID else { return }
         guard handoffID == request.handoffID, phase == .reviewing else {
             // The pairing ended while binding; a late answer cannot revive it.
@@ -1760,10 +1785,14 @@ final class CollectorModel: ObservableObject {
             return
         }
         switch outcome {
-        case .accepted(let destination):
+        case .accepted(let bound):
+            let destination = bound.claim
             // Binding must match the original current approval across owner, enrollment, course and scope.
             // A contradictory reply cannot silently rewrite a started collection's authority.
-            guard destination.enrollmentID == run.enrollmentID, destination.email == run.email,
+            guard bound.previousApprovalID == request.previousApprovalID,
+                  destination.approvalID == request.previousApprovalID,
+                  destination.disclosureVersion == run.claim.disclosureVersion, destination.expiresAt == run.claim.expiresAt,
+                  destination.enrollmentID == run.enrollmentID, destination.email == run.email,
                   destination.course == run.claim.course, destination.categories == run.claim.categories else {
                 refuseBinding(Self.bindRefusedMessage)
                 return
@@ -1788,6 +1817,83 @@ final class CollectorModel: ObservableObject {
         }
     }
 
+    /// Existing captured handoffs can adopt a separately approved website replacement. This action itself
+    /// never creates approval, changes the handoff, extends deadlines or infers authority from status fields.
+    var canRetryApprovalAdoption: Bool {
+        phoneRun?.collectionStarted == true && phoneRun?.boundHandoffID == handoffID &&
+            !handoffID.isEmpty && !approvalAdoptionPending &&
+            (phase == .reviewing || phase == .completing) &&
+            (runStatus == .replacementRequired || pendingAdoption != nil)
+    }
+
+    func retryApprovalAdoption() {
+        guard canRetryApprovalAdoption, let run = phoneRun, let authority = runAuthority,
+              let digest = run.boundPayloadSha256 else { return }
+        if pendingAdoption == nil {
+            pendingAdoption = PhoneRunBindRequest(runID: run.runID, capability: run.capability,
+                handoffID: handoffID, payloadSha256: digest, previousApprovalID: run.claim.approvalID)
+        }
+        guard let request = pendingAdoption, request.runID == run.runID,
+              request.previousApprovalID == run.claim.approvalID, request.handoffID == handoffID,
+              request.payloadSha256 == digest else { return }
+        approvalAdoptionPending = true
+        synchronizeBridgeAuthority(paused: true)
+        authority.bind(request) { [weak self] outcome in self?.approvalAdoptionFinished(request, outcome) }
+    }
+
+    private func approvalAdoptionFinished(_ request: PhoneRunBindRequest, _ outcome: PhoneRunOutcome<PhoneRunBoundApproval>) {
+        guard pendingAdoption == request, approvalAdoptionPending, var run = phoneRun,
+              run.runID == request.runID, run.claim.approvalID == request.previousApprovalID,
+              run.boundHandoffID == request.handoffID, run.boundPayloadSha256 == request.payloadSha256,
+              handoffID == request.handoffID, pairingPayloadSha256 == request.payloadSha256 else { return }
+        approvalAdoptionPending = false
+        switch outcome {
+        case .accepted(let bound):
+            let next = bound.claim
+            let transferReceived = browserReceived || accountSaveAwaitingBrowserReceipt || handoffAcknowledged
+            guard bound.previousApprovalID == request.previousApprovalID,
+                  next.email == run.email, (!transferReceived || next.enrollmentID == run.enrollmentID),
+                  Set(next.categories).isSubset(of: Set(run.claim.categories)),
+                  next.expiresAt == run.claim.expiresAt, next.expiresAt > now(),
+                  PhoneRunContract.supportedDisclosureVersions.contains(next.disclosureVersion),
+                  // An unchanged approval ID cannot silently acquire a different meaning.
+                  next.approvalID != run.claim.approvalID ||
+                    (next.enrollmentID == run.enrollmentID && next.course == run.claim.course &&
+                     next.categories == run.claim.categories && next.disclosureVersion == run.claim.disclosureVersion) else {
+                runStatusMessage = "The replacement approval did not match this collection. Keep it paused and check your account."
+                return
+            }
+            let changed = next.approvalID != run.claim.approvalID
+            run.claim = PhoneRunClaim(approvalID: next.approvalID, enrollmentID: next.enrollmentID,
+                email: next.email, course: next.course, categories: next.categories,
+                disclosureVersion: next.disclosureVersion, expiresAt: next.expiresAt,
+                startExpiresAt: run.claim.startExpiresAt)
+            run.course = next.course
+            run.categories = next.categories
+            phoneRun = run
+            pendingAdoption = nil
+            clearDestinationVerification()
+            if changed && !transferReceived {
+                if !destinationIntentID.isEmpty { closedDestinationIntentIDs.insert(destinationIntentID) }
+                destinationIntentID = ""
+                destinationEmail = ""
+                destinationCourse = ""
+                destinationApproved = false
+                submittedDestinationDecision = nil
+                approvedDestinationIntentID = ""
+            }
+            runStatus = .current
+            runStatusMessage = ""
+            synchronizeBridgeAuthority(paused: false)
+        case .refused:
+            runStatus = .replacementRequired
+            runStatusMessage = "Check this collection's approval in your account. This Mac keeps the same handoff paused."
+        case .uncertain, .malformed:
+            runStatus = .uncertain
+            runStatusMessage = "Replacement approval was not confirmed. Retry checks the same captured handoff."
+        }
+    }
+
     /// A definite refusal: close the helper's bridge so no browser can connect, keep the local review.
     private func refuseBinding(_ message: String) {
         pendingBind = nil
@@ -1807,7 +1913,7 @@ final class CollectorModel: ObservableObject {
         if pendingVerify == nil {
             guard let request = PhoneRunVerifyRequest(runID: run.runID, capability: run.capability,
                                                       intentID: destinationIntentID, handoffID: handoff,
-                                                      payloadSha256: digest) else { return }
+                                                      payloadSha256: digest, expectedApprovalID: run.claim.approvalID) else { return }
             pendingVerify = request
             verifyAttemptCount = 0
             verifyRetryAfter = .distantPast
@@ -1870,7 +1976,8 @@ final class CollectorModel: ObservableObject {
         switch outcome {
         case .accepted(let verified):
             verifiedDestinationIntentIDs.insert(request.intentID)
-            let exact = now() < verifyDeadline && verified.email == pendingEmail && verified.course == pendingCourse &&
+            let exact = now() < verifyDeadline && verified.approvalID == request.expectedApprovalID &&
+                verified.approvalID == run.claim.approvalID && verified.email == pendingEmail && verified.course == pendingCourse &&
                 verified.enrollmentID == run.enrollmentID && verified.email == run.email &&
                 verified.course == run.claim.course && verified.categories == run.claim.categories &&
                 run.boundHandoffID == request.handoffID && run.boundPayloadSha256 == request.payloadSha256 &&
@@ -1966,6 +2073,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func resetHandoff() {
+        pendingAdoption = nil
+        approvalAdoptionPending = false
         lastBridgeAuthority = nil
         finishAttemptCount = 0
         completionNeedsRetry = false

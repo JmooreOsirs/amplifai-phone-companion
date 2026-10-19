@@ -7,11 +7,11 @@ import Foundation
 @MainActor final class SimulatedPhoneRunServer: PhoneRunTransport {
     struct Run {
         let runID: String
-        let approvalID: String
+        var approvalID: String
         let bootstrap: String
         let email: String
-        let enrollmentID: String
-        let disclosureVersion: String
+        var enrollmentID: String
+        var disclosureVersion: String
         var course: String
         var categories: [String]
         var bootstrapExpiresAt: Date
@@ -41,6 +41,8 @@ import Foundation
     }
 
     private(set) var runs: [String: Run] = [:]
+    private var approvalScopes: [String: [String]] = [:]
+    private var consumedEnrollment: [String: String] = [:]
     var intents: [String: Intent] = [:]
     private(set) var requests: [(path: String, body: Data)] = []
     var faults: [Fault] = []
@@ -63,7 +65,9 @@ import Foundation
                    disclosureVersion: String = PhoneRunContract.disclosureVersion) -> (runID: String, bootstrap: String) {
         let runID = UUID().uuidString.lowercased()
         let bootstrap = PhoneRunContract.newCapability() ?? String(repeating: "B", count: 43)
-        runs[runID] = Run(runID: runID, approvalID: UUID().uuidString.lowercased(), bootstrap: bootstrap, email: email,
+        let approvalID = UUID().uuidString.lowercased()
+        approvalScopes[approvalID] = categories
+        runs[runID] = Run(runID: runID, approvalID: approvalID, bootstrap: bootstrap, email: email,
                           enrollmentID: UUID().uuidString.lowercased(), disclosureVersion: disclosureVersion,
                           course: course, categories: categories,
                           bootstrapExpiresAt: now().addingTimeInterval(10 * 60))
@@ -77,10 +81,19 @@ import Foundation
     func revoke(_ runID: String) { runs[runID]?.revoked = true }
     func changeApproval(_ runID: String) { runs[runID]?.approvalCurrent = false }
     /// A replacement approval in the account for the same owner and enrollment.
-    func replace(_ runID: String, course: String, categories: [String]) {
-        runs[runID]?.course = course
-        runs[runID]?.categories = categories
+    func replace(_ runID: String, course: String, categories: [String], enrollmentID: String? = nil,
+                 disclosureVersion: String? = nil) {
+        guard var run = runs[runID], consumedEnrollment[runID] == nil || enrollmentID == nil || enrollmentID == run.enrollmentID else { return }
+        run.approvalID = UUID().uuidString.lowercased()
+        approvalScopes[run.approvalID] = categories
+        run.course = course
+        run.categories = categories
+        run.enrollmentID = enrollmentID ?? run.enrollmentID
+        run.disclosureVersion = disclosureVersion ?? run.disclosureVersion
+        run.approvalCurrent = true
+        runs[runID] = run
     }
+    func consume(_ runID: String) { consumedEnrollment[runID] = runs[runID]?.enrollmentID }
     func run(_ runID: String) -> Run? { runs[runID] }
     /// Mismatch checks: the server holds a binding for another handoff or digest.
     func forceBinding(_ runID: String, handoffID: String, digest: String) {
@@ -170,10 +183,13 @@ import Foundation
                 run.approvalCurrent ? "current" : "replacement_required"
             return (200, result)
         case PhoneRunContract.bindPath:
-            guard Set(fields.keys) == ["runId", "capability", "handoffId", "payloadSha256"],
+            guard Set(fields.keys) == ["runId", "capability", "handoffId", "payloadSha256", "previousApprovalId"],
+                  let previous = fields["previousApprovalId"], let previousScopes = approvalScopes[previous],
                   let runID = fields["runId"], let handoff = fields["handoffId"], let digest = fields["payloadSha256"],
                   var run = runs[runID], run.capability == fields["capability"], !run.revoked, run.approvalCurrent,
                   let expires = run.expiresAt, now() < expires else { return refusal(409, "phone_run_changed") }
+            guard Set(run.categories).isSubset(of: Set(previousScopes)),
+                  previous == run.approvalID || run.boundHandoffID != nil else { return refusal(409, "phone_run_changed") }
             if let bound = run.boundHandoffID {
                 // Written once: only an identical retry succeeds.
                 guard bound == handoff, run.boundPayloadSha256 == digest else { return refusal(409, "phone_run_changed") }
@@ -182,18 +198,20 @@ import Foundation
                 run.boundPayloadSha256 = digest
                 runs[runID] = run
             }
-            return (200, ["enrollmentId": run.enrollmentID, "destinationEmail": run.email,
-                          "destinationCourse": run.course, "categories": run.categories])
+            var result = claimFields(run, includeStart: false)
+            result["previousApprovalId"] = previous
+            return (200, result)
         case PhoneRunContract.verifyIntentPath:
-            guard Set(fields.keys) == ["runId", "capability", "intentId", "handoffId", "payloadSha256"],
+            guard Set(fields.keys) == ["runId", "capability", "intentId", "handoffId", "payloadSha256", "expectedApprovalId"],
                   let runID = fields["runId"], let intent = fields["intentId"], let run = runs[runID],
                   run.capability == fields["capability"], !run.revoked, run.approvalCurrent,
+                  fields["expectedApprovalId"] == run.approvalID,
                   let expires = run.expiresAt, now() < expires,
                   run.boundHandoffID == fields["handoffId"], run.boundPayloadSha256 == fields["payloadSha256"] else {
                 return refusal(409, "phone_run_changed")
             }
             let destination = intents[intent] ?? Intent(email: run.email, course: run.course)
-            return (200, ["enrollmentId": run.enrollmentID, "destinationEmail": destination.email,
+            return (200, ["approvalId": run.approvalID, "enrollmentId": run.enrollmentID, "destinationEmail": destination.email,
                           "destinationCourse": destination.course, "categories": run.categories])
         default:
             return refusal(404, "not_found")
