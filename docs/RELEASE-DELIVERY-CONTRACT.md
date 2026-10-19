@@ -24,7 +24,7 @@ python3 release_control/producer.py \
   --output "$RUNNER_TEMP/qualified-delivery"
 ```
 
-Use the existing hash-locked Python environment for this CLI. It executes the collector/bridge tests, three native Swift check scripts, actual frozen synthetic worker and frozen status checks; after **all executable qualification** it audits the final app again and compares every source-mapped native hash. It validates the clean Git checkout, every authored/source ZIP member and matching Legal bytes before emitting anything. No product credentials are allowed in this job.
+Use the existing hash-locked Python environment for this CLI. It executes the collector/bridge tests, the native Swift checks required by the source's qualification profile, actual frozen synthetic worker and frozen status checks; after **all executable qualification** it audits the final app again and compares every source-mapped native hash. It validates the clean Git checkout, every authored/source ZIP member and matching Legal bytes before emitting anything. No product credentials are allowed in this job.
 
 5. Upload only `qualified-delivery/` with the existing pinned upload-artifact action (`ea165f8d65b6e75b540449e92b4886f43607fa02`), `if-no-files-found: error`, no `always()` success artifact on failure. Retain the artifact ID and server digest; the release dispatcher takes these exact values. `qualification.json`, `app.zip` and `source.zip` are the only three root files. No human approves those generated hashes again.
 
@@ -58,6 +58,23 @@ ZIP members are unique regular relative files, with no directories, symlinks, tr
 Native source/notice attribution is a reviewed build-recipe responsibility; the validator measures completeness and hash binding, not a native rebuild or legal determination. The adapter must preserve the existing SBOM/Cargo/interpreter recipe reconciliation and checksummed third-party source closure. Neither the current old inventories nor a caller-provided boolean replace it.
 
 After qualification, `qualification.json` binds source/channel/version/build, actual `GITHUB_RUN_ID`, strictly boolean passing measured checks, `privateDataUsed=false`, and exact app/source ZIP names/sizes/hashes. It is authenticated by the immutable GitHub artifact digest and exact successful reviewed workflow provenance.
+
+### Phone run and recovery qualification profile
+
+Every newly approved source must include `"qualificationProfile": "phone-run-recovery-v1"` in its reviewed `approvedSources` row. This field is qualification policy, independent of consent disclosure versions. Adding the profile does not authorize a source or release: exact source approval, `releaseAuthorized`, protected reviews and all existing artifact/custody checks still apply.
+
+In addition to the existing checks, this profile executes:
+
+- `source/collector/macos/Tests/check_model.sh` → `collectorModel`.
+- `source/collector/macos/Tests/check_window_lifecycle.sh` → `windowLifecycle` (real hidden AppKit windows on the macOS runner, synthetic model; no customer app activation).
+- `source/collector/tests/test_bridge_run_timing.py` → `bridgeRunTiming`.
+- `source/collector/tests/test_bridge_recovery.py` → `bridgeRecovery`.
+
+All four files must exist as regular files inside the reviewed checkout; missing files, symlinks, failed commands and timeouts fail qualification. These results are emitted only after successful checks, as **schema 2**, the exact `qualificationProfile`, and the four additional strictly boolean `true` checks. The signer rejects schema-1 or incomplete results for a new source. The existing two RC28 tuples at `8f7ec4d3de4235ab5d36d5175c29121e3a26548a` alone retain their original schema-1 receipts and check path, allowing their immutable source to remain reproducible. A changed SHA, channel, version or build cannot use that exception.
+
+The producer and receipt validator changes must be present in the final reviewed native source as well as protected main control. The native preview entry point must set this profile on its preview candidate; preview evidence still grants no release authority. This control change does not add or authorize a new source SHA.
+
+For PRs targeting `release/native` and pushes to that branch, the existing required `release-control-checks` job depends on `native-phone-run-checks` passing on `macos-15`. That job uses the existing pinned Python/uv runtime and hash-locked dependencies to execute these four checks through `release_control/check_phone_run.py`. A failure or cancellation cannot become a green required check. Main-only control PRs keep the existing Python control suite without executing native code. No credentials, environment grants, branch protections or reviewer requirements are changed.
 
 ## Signing, finalization and feed output
 

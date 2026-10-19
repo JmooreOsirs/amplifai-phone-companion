@@ -6,11 +6,45 @@ on:
 permissions:
   contents: read
 jobs:
+  native-phone-run:
+    name: native-phone-run-checks
+    if: github.base_ref == 'release/native' || github.ref == 'refs/heads/release/native'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONNOUSERSITE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff
+        with:
+          version: '0.10.2'
+          enable-cache: false
+      - name: Prepare the existing locked qualification interpreter
+        run: |
+          uv venv --python 3.12.12 "$RUNNER_TEMP/phone-run-venv"
+          uv pip sync --require-hashes --python "$RUNNER_TEMP/phone-run-venv/bin/python" source/collector/portable-requirements.lock
+      - name: Check model, hidden AppKit lifecycle and synthetic bridge recovery
+        run: '"$RUNNER_TEMP/phone-run-venv/bin/python" release_control/check_phone_run.py --checkout "$GITHUB_WORKSPACE"'
   test:
     name: release-control-checks
+    needs: native-phone-run
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Require native checks for native source changes
+        env:
+          NATIVE_RESULT: ${{ needs.native-phone-run.result }}
+          NATIVE_REQUIRED: ${{ github.base_ref == 'release/native' || github.ref == 'refs/heads/release/native' }}
+        run: |
+          if [ "$NATIVE_REQUIRED" = true ]; then
+            test "$NATIVE_RESULT" = success
+          else
+            test "$NATIVE_RESULT" = skipped
+          fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false

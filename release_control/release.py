@@ -41,6 +41,28 @@ SPARKLE_SHA256 = "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da
 SIGN_UPDATE_SHA256 = "43c249771bafc3aa581228abae00731a012d324691b8292860896635050be76b"
 MAX_ARTIFACT = 2 * 1024**3
 MAX_APP = 512 * 1024**2
+PHONE_RUN_QUALIFICATION = "phone-run-recovery-v1"
+# These are the only published sources whose immutable producer predates profiles.
+LEGACY_QUALIFICATIONS = frozenset({
+    ("8f7ec4d3de4235ab5d36d5175c29121e3a26548a", "macos-arm64", "2026.10.16-rc28", "26101628"),
+    ("8f7ec4d3de4235ab5d36d5175c29121e3a26548a", "macos-intel-test", "2026.10.16-rc28-intel1", "261016281"),
+})
+BASE_QUALIFICATION_CHECKS = ("functional", "architecture", "frozenHelper", "sourceClosure", "legal")
+PHONE_RUN_CHECKS = ("collectorModel", "windowLifecycle", "bridgeRunTiming", "bridgeRecovery")
+
+
+def qualification_profile(source: dict) -> str | None:
+    identity = tuple(source.get(key) for key in ("sourceCommit", "channel", "version", "build"))
+    if "qualificationProfile" not in source and all(isinstance(value, str) for value in identity) and identity in LEGACY_QUALIFICATIONS:
+        return None
+    if source.get("qualificationProfile") != PHONE_RUN_QUALIFICATION:
+        raise ValueError("new source requires the reviewed phone-run-recovery-v1 qualification profile")
+    return PHONE_RUN_QUALIFICATION
+
+
+def qualification_checks(source: dict) -> dict:
+    extra = PHONE_RUN_CHECKS if qualification_profile(source) else ()
+    return dict.fromkeys(BASE_QUALIFICATION_CHECKS + extra, True)
 
 
 def digest(path: Path) -> str:
@@ -176,6 +198,7 @@ def validate_approved_source(policy: dict, request: dict, run: dict) -> dict:
             or not isinstance(approved.get("version"), str)
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,63}", approved["version"])):
         raise ValueError("candidate must be newer than the published channel build")
+    qualification_profile(approved)
     return approved
 
 
@@ -214,14 +237,17 @@ def inspected(policy: dict, request: dict, *, signed: bool, custody: bool = True
 
 def validate_delivery_record(record: dict, source: dict, request: dict) -> dict:
     """Derive artifact eligibility from trusted CI, without a run-specific PR."""
+    profile = qualification_profile(source)
     fields = {"schema", "sourceCommit", "channel", "version", "build", "buildRunId",
               "checks", "privateDataUsed", "appArchive", "sourceArchive"}
-    if (set(record) != fields or type(record.get("schema")) is not int or record["schema"] != 1
+    if profile:
+        fields.add("qualificationProfile")
+    if (set(record) != fields or type(record.get("schema")) is not int or record["schema"] != (2 if profile else 1)
+            or (profile and record.get("qualificationProfile") != profile)
             or any(record.get(key) != source[key] for key in ("sourceCommit", "channel", "version", "build"))
             or type(record.get("buildRunId")) is not int or record["buildRunId"] != request["runId"]
             or record.get("privateDataUsed") is not False
-            or record.get("checks") != {"functional": True, "architecture": True, "frozenHelper": True,
-                                        "sourceClosure": True, "legal": True}):
+            or record.get("checks") != qualification_checks(source)):
         raise ValueError("trusted build did not qualify this exact reviewed source and run")
     if any(type(value) is not bool for value in record["checks"].values()):
         raise ValueError("qualification checks must be measured boolean results")

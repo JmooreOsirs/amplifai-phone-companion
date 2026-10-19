@@ -109,7 +109,7 @@ class PipelineTests(unittest.TestCase):
                     mapping["native"]["Contents/MacOS/AmplifaiPhone"]["preSignSha256"] = release.digest(binary)
                     data = json.dumps(mapping).encode()
                 after.writestr(name, data)
-        source = dict(self.source, sourceCommit=commit)
+        source = dict(self.source, sourceCommit=commit, qualificationProfile=release.PHONE_RUN_QUALIFICATION)
         actual_run = subprocess.run
         def qualification(args, **kwargs):
             if str(args[0]) == "git":
@@ -120,6 +120,7 @@ class PipelineTests(unittest.TestCase):
         def audit(*args):
             return {"passed": True, "files": [{"path": "Contents/MacOS/AmplifaiPhone", "sha256": release.digest(binary)}]}
         with patch.object(release, "validate_app"), patch("verify_macos_architecture.audit", side_effect=audit), \
+                patch.object(producer, "run_phone_run_checks"), \
                 patch.object(subprocess, "run", side_effect=qualification):
             with self.assertRaisesRegex(ValueError, "mapping differs"):
                 producer.qualify(source, checkout, app, source_zip, self.root / "delivery", 1)
