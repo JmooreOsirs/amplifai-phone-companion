@@ -245,6 +245,7 @@ struct AgentEvent: Decodable {
     let port: Int?
     let expiresInSeconds: Int?
     let handoffId: String?
+    let payloadSha256: String?
     let intentId: String?
     let email: String?
     let course: String?

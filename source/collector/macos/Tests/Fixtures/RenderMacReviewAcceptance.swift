@@ -11,19 +11,32 @@ struct RenderMacReviewAcceptance {
         NSApplication.shared.setActivationPolicy(.prohibited)
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
-        let shareStates = ["destination-prompt", "decide-later", "confirming", "sending"]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change", "recovery-revoked", "link-failed"] + shareStates
-        let setupStates = ["setup", "consent", "agree-checking", "agree-on", "agree-off", "agree-unknown", "password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let shareStates = ["bind-uncertain", "bind-refused", "expired"]
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed"] + shareStates
+        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown"]
+        let setupStates = ["setup"] + runStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
         guard !states.isEmpty, states.allSatisfy({ allStates.contains($0) }) else { throw CocoaError(.validationMissingMandatoryProperty) }
         for state in states {
             var commands: [Data] = []
-            let model = CollectorModel(commandWriter: { commands.append($0) })
+            let server = SimulatedPhoneRunServer()
+            let model = CollectorModel(commandWriter: { commands.append($0) },
+                                       runAuthority: PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate))
             let updater = CompanionUpdater(bundleInformation: [:])
             let start = Date()
+            func admit() throws {
+                let run = server.createRun(email: "synthetic.owner@example.invalid", course: "SYNTHETIC review course")
+                guard let link = PhoneRunLink(url: server.appLink(run)) else { throw FixtureError.unexpectedState("link") }
+                model.admitRunLink(PendingRunLink(link: link, returnBrowserBundleID: nil))
+            }
             if !setupStates.contains(state) {
+                // A synthetic run, started on the simulated helper wire.
+                try admit()
+                guard model.startCollection() else { throw FixtureError.unexpectedState("\(state): start") }
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 0)
                 let names = ["Priya Natarajan", "Marcus Bell", "Elena Fischer", "Sam Okafor", "Dana Whitfield", "Lin Zhao", "Omar Haddad", "Noor Khalil", "Grace Liu", "Tomás Rivera", "Aisha Bello", "Ruth Abara"]
                 let total = 5501
                 let rows: [[String: Any]] = (1...total).map { id in
@@ -81,62 +94,43 @@ struct RenderMacReviewAcceptance {
                               model.selectedIDs == Set(selected), model.handoffID.isEmpty else {
                             throw FixtureError.unexpectedState("\(state): exact local review was not accepted")
                         }
+                        let handoffID = "00000000-0000-4000-8000-0000000000aa"
+                        let pairing: [String: Any] = ["kind": "pairing", "pairCode": "1234567890", "port": 48751,
+                                                      "expiresInSeconds": 300, "handoffId": handoffID,
+                                                      "payloadSha256": String(repeating: "ab", count: 32)]
                         if state == "link-failed" {
                             // Automatic account link failure keeps the review and names the recovery action.
-                            model.pairBrowser(automaticAccountNavigation: true)
-                            try receive(["kind": "pairing", "pairCode": "invalid", "port": 48751, "expiresInSeconds": 300,
-                                         "handoffId": "00000000-0000-4000-8000-0000000000aa"])
-                            guard model.errorMessage.contains("Continue to account"), model.accountNavigationID == nil else {
+                            model.pairBrowser(automaticAccountNavigation: false)
+                            var invalid = pairing
+                            invalid["pairCode"] = "invalid"
+                            try receive(invalid)
+                            guard model.errorMessage.contains("Continue"), model.accountNavigationID == nil else {
                                 throw FixtureError.unexpectedState("link-failed: recovery copy missing")
                             }
                         }
+                        if state == "bind-uncertain" { server.faults = [.malformed, .malformed, .malformed] }
+                        if state == "bind-refused" { server.faults = [.status(409)] }
                         if state != "local-review" && state != "link-failed" {
-                            let handoffID = "00000000-0000-4000-8000-0000000000aa"
-                            let intentID = "00000000-0000-4000-8000-0000000000bb"
                             model.pairBrowser(automaticAccountNavigation: false)
-                            try receive(["kind": "pairing", "pairCode": "1234567890", "port": 48751,
-                                         "expiresInSeconds": 300, "handoffId": handoffID])
-                            try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
-                                         "intentId": intentID, "email": "synthetic@example.invalid", "course": "Synthetic review"])
-                            if state == "confirming", let request = model.pendingDestinationApproval {
-                                model.decideAccountDestination(true, request: request)
-                                guard model.destinationDecisionPending, model.pendingDestinationApproval == nil else {
-                                    throw FixtureError.unexpectedState("confirming: decision must wait for the helper")
+                            try receive(pairing)
+                            if ["handoff", "save-receipt", "expired"].contains(state) {
+                                guard model.handoffBound, !model.canEditWorkspace, !model.handoffAcknowledged else {
+                                    throw FixtureError.unexpectedState("\(state): synthetic handoff did not bind")
                                 }
-                            }
-                            if !["destination-prompt", "decide-later", "confirming"].contains(state) {
+                                try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
+                                             "intentId": "00000000-0000-4000-8000-0000000000bb",
+                                             "email": "synthetic.owner@example.invalid", "course": "SYNTHETIC review course"])
                                 try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
-                                             "intentId": intentID])
+                                             "intentId": "00000000-0000-4000-8000-0000000000bb"])
                             }
-                            if !shareStates.contains(state) {
+                            if state == "save-receipt" {
                                 try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
-                                guard model.handoffID == handoffID, model.destinationApproved, model.browserReceived,
-                                      !model.canEditWorkspace, !model.handoffAcknowledged else {
-                                    throw FixtureError.unexpectedState("\(state): synthetic handoff did not lock the review")
-                                }
-                                if state == "save-receipt" {
-                                    try receive(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
-                                    guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged,
-                                          !model.canRequestSelectionChange else {
-                                        throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
-                                    }
-                                }
-                                if state == "recovery-revoked" {
-                                    model.requestSelectionChange()
-                                    try receive(["kind": "state", "state": "pairing_revoked"])
-                                    guard model.handoffID.isEmpty, model.handoffNotice.contains("Continue to account"),
-                                          model.selectedIDs == Set(selected) else {
-                                        throw FixtureError.unexpectedState("recovery-revoked: review must survive a revoked link")
-                                    }
-                                }
-                                if state == "selection-change" {
-                                    model.requestSelectionChange()
-                                    guard model.selectionChangePending, !model.canEditWorkspace,
-                                          model.handoffID == handoffID, model.selectedIDs == Set(selected) else {
-                                        throw FixtureError.unexpectedState("Selection change must await helper revocation")
-                                    }
+                                try receive(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
+                                guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged else {
+                                    throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
                                 }
                             }
+                            if state == "expired" { try receive(["kind": "handoff", "state": "expired", "handoffId": handoffID]) }
                         }
                     }
                 }
@@ -150,29 +144,43 @@ struct RenderMacReviewAcceptance {
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"progress","value":42}"#.utf8)))
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"transfer","stage":"backup","receivedBytes":2147483648,"retainedBytes":402653184,"discardedBytes":1744830464,"filesReceived":812,"bytesPerSecond":31457280,"elapsedSeconds":68}"#.utf8)))
             }
-            else if state == "agree-checking" { _ = model.beginBackupEncryptionStatusCheck() }
+            else if state == "run-claiming" {
+                server.holdReplies = true
+                try admit()
+            }
+            else if state == "run-uncertain" {
+                server.faults = [.dropRequest, .dropRequest, .dropRequest]
+                try admit()
+            }
+            else if state == "run-refused" {
+                server.faults = [.status(409)]
+                try admit()
+            }
+            else if state == "run-approved" { try admit() }
+            else if state == "agree-checking" { try admit(); _ = model.startCollection() }
+            else if state == "agree-unknown" {
+                try admit()
+                _ = model.startCollection()
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"error","code":"phone_connection"}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 1)
+            }
             else if state == "processing" { model.phase = .processing }
             else if state == "completing" { model.phase = .completing }
             else if state == "cancelling" { model.phase = .cancelling }
-            guard model.accountNavigationID == nil, !model.helperRunning else {
+            guard model.accountNavigationID == nil, !model.helperRunning,
+                  model.operationID == nil || ["connecting", "agree-checking"].contains(state) || !setupStates.contains(state) else {
                 throw FixtureError.unexpectedState("Fixture must not request account navigation or start the helper")
             }
             stateEvidence[state] = ["phase": String(describing: model.phase), "reviewPending": model.reviewPending,
                 "selectionNeedsReview": model.selectionNeedsReview, "canEditWorkspace": model.canEditWorkspace,
                 "handoffPresent": !model.handoffID.isEmpty, "browserReceived": model.browserReceived,
+                "runApproval": String(describing: model.runApproval), "runBinding": String(describing: model.runBinding),
+                "approvedToSave": model.phoneRun.map { CollectorModel.approvedToSaveLabel($0.categories) } ?? "",
                 "saveReceiptPending": model.accountSaveAwaitingBrowserReceipt,
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
             timings[state] = Date().timeIntervalSince(start)
             for (width, height) in viewports {
-                if ["consent", "agree-on", "agree-off", "agree-unknown"].contains(state) {
-                    guard model.beginBackupEncryptionStatusCheck() else { throw FixtureError.unexpectedState("Synthetic setting check did not begin") }
-                    let reading = state == "agree-unknown" ? #"{"kind":"error","code":"phone_connection"}"#
-                        : #"{"kind":"backup-encryption-status","backupEncrypted":\#(state == "agree-on")}"#
-                    model.receive(try AgentEvent.decode(Data(reading.utf8)))
-                }
-                try render(ContentView(model: model, updater: updater,
-                           initialCollectionAgreement: ["consent", "agree-on"].contains(state),
-                           initialDestinationPromptVisible: state == "destination-prompt"), width: width, height: height,
+                try render(ContentView(model: model, updater: updater), width: width, height: height,
                            path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
                     try render(ContactReviewView(model: model, workspace: workspace, wellHeight: 322,
@@ -185,8 +193,8 @@ struct RenderMacReviewAcceptance {
                 try render(ContentView(model: model, updater: updater), width: 1440, height: 2400,
                            path: output.appendingPathComponent("mac-\(state)-overview-1440x2400.png"))
             }
-            if ["consent", "agree-on", "agree-off", "agree-unknown", "completed", "error", "recovery-revoked", "link-failed"].contains(state) {
-                try render(ContentView(model: model, updater: updater, initialCollectionAgreement: ["consent", "agree-on"].contains(state)),
+            if ["setup", "run-approved", "agree-unknown", "completed", "error", "expired", "link-failed"].contains(state) {
+                try render(ContentView(model: model, updater: updater),
                            width: 1180, height: 1500, path: output.appendingPathComponent("mac-\(state)-tall-1180x1500.png"))
             }
         }

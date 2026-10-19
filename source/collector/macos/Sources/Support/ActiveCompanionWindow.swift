@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 
+/// Connects the collector window to `CompanionWindowDirector`. There is no destination sheet: the run's
+/// destination is verified against the server and answered automatically. After the handoff the window is
+/// minimized once and never restored, activated or raised by the app; only the owner reopens it.
 struct ActiveCompanionWindow: NSViewRepresentable {
     @ObservedObject var model: CollectorModel
-    let destinationReviewRequestID: UUID?
-    /// Tells the page whether the destination sheet is on screen, so only the sheet offers the decision.
-    var onDestinationPromptChange: (Bool) -> Void = { _ in }
-    /// Brings the account browser forward once the Mac hands Save over to the website.
+    /// Opens the account in the return browser; a host can replace it (the fake-data demo does).
     var returnToBrowser: ReturnToBrowserAction = .system
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -17,11 +17,9 @@ struct ActiveCompanionWindow: NSViewRepresentable {
     }
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.model = model
-        context.coordinator.onDestinationPromptChange = onDestinationPromptChange
         context.coordinator.returnToBrowser = returnToBrowser
         context.coordinator.attach(view.window)
         context.coordinator.update()
-        context.coordinator.presentDestinationIfNeeded(manualRequestID: destinationReviewRequestID)
     }
     static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.restore() }
 
@@ -29,26 +27,13 @@ struct ActiveCompanionWindow: NSViewRepresentable {
         weak var model: CollectorModel?
         weak var window: NSWindow?
         weak var previousDelegate: NSWindowDelegate?
-        private var originalLevel: NSWindow.Level = .normal
-        private var originalHides = false
+        private var surface: AppKitCompanionSurface?
+        private let director = CompanionWindowDirector()
         private var observers: [(NotificationCenter, NSObjectProtocol)] = []
         private var confirmingClose = false
         private var closeRequested = false
-        private var activeDestinationAlert: NSAlert?
-        private var activeDestinationRequest: CollectorModel.DestinationApprovalRequest?
-        private var endingDestinationAlert = false
-        private var lastPresentedDestinationID: String?
-        private var lastManualReviewRequestID: UUID?
-        private var manualReviewRequestID: UUID?
-        private var presentationGeneration = 0
-        var onDestinationPromptChange: (Bool) -> Void = { _ in }
-        var returnToBrowser: ReturnToBrowserAction = .system
-        private var handedOffHandoffID = ""
-        private var restoredForProblem = ""
-
-        private func announcePrompt(_ visible: Bool) {
-            let notify = onDestinationPromptChange
-            DispatchQueue.main.async { notify(visible) }
+        var returnToBrowser: ReturnToBrowserAction = .system {
+            didSet { surface?.returnToBrowser = returnToBrowser }
         }
 
         init(model: CollectorModel) {
@@ -58,117 +43,40 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             guard let candidate, window !== candidate else { return }
             restore()
             window = candidate
+            surface = AppKitCompanionSurface(window: candidate, returnToBrowser: returnToBrowser)
             previousDelegate = candidate.delegate
-            originalLevel = candidate.level
-            originalHides = candidate.hidesOnDeactivate
             candidate.delegate = self
             let workspace = NSWorkspace.shared.notificationCenter
             observers.append((workspace, workspace.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.update() }
             }))
-            for name in [NSWindow.willBeginSheetNotification, NSWindow.didEndSheetNotification] {
-                let center = NotificationCenter.default
-                observers.append((center, center.addObserver(forName: name, object: candidate, queue: .main) { [weak self] _ in
-                    Task { @MainActor in
-                        self?.update()
-                        if name == NSWindow.didEndSheetNotification {
-                            self?.presentDestinationIfNeeded(manualRequestID: self?.manualReviewRequestID)
-                        }
-                    }
-                }))
-            }
             update()
-            presentDestinationIfNeeded(manualRequestID: manualReviewRequestID)
         }
         func update() {
-            guard let window, let model else { return }
-            // A confirmed save stays on screen as "Saved in your account" until the owner closes it.
+            guard let window, let model, let surface else { return }
+            // A confirmed save stays on screen as "Saved" until the owner closes it.
             if closeRequested && !model.helperRunning {
-                window.level = originalLevel
+                surface.restore()
                 window.close()
                 return
             }
-            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            let nativeFront = front == Bundle.main.bundleIdentifier
-            // Other apps may show their own permission sheets: restore normal stacking, including in the browser.
-            window.level = model.activeFlow && nativeFront && window.attachedSheet == nil && NSApp.modalWindow == nil ? .floating : originalLevel
-            window.hidesOnDeactivate = model.activeFlow ? false : originalHides
-            // Normal status updates never take focus from the account browser.
-            // One active surface: after the Mac confirmation and the browser receipt, Save and the report belong
-            // to the website. Minimize once per handoff and bring the browser forward; the helper keeps running.
-            if model.browserHandoffReady, handedOffHandoffID != model.handoffID, window.attachedSheet == nil {
-                handedOffHandoffID = model.handoffID
-                window.miniaturize(nil)
-                returnToBrowser()
-            }
-            // A problem after the handoff restores the window once for recovery, without taking focus.
-            let problem = model.phase == .error || !model.errorMessage.isEmpty ? "\(model.handoffID)|\(model.errorMessage)" : ""
-            if !handedOffHandoffID.isEmpty, !problem.isEmpty, restoredForProblem != problem, window.isMiniaturized {
-                restoredForProblem = problem
-                window.deminiaturize(nil)
-            }
-        }
-        func presentDestinationIfNeeded(manualRequestID: UUID?) {
-            manualReviewRequestID = manualRequestID
-            guard let window, let model else { return }
-            let current = model.pendingDestinationApproval
-            if let activeDestinationRequest, let activeDestinationAlert {
-                if current != activeDestinationRequest && !endingDestinationAlert {
-                    endingDestinationAlert = true
-                    window.endSheet(activeDestinationAlert.window)
-                }
-                return
-            }
-            guard let current,
-                  current.attentionID != lastPresentedDestinationID ||
-                    (manualRequestID != nil && manualRequestID != lastManualReviewRequestID),
-                  window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
-            let alert = NSAlert()
-            alert.messageText = "Share your reviewed contacts with this account?"
-            alert.informativeText = "Account: \(current.email). Course: \(current.course). These details came from AMPLIFai's authenticated server. Sharing sends only the reviewed contacts and their call and message metadata to this browser. Nothing is saved until you finish Save for each source in your browser."
-            alert.addButton(withTitle: "Share with this account")
-            alert.addButton(withTitle: "Not this account")
-            alert.addButton(withTitle: "Decide later")
-            activeDestinationAlert = alert
-            activeDestinationRequest = current
-            lastPresentedDestinationID = current.attentionID
-            lastManualReviewRequestID = manualRequestID
-            let generation = presentationGeneration
-            window.deminiaturize(nil)
-            window.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            announcePrompt(true)
-            alert.beginSheetModal(for: window) { [weak self] response in
-                guard let self, self.presentationGeneration == generation else { return }
-                self.announcePrompt(false)
-                self.activeDestinationAlert = nil
-                self.activeDestinationRequest = nil
-                self.endingDestinationAlert = false
-                if response == .alertFirstButtonReturn {
-                    model.decideAccountDestination(true, request: current)
-                } else if response == .alertSecondButtonReturn {
-                    model.decideAccountDestination(false, request: current)
-                }
-                self.presentDestinationIfNeeded(manualRequestID: self.manualReviewRequestID)
-            }
+            director.update(model: model, surface: surface)
         }
         func windowShouldClose(_ sender: NSWindow) -> Bool {
             guard let model else { return previousDelegate?.windowShouldClose?(sender) ?? true }
             guard !model.canSafelyClose && (model.hasUnsavedReview || model.helperRunning) else {
                 return previousDelegate?.windowShouldClose?(sender) ?? true
             }
-            guard !confirmingClose, sender.attachedSheet == nil else { return false }
+            guard !confirmingClose, sender.attachedSheet == nil, let surface else { return false }
             confirmingClose = true
-            sender.level = originalLevel
-            let alert = NSAlert()
-            alert.messageText = model.hasUnsavedReview ? "Keep the unsaved local review?" : "Cancel this collection and close?"
-            alert.informativeText = "The browser receiving a preview is not an account save. Closing discards this local recovery copy after the helper stops. App-created temporary data may need inspection on the next launch; other backups are never removed."
-            alert.addButton(withTitle: "Keep window open")
-            alert.addButton(withTitle: "Cancel and close")
-            alert.beginSheetModal(for: sender) { [weak self] response in
+            // Only the owner's own close click shows this sheet.
+            surface.presentCloseConfirmation(
+                title: model.hasUnsavedReview ? "Keep the unsaved local review?" : "Cancel this collection and close?",
+                detail: "Until your account confirms the save, this Mac keeps a private recovery copy. Closing discards it after the helper stops. App-created temporary data may need inspection on the next launch; other backups are never removed."
+            ) { [weak self] cancelAndClose in
                 guard let self else { return }
                 self.confirmingClose = false
-                if response == .alertSecondButtonReturn {
+                if cancelAndClose {
                     self.closeRequested = true
                     model.disconnect()
                 }
@@ -188,23 +96,11 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             return super.forwardingTarget(for: selector)
         }
         func restore() {
-            presentationGeneration += 1
-            if let window, let activeDestinationAlert {
-                window.endSheet(activeDestinationAlert.window)
-                announcePrompt(false)
-            }
-            activeDestinationAlert = nil
-            activeDestinationRequest = nil
-            endingDestinationAlert = false
-            lastPresentedDestinationID = nil
-            lastManualReviewRequestID = nil
             for (center, observer) in observers { center.removeObserver(observer) }
             observers = []
-            if let window {
-                window.level = originalLevel
-                window.hidesOnDeactivate = originalHides
-                if window.delegate === self { window.delegate = previousDelegate }
-            }
+            surface?.restore()
+            if let window, window.delegate === self { window.delegate = previousDelegate }
+            surface = nil
             window = nil
             previousDelegate = nil
         }

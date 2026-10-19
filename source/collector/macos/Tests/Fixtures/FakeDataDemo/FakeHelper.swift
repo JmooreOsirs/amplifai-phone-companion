@@ -8,7 +8,7 @@ struct FakeHelper {
     private static let fast = FileManager.default.fileExists(atPath: URL(fileURLWithPath: CommandLine.arguments[0])
         .deletingLastPathComponent().appendingPathComponent("FAST_DEMO_TIMING").path)
 
-    /// The demo bundle's folder; the simulated website writes per-link connect and save files there.
+    /// The demo bundle's folder; the simulated website writes one file per website step and link there.
     private static let demoControl = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("demo-control")
@@ -73,15 +73,15 @@ struct FakeHelper {
         commands()
     }
 
-    /// Simulated browser stages advance one per handoff-status poll (the app polls every two seconds).
-    private enum Browser { case idle, linked, asked, approved, received, savePending, denied }
-
+    /// Simulated browser stages follow the real bridge order (FakeBridgeTimeline) and advance at most one
+    /// website step per handoff-status poll, so the app can never see a phase early.
     private static func commands() {
         let all = FakeDataSet.contacts
         var reviewIDs: [Int] = []
         var handoffID = ""
-        var intentID = ""
-        var browser = Browser.idle
+        var timeline = FakeBridgeTimeline()
+        // Monotonic, like bridge.py's time.monotonic.
+        func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
         while let line = readLine(strippingNewline: true) {
             guard let data = line.data(using: .utf8),
                   let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -125,41 +125,46 @@ struct FakeHelper {
                 }
             case "pair":
                 handoffID = UUID().uuidString.lowercased()
-                intentID = UUID().uuidString.lowercased()
-                browser = .linked
+                // The five-minute window starts here, at pair after review, never at the claim or collection.
+                timeline = FakeBridgeTimeline(pairedAt: now())
                 emit(["kind": "pairing", "pairCode": String((0..<10).map { _ in "0123456789".randomElement()! }),
-                      "port": 48751, "expiresInSeconds": 300, "handoffId": handoffID])
+                      "port": 48751, "expiresInSeconds": 300, "handoffId": handoffID,
+                      "payloadSha256": FakeBridgeTimeline.payloadDigest(reviewIDs)])
             case "handoff-status":
-                guard command["handoffId"] as? String == handoffID else { continue }
-                switch browser {
-                case .linked:
-                    // The simulated website connects on arrival, then asks the Mac to confirm the account.
-                    guard websiteDid("connect", handoffID) else { continue }
-                    browser = .asked
-                    emit(["kind": "destination", "state": "pending", "handoffId": handoffID, "intentId": intentID,
+                guard command["handoffId"] as? String == handoffID else {
+                    emit(["kind": "error", "code": "handoff_unconfirmed"])
+                    continue
+                }
+                timeline.expireIfDue(at: now())
+                if let next = timeline.nextWebsiteAction, websiteDid(next.rawValue, handoffID) { timeline.apply(next, at: now()) }
+                emit(["kind": "handoff", "state": timeline.handoffState, "handoffId": handoffID])
+                if timeline.destinationPending {
+                    emit(["kind": "destination", "state": "pending", "handoffId": handoffID,
+                          "intentId": FakeBridgeTimeline.intentID(forHandoff: handoffID, attempt: timeline.connectAttempt),
                           "email": FakeDataSet.email, "course": FakeDataSet.course])
-                case .approved:
-                    browser = .received
-                    emit(["kind": "handoff", "state": "received", "handoffId": handoffID])
-                case .received:
-                    // The real flow needs a per-source Save in the browser; the demo waits for its labelled click.
-                    guard websiteDid("save", handoffID) else { continue }
-                    browser = .savePending
-                    emit(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
-                case .savePending:
-                    emit(["kind": "handoff", "state": "saved", "handoffId": handoffID])
-                case .idle, .asked, .denied: break
                 }
             case "destination-decision":
-                guard command["handoffId"] as? String == handoffID, browser == .asked else { continue }
-                let approved = command["approved"] as? Bool == true
-                browser = approved ? .approved : .denied
-                emit(["kind": "destination", "state": approved ? "approved" : "denied", "handoffId": handoffID, "intentId": intentID])
+                let intent = FakeBridgeTimeline.intentID(forHandoff: handoffID, attempt: timeline.connectAttempt)
+                guard command["handoffId"] as? String == handoffID, command["intentId"] as? String == intent,
+                      let approved = command["approved"] as? Bool, timeline.decide(approved: approved, at: now()) else {
+                    emit(["kind": "error", "code": "handoff_unconfirmed"])
+                    continue
+                }
+                emit(["kind": "destination", "state": approved ? "approved" : "denied", "handoffId": handoffID, "intentId": intent])
             case "revoke":
+                // Like close_for_repair(): a receipted handoff is kept, anything earlier is closed.
+                if ["saved", "saved_pending_browser_receipt"].contains(timeline.handoffState) {
+                    emit(["kind": "handoff", "state": timeline.handoffState, "handoffId": handoffID])
+                    continue
+                }
                 handoffID = ""
-                browser = .idle
+                timeline = FakeBridgeTimeline(pairedAt: now())
                 emit(["kind": "state", "state": "pairing_revoked"])
             case "finish":
+                guard command["handoffId"] as? String == handoffID, timeline.handoffState == "saved" else {
+                    emit(["kind": "error", "code": "handoff_unconfirmed"])
+                    continue
+                }
                 emit(["kind": "state", "state": "completed"])
                 exit(0)
             case "disconnect":

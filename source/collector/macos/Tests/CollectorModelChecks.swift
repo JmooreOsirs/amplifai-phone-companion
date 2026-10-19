@@ -20,7 +20,7 @@ struct CollectorModelChecks {
         do {
             try runChecks()
             try await approvedLaunchUsesExactRun()
-            print("20 macOS recovery, progress, approval and update-deferral checks passed")
+            print("20 macOS recovery, progress, run-approval and update-deferral checks passed")
         } catch {
             FileHandle.standardError.write(Data("macOS recovery check failed: \(error)\n".utf8))
             Darwin.exit(1)
@@ -117,22 +117,40 @@ struct CollectorModelChecks {
         try require(model.collectionStartedAt == nil, "A fresh retry cannot infer approval from an earlier attempt")
     }
 
+    /// A model whose one-approval run was claimed through the production client and a simulated server.
+    private static func approvedModel(commandWriter: ((Data) -> Void)? = nil) throws -> (CollectorModel, SimulatedPhoneRunServer) {
+        let server = SimulatedPhoneRunServer()
+        let model = CollectorModel(commandWriter: commandWriter,
+                                   runAuthority: PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate))
+        let run = server.createRun()
+        guard let link = PhoneRunLink(url: server.appLink(run)), model.admitRunLink(PendingRunLink(link: link, returnBrowserBundleID: nil)),
+              model.runApproval == .approved else { throw RecoveryCheckError.failed("Synthetic run claim must succeed") }
+        return (model, server)
+    }
+
     private static func explicitApprovalBindsFreshRun() throws {
-        let model = CollectorModel()
+        let (model, _) = try approvedModel()
         let run = model.collectionApprovalRunID
         let before = Date()
-        try require(model.canPrepareCollection && !model.canConnect, "A fresh app must be ready to ask, not already approved")
-        try require(!model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: nil), "Collection cannot start without an explicit call-history choice")
-        try require(model.localCollectionApproval == nil && !model.canConnect, "A missing call-history choice cannot create a collection receipt")
+        try require(model.canPrepareCollection && !model.canConnect, "A verified run is ready to start, not already approved locally")
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "No local approval before the read-only iPhone check")
         try observeBackupSetting(model, encrypted: true)
-        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .confirmedEncryptedBackup), "Explicit checked agreement and call-history choice should approve only the prepared run")
-        guard let receipt = model.localCollectionApproval else { throw RecoveryCheckError.failed("Explicit agreement needs a local receipt") }
-        try require(receipt.runID == run && receipt.disclosureVersion == CollectorModel.collectionDisclosureVersion, "Approval must bind the actual current run and disclosure")
-        try require(receipt.approvedAt >= before && receipt.approvedAt <= Date(), "Approval timestamp must be operator-action time")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .confirmedEncryptedBackup),
+                    "The verified run composes this run's local approval")
+        guard let receipt = model.localCollectionApproval, let server = model.phoneRun else {
+            throw RecoveryCheckError.failed("The composed approval needs a local receipt")
+        }
+        try require(receipt.runID == run && receipt.disclosureVersion == CollectorModel.collectionDisclosureVersion &&
+                    receipt.disclosureVersion == "native-run-v1", "Approval must bind the current local run and the run disclosure")
+        try require(receipt.serverRunID == server.runID && receipt.serverApprovalID == server.claim.approvalID &&
+                    receipt.serverDisclosureVersion == "phone-run-v1" && receipt.serverRunID != run.uuidString.lowercased(),
+                    "The local approval records the distinct server run and its disclosure")
+        try require(receipt.approvedAt >= before && receipt.approvedAt <= Date(), "Approval timestamp must be action time")
         try require(receipt.scopes == ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"], "Local approval scopes must describe collection and its bounded automatic failure report")
-        try require(receipt.callHistoryPreparation == .confirmedEncryptedBackup, "The current owner call-history choice must be bound to collection approval")
-        try require(model.canConnect && !model.helperRunning && model.collectionStartedAt == nil, "Agree unlocks Connect; it must not collect automatically")
-        try require(model.pairCode.isEmpty && !model.handoffAcknowledged, "Local collection approval cannot approve browser transfer or account save")
+        try require(receipt.callHistoryPreparation == .confirmedEncryptedBackup, "The checked call-history coverage is bound")
+        try require(model.canConnect && !model.helperRunning && model.collectionStartedAt == nil, "Composing alone does not collect")
+        try require(model.pairCode.isEmpty && !model.handoffAcknowledged, "Local collection approval cannot pair or save")
     }
 
     private static func observeBackupSetting(_ model: CollectorModel, encrypted: Bool) throws {
@@ -141,54 +159,54 @@ struct CollectorModelChecks {
     }
 
     private static func checkedBackupSettingGatesCallCoverageChoice() throws {
-        let model = CollectorModel()
+        let (model, _) = try approvedModel()
         for invalid in ["0", "1", "\"true\""] {
             try require((try? event("{\"kind\":\"backup-encryption-status\",\"backupEncrypted\":\(invalid)}")) == nil,
                         "Numeric and string values cannot bridge into a literal JSON backup-setting Bool")
         }
-        let firstRun = model.collectionApprovalRunID
-        try require(!model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .confirmedEncryptedBackup),
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .confirmedEncryptedBackup),
                     "Owner attestation alone cannot substitute for the read-only setting check")
         try require(model.beginBackupEncryptionStatusCheck(), "A current precollection check should start")
-        try require(!model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage),
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage),
                     "A pending check cannot be treated as known coverage")
         model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#))
         try require(model.backupEncryptionStatus == .unencrypted, "Literal false must be shown as encryption off")
-        try require(!model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .confirmedEncryptedBackup),
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .confirmedEncryptedBackup),
                     "A false phone setting cannot authorize encrypted-call collection")
-        try require(model.approveLocalCollection(for: firstRun, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage),
-                    "Owner may explicitly continue with unconfirmed Calls coverage")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "Available data may be collected when encryption is off")
         model.declineLocalCollection()
         try require(model.backupEncryptionStatus == .notChecked, "Back must invalidate the old phone reading")
-        try require(!model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true,
-                                                 callHistoryPreparation: .continueWithoutConfirmedCoverage),
-                    "The next run cannot reuse the previous phone setting")
-        try require(model.beginBackupEncryptionStatusCheck(), "The new run must recheck")
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "The next attempt cannot reuse the previous phone setting")
+        try require(model.beginBackupEncryptionStatusCheck(), "The new attempt must recheck")
         model.receive(try event(#"{"kind":"error","code":"backup_encryption_unknown"}"#))
         try require(model.backupEncryptionStatus == .unknown && model.backupEncryptionCheckCode == "backup_encryption_unknown",
                     "An unreadable setting must remain unknown, not false or approved")
-        try require(!model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true,
-                                                 callHistoryPreparation: .confirmedEncryptedBackup),
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .confirmedEncryptedBackup),
                     "Unknown cannot authorize expected encrypted Calls")
     }
 
     private static func uncheckedAndStaleApprovalFailClosed() throws {
         let model = CollectorModel()
-        let oldRun = model.collectionApprovalRunID
-        try require(!model.approveLocalCollection(for: oldRun, checked: false, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Unchecked approval cannot create a receipt")
-        try require(model.localCollectionApproval == nil && !model.canConnect, "Unchecked approval cannot unlock collection")
-        try require(!model.approveLocalCollection(for: oldRun, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "An invalidated run cannot receive late agreement")
-        try require(!model.approveLocalCollection(for: UUID(), checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "An unrelated run cannot receive agreement")
-        try require(model.localCollectionApproval == nil && !model.helperRunning, "Stale agreement must not launch or synthesize approval")
+        try observeBackupSetting(model, encrypted: false)
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage) &&
+                    model.localCollectionApproval == nil && !model.canConnect,
+                    "Without a verified run there is no collection approval, old or new")
+        let (approved, _) = try approvedModel()
+        approved.dismissRunApproval()
+        try observeBackupSetting(approved, encrypted: false)
+        try require(!approved.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage) &&
+                    !approved.helperRunning, "A dismissed run cannot receive a late approval")
     }
 
     private static func declineStartsFreshUncheckedRun() throws {
-        let model = CollectorModel()
+        let (model, _) = try approvedModel()
         let run = model.collectionApprovalRunID
         try observeBackupSetting(model, encrypted: false)
-        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture approval must compose")
         model.declineLocalCollection()
-        try require(model.collectionApprovalRunID != run && model.localCollectionApproval == nil && !model.canConnect, "Decline or Back must invalidate the old agreement")
+        try require(model.collectionApprovalRunID != run && model.localCollectionApproval == nil && !model.canConnect, "Decline or Back must invalidate the old approval")
         model.connect()
         try require(model.collectionStartedAt == nil && !model.helperRunning, "Decline cannot collect or reuse its old receipt")
     }
@@ -202,34 +220,34 @@ struct CollectorModelChecks {
     }
 
     private static func storageRecoveryInvalidatesApproval() throws {
-        let model = CollectorModel()
+        let (model, _) = try approvedModel()
         let run = model.collectionApprovalRunID
         try observeBackupSetting(model, encrypted: false)
-        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture approval must compose")
         model.receive(try event(#"{"kind":"error","code":"workspace_cleanup","cleanupRequired":true}"#))
         try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run, "Cleanup failure must invalidate pending approval")
         model.receive(try event(#"{"kind":"residue","sessions":[]}"#))
         try require(model.canPrepareCollection && !model.canConnect, "Successful inspection cannot restore an old approval")
-        try require(!model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "The pre-recovery receipt cannot be reused")
+        try require(model.localCollectionApproval == nil && !model.canConnect, "The pre-recovery receipt cannot be reused")
     }
 
     private static func terminalEventsInvalidateApproval() throws {
         for state in ["cancelled", "disconnected"] {
-            let model = CollectorModel()
+            let (model, _) = try approvedModel()
             let run = model.collectionApprovalRunID
             try observeBackupSetting(model, encrypted: false)
-            try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
+            try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture approval must compose")
             model.receive(try event(#"{"kind":"state","state":"\#(state)"}"#))
             try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run && !model.canConnect, "Terminal helper state cannot retain local approval")
         }
-        let model = CollectorModel()
+        let (model, _) = try approvedModel()
         let run = model.collectionApprovalRunID
         try observeBackupSetting(model, encrypted: false)
-        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture agreement must be explicit")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture approval must compose")
         model.finished(mode: "connect", code: 1)
         try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run && !model.canConnect, "Helper completion cannot reuse pending approval")
         try observeBackupSetting(model, encrypted: false)
-        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Retry needs a new explicit agreement")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage), "An unstarted run composes a fresh approval for its retry")
         model.disconnect()
         try require(model.localCollectionApproval == nil && !model.canConnect, "Explicit cancellation or restart must start unchecked")
     }
@@ -327,42 +345,42 @@ struct CollectorModelChecks {
                     !cancelledCheck.canConnect && cancelledCheck.canPrepareCollection,
                     "Cancelling the read-only check must settle idle after residue inspection, not retain stale On")
 
-        let model = CollectorModel()
+        let (model, _) = try approvedModel()
         let run = model.collectionApprovalRunID
         try observeBackupSetting(model, encrypted: false)
-        try require(model.approveLocalCollection(for: run, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Synthetic helper launch requires actual explicit approval")
+        try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage), "Synthetic helper launch requires the composed run approval")
         model.connect()
-        try require(model.helperRunning && model.operationID == run, "The actual Process launch must use the approved run UUID")
+        try require(model.helperRunning && model.operationID == run, "The actual Process launch must use the approved local run UUID")
         try require(model.localCollectionApproval == nil && model.collectionApprovalRunID != run, "Launching must consume, not recycle, the receipt")
         model.disconnect()
         let deadline = Date().addingTimeInterval(3)
         while model.helperRunning && Date() < deadline { await Task.yield() }
         try require(!model.helperRunning, "The owned synthetic helper and subsequent inspection must drain")
-        try require(model.localCollectionApproval == nil && !model.canConnect, "Cancellation cannot restore approval after actual helper exit")
+        try require(model.localCollectionApproval == nil && !model.canConnect && model.phoneRun == nil,
+                    "Cancellation ends the run; nothing restores approval after actual helper exit")
         let started = model.collectionStartedAt
         model.connect()
-        try require(!model.helperRunning && model.collectionStartedAt == started, "A fresh retry cannot capture without another agreement")
+        try require(!model.helperRunning && model.collectionStartedAt == started, "A fresh retry cannot capture without another approval")
 
-        // One Start action records this run's agreement and launches exactly that run.
-        let single = CollectorModel()
-        try observeBackupSetting(single, encrypted: true)
-        try require(!single.agreeAndStartCollection(for: single.collectionApprovalRunID, checked: false) &&
-                    !single.helperRunning && single.collectionStartedAt == nil && single.backupEncryptionStatus == .notChecked,
-                    "An unchecked Start declines without launching and needs a fresh iPhone check")
-        try observeBackupSetting(single, encrypted: true)
-        let singleRun = single.collectionApprovalRunID
-        try require(single.agreeAndStartCollection(for: singleRun, checked: true), "Checked Start must launch")
-        try require(single.helperRunning && single.operationID == singleRun && single.phase == .connecting &&
-                    single.journeyStep == 1,
-                    "One Start action launches the agreed run and moves to Collect")
+        // One Start action checks the iPhone with the real helper path, replays the claim and launches exactly that run.
+        let (single, singleServer) = try approvedModel()
+        try require(single.startCollection(), "Start collection runs the read-only check")
+        let checkDeadline = Date().addingTimeInterval(3)
+        while (single.phase != .connecting || !single.helperRunning) && Date() < checkDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let singleRun = single.operationID
+        try require(single.helperRunning && single.phase == .connecting && single.journeyStep == 1 &&
+                    singleServer.claimCount == 2 && single.phoneRun?.collectionStarted == true,
+                    "After the check and the exact claim replay, one Start launches the run and moves to Collect")
         try require(single.localCollectionApproval == nil && single.collectionApprovalRunID != singleRun,
-                    "Starting consumes the one-run agreement; nothing authorizes a later transfer")
+                    "Starting consumes the one-run approval; nothing authorizes a later transfer")
         single.disconnect()
         let singleDeadline = Date().addingTimeInterval(3)
         while single.helperRunning && Date() < singleDeadline { await Task.yield() }
         try require(!single.helperRunning, "The synthetic collection helper must stop on Cancel")
-        try require(!single.agreeAndStartCollection(for: singleRun, checked: true) && !single.helperRunning,
-                    "A consumed agreement cannot start another collection")
+        try require(!single.startCollection() && !single.helperRunning && single.phoneRun == nil,
+                    "A consumed run cannot start another collection")
     }
 
     private static func storageReasons() throws {
@@ -485,8 +503,8 @@ struct CollectorModelChecks {
         try require(!model.needsStorageReview, "An empty inspection receipt must clear the storage review gate")
         try require(model.residues.isEmpty, "Empty inspection must contain no residue")
         try require(model.canPrepareCollection && !model.canConnect, "An empty verified inspection permits a fresh unchecked retry")
-        try observeBackupSetting(model, encrypted: false)
-        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage) && model.canConnect, "Retry after inspection requires explicit fresh approval")
+        try require(!model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage),
+                    "Retry after inspection still needs a verified run")
     }
 
     private static func inspectedResidueBlocksConnection() throws {

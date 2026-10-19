@@ -3,6 +3,10 @@
 #
 # The branch changes no helper (Python) code, so the bundle reuses the installed RC28's signed helper and
 # Sparkle unchanged (read-only copy) and replaces only the app binary with this branch's release build.
+# The one-approval run arrives by the amplifai-phone:// app link, which RC28's Info.plist does not declare, so
+# CFBundleURLTypes is added to the STAGED COPY's Info.plist only. This script never registers the copy with
+# LaunchServices (no lsregister), never launches it and never touches /Applications. Note: the copy keeps RC28's
+# bundle identifier, so once the copy is opened LaunchServices may associate the scheme with that identifier.
 # It keeps RC28's channel, bundle ID, version and build so the website status and diagnostics routes accept
 # it, strips the Sparkle feed keys so it can never update itself, and is named and placed so its exact path
 # distinguishes it from /Applications. The installed app is only read.
@@ -16,7 +20,8 @@ version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$insta
 build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$installed/Contents/Info.plist")
 [ "$version" = "$expected_version" ] && [ "$build" = "$expected_build" ] || {
     echo "Installed app is $version ($build), not $expected_version ($expected_build)" >&2; exit 2; }
-output="/private/tmp/amplifai-real-test.$(date +%Y%m%d-%H%M%S)"
+# A new versioned directory every time; mkdir fails rather than reuse an existing one.
+output="/private/tmp/amplifai-real-test.run-approval-v1.$(date +%Y%m%d-%H%M%S)"
 mkdir "$output"
 app="$output/AMPLIFai Phone LOCAL TEST.app"
 
@@ -45,6 +50,13 @@ done
     /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName AMPLIFai Phone LOCAL TEST" "$plist"
 commit=$(git -C "$source_root" rev-parse HEAD)
 /usr/libexec/PlistBuddy -c "Add :AMPLIFaiLocalTestSourceCommit string $commit" "$plist"
+# The run link scheme, on the staged copy only (the same declaration as source/collector/macos/Info.plist).
+/usr/libexec/PlistBuddy -c "Delete :CFBundleURLTypes" "$plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string ai.satoris.amplifai.phone.run-link" "$plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$plist"
+/usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string amplifai-phone" "$plist"
 
 # Ad-hoc sign only the outer app; the nested helper and Sparkle keep their Developer ID signatures.
 codesign --force --sign - "$app"
@@ -71,10 +83,14 @@ receipt = {
     "bundleIdentifier": info["CFBundleIdentifier"], "version": info["CFBundleShortVersionString"], "build": info["CFBundleVersion"],
     "updateFeedRemoved": not any(k.startswith("SU") for k in info),
     "outsideApplications": not str(app).startswith("/Applications/"),
+    "runLinkSchemeDeclared": [t.get("CFBundleURLSchemes") for t in info.get("CFBundleURLTypes", [])] == [["amplifai-phone"]],
+    "installedDeclaresRunLinkScheme": "CFBundleURLTypes" in plistlib.loads((installed / "Contents/Info.plist").read_bytes()),
+    "registeredWithLaunchServices": False,
     "launched": False,
 }
 (output / "local-device-test-receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
 print(json.dumps(receipt, indent=2, sort_keys=True))
-if not (helper_same and sparkle_same and receipt["updateFeedRemoved"] and receipt["outsideApplications"]):
+if not (helper_same and sparkle_same and receipt["updateFeedRemoved"] and receipt["outsideApplications"]
+        and receipt["runLinkSchemeDeclared"]):
     sys.exit("Staged bundle failed its checks")
 EOF

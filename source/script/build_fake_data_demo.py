@@ -2,7 +2,8 @@
 """Build the clickable FAKE DATA DEMO app: production Mac views, the real model and a fake helper.
 
 The bundle is separately identified, lives only under /private/tmp, carries no real collector runtime,
-update feed or valid diagnostic build, and is checked for isolation before the launch command is printed.
+update feed or valid diagnostic build, declares no URL scheme (its simulated website hands the fictional
+run link to the model in-process), and is checked for isolation before the launch command is printed.
 """
 import argparse
 import json
@@ -18,6 +19,7 @@ FORBIDDEN_HELPER_SYMBOLS = re.compile(
     r"urlsession|nsurlconnection|_socket$|_connect$|getaddrinfo|ioservice|amdevice|usbmux|nsworkspace|posix_spawn|_execv|nstask|_fork$",
     re.IGNORECASE)
 PRODUCTION_IDS = {"ai.satoris.amplifai.phone.candidate", "ai.satoris.amplifai.phone.intel-candidate"}
+DEMO_FLOW = "one-approval-run-v1"
 
 
 def run(command, **kwargs):
@@ -56,12 +58,13 @@ def main():
         "CFBundlePackageType": "APPL", "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True}))
 
     helper = helper_dir / "amplifai-agent"
-    run(["swiftc", "-O", "-parse-as-library", str(demo / "FakeDataSet.swift"), str(demo / "FakeHelper.swift"),
-         "-o", str(helper)])
+    run(["swiftc", "-O", "-parse-as-library", str(demo / "FakeDataSet.swift"), str(demo / "FakeBridgeTimeline.swift"),
+         str(demo / "FakeHelper.swift"), "-o", str(helper)])
     (helper_dir / "FAKE_HELPER_MARKER").write_text("amplifai-fake-data-helper\n")
     sources = sorted(p for p in (package / "Sources").rglob("*.swift") if "App" not in p.parts)
     run(["swiftc", "-parse-as-library", "-F", str(framework_dir), *map(str, sources),
-         str(demo / "FakeDataSet.swift"), str(demo / "FakeDataDemoApp.swift"),
+         str(demo / "FakeDataSet.swift"), str(demo / "FakeBridgeTimeline.swift"),
+         str(package / "Tests/Fixtures/SimulatedPhoneRunServer.swift"), str(demo / "FakeDataDemoApp.swift"),
          "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
          "-o", str(contents / "MacOS/AmplifaiFakeDataDemo")])
 
@@ -80,6 +83,7 @@ def main():
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SOURCE, text=True).strip()
     dirty = subprocess.check_output(["git", "status", "--porcelain", "--", "."], cwd=SOURCE, text=True).strip()
     evidence = {
+        "demoFlow": DEMO_FLOW,
         "sourceCommit": commit, "sourceTreeClean": not dirty,
         "bundle": str(app), "bundleIdentifier": identifier,
         "notProductionIdentity": identifier not in PRODUCTION_IDS,
@@ -87,6 +91,7 @@ def main():
         "onlyFakeHelper": sorted(p.name for p in helper_dir.iterdir()) == ["FAKE_HELPER_MARKER", "amplifai-agent"],
         "noRealRuntime": not (resources / "uvx").exists() and not (resources / "collector").exists(),
         "noUpdateFeed": not any(key.startswith("SU") for key in info),
+        "noUrlScheme": "CFBundleURLTypes" not in info,
         "diagnosticBuildInvalid": not re.fullmatch(r"[1-9][0-9]{0,11}", info["CFBundleVersion"]),
         "helperForbiddenImports": forbidden,
         "helperForbiddenFrameworks": [line.strip() for line in helper_links.splitlines()
@@ -97,7 +102,7 @@ def main():
         "launchWithoutLaunchServices": [str(executable)],
     }
     checks = ["notProductionIdentity", "outsideApplications", "onlyFakeHelper", "noRealRuntime", "noUpdateFeed",
-              "diagnosticBuildInvalid", "sandboxDeniesNetwork", "appSelfSandboxes"]
+              "noUrlScheme", "diagnosticBuildInvalid", "sandboxDeniesNetwork", "appSelfSandboxes"]
     passed = all(evidence[key] for key in checks) and not forbidden and not evidence["helperForbiddenFrameworks"]
     evidence["isolationPassed"] = passed
     (output / "fake-demo-isolation.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")

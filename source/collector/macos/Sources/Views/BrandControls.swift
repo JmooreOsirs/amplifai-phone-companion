@@ -189,7 +189,7 @@ private struct BrandRaisedCard: ViewModifier {
 /// Agree · Collect · Choose · Share & report. Finished steps use a filled check-circle, never a checkbox,
 /// so verified progress cannot be mistaken for a choice.
 struct JourneySteps: View {
-    static let titles = ["Agree", "Collect", "Choose", "Share & report"]
+    static let titles = ["Approve", "Collect", "Choose", "Save & report"]
     /// 0...3 is the current step; 4 means every step finished.
     let current: Int
 

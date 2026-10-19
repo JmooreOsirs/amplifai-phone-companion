@@ -1,9 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// FAKE DATA DEMO host for the production Mac views. It runs the real CollectorModel and ContentView,
-/// launches only the bundled fake helper, intercepts every browser open and never starts the updater,
-/// status service or diagnostic upload. The sample report is simulated here; no website report exists.
+/// FAKE DATA DEMO host for the production Mac views. It runs the real CollectorModel and ContentView with the
+/// production run client over an in-process simulated run server, launches only the bundled fake helper,
+/// intercepts every browser open and never starts the updater, status service or diagnostic upload. It declares
+/// and registers no URL scheme: the simulated website hands its fictional app link to the model in-process.
+/// The sample report is simulated here; no website report exists.
 @main @MainActor
 enum FakeDataDemoApp {
     private static let delegate = DemoDelegate()
@@ -72,53 +74,114 @@ enum DemoIsolation {
         }
         if SupportDiagnosticReporter.validatedBuild(bundle.infoDictionary) != nil { return "diagnostic upload build is valid" }
         if bundle.object(forInfoDictionaryKey: "SUFeedURL") != nil { return "update feed configured" }
+        // The demo never claims the production app link; its link is delivered in-process.
+        if bundle.object(forInfoDictionaryKey: "CFBundleURLTypes") != nil { return "URL scheme declared" }
         return nil
     }
 }
 
 @MainActor
 final class DemoSession: ObservableObject {
-    let model = CollectorModel(bundleInformation: ["CFBundleVersion": "fake-demo"])
+    /// Where the simulated website is in its own flow. It never asks for a Save consent.
+    enum WebsiteStage: Int, Comparable {
+        case agree, waitingForMac, connecting, receiving, saving, confirming, report
+        static func < (left: Self, right: Self) -> Bool { left.rawValue < right.rawValue }
+    }
+
+    let server = SimulatedPhoneRunServer()
+    let model: CollectorModel
+    let inbox = PhoneRunLinkInbox()
     let updater = CompanionUpdater(enablePublishedUpdates: false, bundleInformation: [:])
+    @Published private(set) var stage: WebsiteStage = .agree
     @Published private(set) var intercepted: [String] = []
-    @Published private(set) var saveRequested = false
-    private var connectedHandoff = ""
+    @Published private(set) var printRequested = false
     private(set) var reviewedIDs: Set<Int> = []
+    private var connectedHandoff = ""
+    private var savingHandoff = ""
     /// Brings the simulated website window forward; set by the app delegate.
     var showWebsite: () -> Void = {}
+    /// Shows the Mac window when the fictional link arrives (standing in for the OS opening the app).
+    var showMac: () -> Void = {}
     var runAgain: () -> Void = {}
-    /// Closes this demo once the Mac has finished; set by the app delegate.
+    /// Closes this demo flow; set by the app delegate.
     var finishDemo: () -> Void = {}
+
+    init() {
+        model = CollectorModel(bundleInformation: ["CFBundleVersion": "fake-demo"],
+                               runAuthority: PhoneRunAuthorityClient(transport: server,
+                                                                     schedule: PhoneRunAuthorityClient.immediate))
+        inbox.attach(model)
+    }
 
     private var control: URL { Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("demo-control") }
 
-    private func signal(_ step: String) -> Bool {
+    /// One file per simulated website step; the fake helper applies them only in the real bridge order.
+    @discardableResult
+    private func signal(_ step: FakeBridgeTimeline.WebsiteAction, _ handoff: String) -> Bool {
         try? FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
-        return FileManager.default.createFile(atPath: control.appendingPathComponent("\(step)-\(model.handoffID)").path, contents: Data())
+        return FileManager.default.createFile(atPath: control.appendingPathComponent("\(step.rawValue)-\(handoff)").path,
+                                              contents: Data())
     }
 
-    /// Every browser open from the production views lands here; nothing opens. The simulated website stays
-    /// out of sight while the Mac asks for the account confirmation and appears only at the Mac's handoff.
+    /// The simulated website's one upfront agreement for this collection.
+    func agreeAndCollect() {
+        guard stage == .agree else { return }
+        let run = server.createRun(email: FakeDataSet.email, course: FakeDataSet.course)
+        stage = .waitingForMac
+        // Stands in for the browser opening amplifai-phone://start?...; nothing is registered with macOS.
+        inbox.receive(server.appLink(run), returnBrowserBundleID: nil)
+        showMac()
+    }
+
+    /// Every browser open from the production views lands here; nothing opens.
     func intercept(_ url: URL) {
         intercepted.append(url.absoluteString)
     }
 
-    /// The simulated website's one Save action; the fake helper then sends the account-save receipts.
-    func saveOnWebsite() {
-        if signal("save") { saveRequested = true }
+    /// The Mac's handoff opens the account in the "browser": the simulated website comes forward.
+    func openInBrowser(_ url: URL) {
+        intercept(url)
+        if url.query?.contains("continue=reviewed") == true && stage < .connecting { stage = .connecting }
+        showWebsite()
     }
+
+    func requestPrint() { printRequested = true }
 
     func observe() {
         if model.phase == .reviewing && !model.selectionNeedsReview { reviewedIDs = model.selectedIDs }
-        if model.handoffID.isEmpty { saveRequested = false }
-        // Simulates the website connecting on arrival with continue=reviewed (the linked website change).
-        if !model.handoffID.isEmpty && connectedHandoff != model.handoffID && !intercepted.isEmpty {
+        // Simulates the website connecting on arrival with continue=reviewed.
+        if stage == .connecting, model.handoffBound, connectedHandoff != model.handoffID {
             let handoff = model.handoffID
             connectedHandoff = handoff
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 guard let self, self.model.handoffID == handoff else { return }
-                _ = self.signal("connect")
+                self.signal(.connect, handoff)
             }
+        }
+        if model.destinationApproved, !model.handoffID.isEmpty, savingHandoff != model.handoffID {
+            savingHandoff = model.handoffID
+            saveAutomatically(model.handoffID)
+        }
+        if model.handoffAcknowledged && stage < .report { stage = .report }
+    }
+
+    /// The upfront approval covers saving: release, read every page, save, then finalize, with progress and
+    /// no checkbox or Save consent. The helper reports received only after complete.
+    private func saveAutomatically(_ handoff: String) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.stage = .receiving
+            self.signal(.release, handoff)
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            self.signal(.pages, handoff)
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            guard self.model.handoffID == handoff else { return }
+            self.stage = .saving
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            self.signal(.complete, handoff)
+            self.stage = .confirming
+            self.signal(.acknowledge, handoff)
+            self.signal(.confirm, handoff)
         }
     }
 }
@@ -133,10 +196,13 @@ struct DemoRoot: View {
             ContentView(model: model, updater: session.updater)
         }
         .environment(\.openURL, OpenURLAction { url in
-            session.intercept(url)
+            session.openInBrowser(url)
             return .handled
         })
-        .environment(\.returnToBrowser, ReturnToBrowserAction { session.showWebsite() })
+        .environment(\.returnToBrowser, ReturnToBrowserAction { url, _, completion in
+            session.openInBrowser(url)
+            completion(true)
+        })
         .onReceive(model.objectWillChange) { _ in DispatchQueue.main.async { session.observe() } }
     }
 }
@@ -147,7 +213,7 @@ struct DemoBanner: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("FAKE DATA DEMO · fictional contacts · simulated iPhone and simulated website · no device, account, upload or network")
+            Text("FAKE DATA DEMO · fictional contacts · simulated iPhone, website and approval · no device, account, upload or network")
                 .font(.system(size: 13, weight: .heavy))
             if let last = session.intercepted.last {
                 Text("Browser open intercepted, nothing opened: \(last)")
@@ -162,11 +228,13 @@ struct DemoBanner: View {
     }
 }
 
-/// Local fixture standing in for the AMPLIFai website after the linked website change. It is not the real
-/// site: nothing here reaches a server, and its sample report is computed on this Mac from fictional data.
+/// Local fixture standing in for the AMPLIFai website with the one upfront approval. It is not the real site:
+/// nothing here reaches a server, and its sample report is computed on this Mac from fictional data.
 struct SimulatedWebsiteView: View {
     @ObservedObject var session: DemoSession
     @ObservedObject var model: CollectorModel
+
+    private let steps = ["Agree", "Collect on Mac", "Receive", "Save", "Report"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -176,50 +244,81 @@ struct SimulatedWebsiteView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.yellow)
             VStack(alignment: .leading, spacing: 14) {
-                Text("Signed in as \(FakeDataSet.email) · \(FakeDataSet.course)")
+                Text("Signed in as \(FakeDataSet.email) · \(FakeDataSet.course) · FAKE DATA")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(stepLine).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 content
             }
             .padding(24)
             Spacer(minLength: 0)
         }
-        .frame(width: 560, alignment: .topLeading)
-        .frame(minHeight: 520, alignment: .top)
+        .frame(width: 600, alignment: .topLeading)
+        .frame(minHeight: 560, alignment: .top)
+    }
+
+    private var currentStep: Int {
+        switch session.stage {
+        case .agree: return 0
+        case .waitingForMac: return 1
+        case .connecting, .receiving: return 2
+        case .saving, .confirming: return 3
+        case .report: return 4
+        }
+    }
+
+    private var stepLine: String {
+        steps.enumerated().map { index, step in index < currentStep ? "✓ \(step)" : index == currentStep ? "● \(step)" : step }
+            .joined(separator: "  ·  ")
     }
 
     @ViewBuilder private var content: some View {
-        if model.handoffAcknowledged {
-            SampleReportView(report: FakeDataSet.sampleReport(selected: session.reviewedIDs),
-                             finished: model.phase == .completed && !model.helperRunning,
-                             done: session.finishDemo, runAgain: session.runAgain)
-        } else if model.accountSaveAwaitingBrowserReceipt || session.saveRequested {
-            heading("Saving to your account…")
-            ProgressView()
-        } else if model.browserReceived, let report = FakeDataSet.sampleReport(selected: session.reviewedIDs) {
-            heading("Your contacts from AMPLIFai Phone are ready")
-            Text("\(report.shared) contacts · \(report.calls) calls · \(report.messages) messages")
-            Text("Saving adds these to \(FakeDataSet.course). Your report opens next.")
-                .foregroundStyle(.secondary)
-            Button("Save and view report") { session.saveOnWebsite() }
+        switch session.stage {
+        case .agree:
+            heading("Agree and collect")
+            Text("FAKE DATA account · \(FakeDataSet.email) · \(FakeDataSet.course)")
+                .font(.system(size: 13, weight: .semibold))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("• One collection on this Mac, started from this account, for the course shown.")
+                Text("• AMPLIFai Phone makes a temporary local backup of the iPhone and reads contacts, call history and message metadata from it. Message text never leaves the Mac.")
+                Text("• After you choose people in AMPLIFai Phone, those contacts and their available call and message metadata are saved automatically to this account and course. Nothing you leave out is saved.")
+                Text("• A different account or course, a later collection or anything else needs a new approval. iPhone Trust and your backup password are still asked on your devices.")
+            }
+            .font(.system(size: 13))
+            .fixedSize(horizontal: false, vertical: true)
+            Text("FAKE DATA: this approval is simulated inside the demo app. No account, server or upload is involved.")
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+            Button("Agree and collect") { session.agreeAndCollect() }
                 .keyboardShortcut(.defaultAction)
                 .controlSize(.large)
-        } else if model.destinationApproved {
-            heading("Receiving from your Mac…")
-            ProgressView()
-        } else if !model.destinationIntentID.isEmpty {
-            heading("Confirm on your Mac")
-            Text("AMPLIFai Phone on your Mac is asking you to confirm this account before anything is shared.")
-        } else if !model.handoffID.isEmpty {
-            heading("Connecting to AMPLIFai Phone on this Mac…")
-            ProgressView()
-        } else {
-            heading("Waiting for AMPLIFai Phone")
-            Text("Choose contacts on your Mac, then Continue to account.")
+        case .waitingForMac:
+            heading("Continue in AMPLIFai Phone on your Mac")
+            Text("Start collection there, choose contacts, then Continue. This page then saves them automatically.")
+                .foregroundStyle(.secondary)
+        case .connecting:
+            progress("Connecting to AMPLIFai Phone on this Mac…")
+        case .receiving:
+            progress("Receiving the contacts you chose…")
+        case .saving:
+            progress("Saving to \(FakeDataSet.course)…")
+        case .confirming:
+            progress("Confirming the save with your Mac…")
+        case .report:
+            SampleReportView(report: FakeDataSet.sampleReport(selected: session.reviewedIDs),
+                             finished: model.phase == .completed && !model.helperRunning,
+                             printRequested: session.printRequested, print: session.requestPrint,
+                             done: session.finishDemo, runAgain: session.runAgain)
         }
     }
 
     private func heading(_ text: String) -> some View {
         Text(text).font(.system(size: 22, weight: .bold))
+    }
+
+    @ViewBuilder private func progress(_ text: String) -> some View {
+        heading(text)
+        ProgressView()
+        Text("Saving was approved once, at the start. Nothing to confirm here.")
+            .font(.system(size: 12)).foregroundStyle(.secondary)
     }
 }
 
@@ -227,6 +326,8 @@ struct SampleReportView: View {
     let report: FakeDataSet.SampleReport?
     /// The Mac has shown Saved and its fake helper has exited, so the demo can close cleanly.
     let finished: Bool
+    let printRequested: Bool
+    let print: () -> Void
     let done: () -> Void
     let runAgain: () -> Void
 
@@ -234,32 +335,38 @@ struct SampleReportView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Your saved phone report · SAMPLE")
                 .font(.system(size: 22, weight: .bold))
-            Text("A sample computed on this Mac from fictional contacts and the selection you shared. The real report is produced by the AMPLIFai website after an account Save; its layout may differ. No website, account or upload was involved.")
+            Text("A sample computed on this Mac from fictional contacts and the selection you chose. The real report is produced by the AMPLIFai website after the account save; its layout may differ. No website, account or upload was involved.")
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let report {
                 Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 6) {
-                    GridRow { Text("Contacts shared"); Text("\(report.shared) of \(report.total)").bold() }
+                    GridRow { Text("Contacts saved"); Text("\(report.shared) of \(report.total)").bold() }
                     GridRow { Text("Matching calls"); Text("\(report.calls)").bold() }
                     GridRow { Text("Matching messages"); Text("\(report.messages)").bold() }
-                    GridRow { Text("Shared with no matching activity"); Text("\(report.withoutActivity)").bold() }
+                    GridRow { Text("Saved with no matching activity"); Text("\(report.withoutActivity)").bold() }
                     GridRow { Text("Not included (left unselected)"); Text("\(report.notIncluded)").bold() }
                 }
-                Text("Most active shared contacts").font(.headline)
+                Text("Most active saved contacts").font(.headline)
                 ForEach(Array(report.mostActive.prefix(5).enumerated()), id: \.offset) { index, row in
                     Text("\(index + 1). \(row.name) · \(row.calls) calls · \(row.messages) messages")
                 }
             }
             HStack(spacing: 16) {
-                Button(finished ? "Done" : "Finishing on your Mac…", action: done)
+                Button(finished ? "Done — I reviewed these results" : "Finishing on your Mac…", action: done)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!finished)
+                Button("Print or save PDF", action: print)
+                    .controlSize(.large)
                 Button("Run the demo again", action: runAgain)
                     .buttonStyle(.link)
             }
             .padding(.top, 6)
+            if printRequested {
+                Text("Print requested. FAKE DATA demo: recorded only; nothing was printed, saved or sent.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+            }
         }
     }
 }
@@ -287,45 +394,37 @@ final class DemoDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// The demo starts on the simulated website's Agree and collect page. The Mac window appears when the
+    /// fictional link arrives; after the handoff the demo never brings it back.
     private func openSession() {
         website?.close()
         website = nil
         let session = DemoSession()
-        session.showWebsite = { [weak self, weak session] in
-            guard let self, let session else { return }
-            self.showWebsite(for: session)
-        }
-        session.runAgain = { [weak self] in self?.openSession() }
         sessions.append(session)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 860),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
-        window.title = "AMPLIFai FAKE DATA DEMO — fictional contacts, no iPhone or account"
-        window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: DemoRoot(session: session, model: session.model))
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        windows.append(window)
-        session.finishDemo = { [weak self, weak window] in
-            self?.website?.close()
-            window?.performClose(nil)
+        let mac = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 860),
+                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        mac.title = "AMPLIFai FAKE DATA DEMO — fictional contacts, no iPhone or account"
+        mac.isReleasedWhenClosed = false
+        mac.contentView = NSHostingView(rootView: DemoRoot(session: session, model: session.model))
+        mac.center()
+        windows.append(mac)
+        let site = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 600),
+                            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        site.title = "SIMULATED AMPLIFai WEBSITE — local fixture, not the real site"
+        site.isReleasedWhenClosed = false
+        site.contentView = NSHostingView(rootView: SimulatedWebsiteView(session: session, model: session.model))
+        if let screen = NSScreen.main?.visibleFrame {
+            site.setFrameTopLeftPoint(NSPoint(x: screen.maxX - 640, y: screen.maxY - 40))
         }
-    }
-
-    /// The simulated website appears at the Mac's handoff at a normal level, like a browser window, so a
-    /// restored Mac recovery window is never hidden behind it.
-    private func showWebsite(for session: DemoSession) {
-        if website == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
-                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
-            window.title = "SIMULATED AMPLIFai WEBSITE — local fixture, not the real site"
-            window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SimulatedWebsiteView(session: session, model: session.model))
-            if let screen = NSScreen.main?.visibleFrame {
-                window.setFrameTopLeftPoint(NSPoint(x: screen.maxX - 600, y: screen.maxY - 40))
-            }
-            website = window
-            windows.append(window)
+        website = site
+        windows.append(site)
+        session.showMac = { [weak mac] in mac?.makeKeyAndOrderFront(nil) }
+        session.showWebsite = { [weak site] in site?.makeKeyAndOrderFront(nil) }
+        session.runAgain = { [weak self] in self?.openSession() }
+        session.finishDemo = { [weak site, weak mac] in
+            site?.close()
+            mac?.close()
         }
-        website?.makeKeyAndOrderFront(nil)
+        site.makeKeyAndOrderFront(nil)
     }
 }

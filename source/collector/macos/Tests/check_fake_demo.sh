@@ -14,7 +14,7 @@ trap 'rm -rf -- "${native_temp:?}"' EXIT
 trap 'exit 130' HUP INT TERM
 mkdir "$native_temp/helper"
 swiftc -O -parse-as-library -target "$native_arch-apple-macos14.0" \
-    "$demo/FakeDataSet.swift" "$demo/FakeHelper.swift" -o "$native_temp/helper/amplifai-agent"
+    "$demo/FakeDataSet.swift" "$demo/FakeBridgeTimeline.swift" "$demo/FakeHelper.swift" -o "$native_temp/helper/amplifai-agent"
 # Static isolation: the fake helper links no network, device or process-spawning API.
 if nm -u "$native_temp/helper/amplifai-agent" | grep -Ei 'urlsession|nsurlconnection|_socket$|_connect$|getaddrinfo|ioservice|amdevice|usbmux|nsworkspace|posix_spawn|_execv|nstask|_fork$'; then
     echo "fake helper imports a forbidden API" >&2; exit 1
@@ -30,6 +30,10 @@ swiftc -parse-as-library -target "$native_arch-apple-macos14.0" \
     "$macos/Sources/Services/ContactWorkspace.swift" \
     "$macos/Sources/Services/SupportDiagnosticReporter.swift" \
     "$macos/Sources/Models/AgentEvent.swift" \
-    "$demo/FakeDataSet.swift" "$demo/FakeDemoChecks.swift" \
+    "$macos/Sources/Services/PhoneRunAuthority.swift" \
+    "$macos/Sources/Support/PhoneRunLink.swift" \
+    "$macos/Sources/Support/CompanionWindowDirector.swift" \
+    "$macos/Tests/Fixtures/SimulatedPhoneRunServer.swift" \
+    "$demo/FakeDataSet.swift" "$demo/FakeBridgeTimeline.swift" "$demo/FakeDemoChecks.swift" \
     -o "$native_temp/FakeDemoChecks"
 "$native_temp/FakeDemoChecks"

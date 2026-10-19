@@ -35,6 +35,8 @@ swiftc -parse-as-library -target "$native_arch-apple-macos14.0" -F "$build_bin" 
     "$native_root/collector/macos/Sources/Services/CompanionStatusService.swift" \
     "$native_root/collector/macos/Sources/Services/SupportDiagnosticReporter.swift" \
     "$native_root/collector/macos/Sources/Models/AgentEvent.swift" \
+    "$native_root/collector/macos/Sources/Services/PhoneRunAuthority.swift" \
+    "$native_root/collector/macos/Sources/Support/PhoneRunLink.swift" \
     "$native_root/collector/macos/Tests/CompanionUpdaterChecks.swift" \
     -o "$native_temp/CompanionUpdaterChecks"
 cat > "$native_temp/status-fixture" <<'EOF'
