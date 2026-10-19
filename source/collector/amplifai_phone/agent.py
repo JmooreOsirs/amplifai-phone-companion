@@ -365,6 +365,13 @@ def run_connect(
                 page = _contact_ids(capture.contacts.records, command["ids"], command["requestId"])
                 _emit(sink, {"kind": "contact-ids", **page})
                 continue
+            if action == "run-authority":
+                if (set(command) != {"action", "handoffId", "state"}
+                        or bridge is None or not isinstance(command.get("handoffId"), str)
+                        or not isinstance(command.get("state"), str)
+                        or not bridge.set_run_authority(command["handoffId"], command["state"])):
+                    _emit(sink, {"kind": "error", "code": "handoff_unconfirmed"})
+                continue
             if action == "destination-decision":
                 if (set(command) != {"action", "handoffId", "intentId", "approved"}
                         or bridge is None or command.get("handoffId") != bridge.handoff_id

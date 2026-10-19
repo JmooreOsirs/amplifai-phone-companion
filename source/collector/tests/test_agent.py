@@ -908,6 +908,32 @@ class AgentProtocolTest(unittest.TestCase):
         bridge.approve_destination.assert_called_with(intent_id, True)
         bridge.close.assert_called_once()
 
+    def test_run_authority_pipe_command_is_exact_and_preserves_helper(self) -> None:
+        async def fake_collector(**_kwargs: object) -> IPhoneCapture:
+            return synthetic_capture()
+
+        run_id = "00000000-0000-4000-8000-000000000001"
+        bridge = MagicMock()
+        bridge.code, bridge.port = "1234567890", 48751
+        bridge.handoff_id, bridge.payload_sha256 = run_id, "a" * 64
+        bridge.set_run_authority.side_effect = lambda handoff, state: handoff == run_id and state in ("paused", "current")
+        commands = [{"action": "review", "ids": [1]}, {"action": "pair"},
+                    {"action": "run-authority", "handoffId": "wrong", "state": "paused"},
+                    {"action": "run-authority", "handoffId": run_id, "state": "revoked"},
+                    {"action": "run-authority", "handoffId": run_id, "state": "paused", "extra": True},
+                    {"action": "run-authority", "handoffId": run_id, "state": "paused"},
+                    {"action": "run-authority", "handoffId": run_id, "state": "current"},
+                    {"action": "disconnect"}]
+        source = io.StringIO("".join(json.dumps(command) + "\n" for command in commands))
+        sink = io.StringIO()
+        with patch("amplifai_phone.agent.BridgeServer", return_value=bridge):
+            self.assertEqual(run_connect(source, sink, fake_collector), 0)
+        events = [json.loads(line) for line in sink.getvalue().splitlines()]
+        self.assertEqual(sum(event.get("code") == "handoff_unconfirmed" for event in events), 3)
+        self.assertEqual(bridge.set_run_authority.call_count, 4)
+        self.assertEqual(events[-1], {"kind": "state", "state": "disconnected"})
+        bridge.close.assert_called_once()
+
     def test_pairing_bind_failure_keeps_local_review_available(self) -> None:
         async def fake_collector(**_kwargs: object) -> IPhoneCapture:
             return synthetic_capture()

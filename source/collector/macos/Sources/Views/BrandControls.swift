@@ -186,6 +186,96 @@ private struct BrandRaisedCard: ViewModifier {
     }
 }
 
+/// Agree · Collect · Choose · Share & report. Finished steps use a filled check-circle, never a checkbox,
+/// so verified progress cannot be mistaken for a choice.
+struct JourneySteps: View {
+    static let titles = ["Approve", "Collect", "Choose", "Save & report"]
+    /// 0...3 is the current step; 4 means every step finished.
+    let current: Int
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { steps(compact: false) }
+            HStack(spacing: 6) { steps(compact: true) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(current < Self.titles.count
+                            ? "Step \(current + 1) of \(Self.titles.count): \(Self.titles[current])"
+                            : "All \(Self.titles.count) steps finished")
+    }
+
+    @ViewBuilder private func steps(compact: Bool) -> some View {
+        ForEach(Self.titles.indices, id: \.self) { index in
+            HStack(spacing: 6) {
+                if index < current {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Brand.lime)
+                } else {
+                    Text("\(index + 1)")
+                        .font(Brand.headingFont(12))
+                        .foregroundStyle(index == current ? Brand.background : Brand.muted)
+                        .frame(width: 20, height: 20)
+                        .background(index == current ? Brand.lime : Brand.background, in: Circle())
+                        .overlay(Circle().stroke(index == current ? Brand.lime : Brand.border, lineWidth: 1))
+                }
+                if !compact || index == current {
+                    Text(Self.titles[index])
+                        .font(Brand.headingFont(13))
+                        .foregroundStyle(index == current ? Brand.heading : Brand.muted)
+                        .lineLimit(1)
+                }
+            }
+            if index < Self.titles.count - 1 {
+                Rectangle().fill(Brand.border).frame(width: compact ? 10 : 24, height: 1)
+            }
+        }
+    }
+}
+
+/// A read result from the phone or helper. Icons, not checkboxes: nothing here is the owner's choice.
+struct VerifiedStatusRow: View {
+    let verified: Bool
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: verified ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 18))
+                .foregroundStyle(verified ? Brand.lime : Brand.muted)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
+                Text(detail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Organizing mark for a Main/Review group move. A flag tag, deliberately unlike the include checkbox.
+struct MoveMarkToggle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: configuration.isOn ? "flag.fill" : "flag")
+                configuration.label
+            }
+            .font(Brand.headingFont(12))
+            .foregroundStyle(configuration.isOn ? Brand.heading : Brand.muted)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 26)
+            .background(configuration.isOn ? Brand.blue.opacity(0.35) : Brand.background, in: Capsule())
+            .overlay(Capsule().strokeBorder(configuration.isOn ? Brand.blue : Brand.border,
+                                            style: StrokeStyle(lineWidth: 1, dash: configuration.isOn ? [] : [3, 2])))
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(Text(configuration.isOn ? "Marked to move" : "Not marked"))
+    }
+}
+
 extension View {
     func brandControls(padding: CGFloat = 16) -> some View {
         modifier(BrandControlsSurface(padding: padding))

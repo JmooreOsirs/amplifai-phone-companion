@@ -3,19 +3,13 @@ import SwiftUI
 
 struct CollectionStatusPanel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.returnToBrowser) private var returnToBrowser
     @ObservedObject var model: CollectorModel
     @State private var confirmingDiscard = false
     @State private var copyStatus = ""
     @State private var showingTechnicalDetails = false
-    @State private var cancelHovered = false
 
-    private let stages = ["Connect", "Receive", "Read", "Review & save"]
-    // Existing /experience messaging, shown as waiting content rather than collection progress.
-    private let waitingLines = [
-        "The system proposes. You decide.",
-        "Relationship signals, not predictions.",
-        "No new CRM. No starting over."
-    ]
+    private let stages = ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]
 
     private var activeStage: Int {
         switch model.phase {
@@ -51,7 +45,7 @@ struct CollectionStatusPanel: View {
                         Text("\(index + 1). \(step)").font(Brand.bodyFont(16))
                     }
                 } else {
-                    Text("Use the call-history setup below. The read-only setting check comes before any new collection.")
+                    Text("Check the iPhone again below. The read-only setting check comes before any new collection.")
                         .font(Brand.bodyFont(18))
                         .foregroundStyle(Brand.body)
                 }
@@ -135,8 +129,8 @@ struct CollectionStatusPanel: View {
     private var nextAction: String {
         switch model.phase {
         case .connecting: return "Next: receive the iPhone backup on this Mac. Keep the phone unlocked for Trust prompts."
-        case .transferring: return "Next: read available sources locally, then choose contacts to review."
-        case .processing: return "Next: review observed sources and choose contacts before any browser handoff."
+        case .transferring: return "Next: read available sources locally, then choose which contacts to share."
+        case .processing: return "Next: choose contacts, then Continue to save them to your approved account."
         default: return "Next: inspect receipt-confirmed sources in your signed-in account."
         }
     }
@@ -147,17 +141,10 @@ struct CollectionStatusPanel: View {
             VStack(alignment: .leading, spacing: Brand.Space.section) {
                 activityHeading
                 if model.phase != .completing {
-                    Button("Cancel collection") { model.disconnect() }
-                        .buttonStyle(SecondaryButton())
-                        .frame(minHeight: 44)
-                        .onHover { inside in
-                            guard inside != cancelHovered else { return }
-                            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                            cancelHovered = inside
-                        }
-                        .onDisappear {
-                            if cancelHovered { NSCursor.pop(); cancelHovered = false }
-                        }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Brand.Space.item) { stopActions }
+                        VStack(alignment: .leading, spacing: Brand.Space.item) { stopActions }
+                    }
                 }
                 HStack(spacing: 10) {
                     Image(systemName: "iphone.gen3")
@@ -169,15 +156,17 @@ struct CollectionStatusPanel: View {
                 .padding(.horizontal, 18)
                 .accessibilityLabel("Local iPhone to Mac collection; this illustration is not a progress meter")
                 stageChips
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Brand.Space.item)],
-                          alignment: .leading, spacing: Brand.Space.item) {
-                    elapsedClock(elapsed)
-                    if model.transferIsKnown && model.phase != .completing {
-                        metric("Received", CollectorModel.byteDescription(model.transferBytes))
-                        metric("Retained locally", CollectorModel.byteDescription(model.retainedBytes))
+                if model.collectionStartedAt != nil || (model.transferIsKnown && model.phase != .completing) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Brand.Space.item)],
+                              alignment: .leading, spacing: Brand.Space.item) {
+                        if model.collectionStartedAt != nil { elapsedClock(elapsed) }
+                        if model.transferIsKnown && model.phase != .completing {
+                            metric("Received", CollectorModel.byteDescription(model.transferBytes))
+                            metric("Retained locally", CollectorModel.byteDescription(model.retainedBytes))
+                        }
                     }
+                    .brandWell()
                 }
-                .brandWell()
                 if model.phase == .transferring && model.progressIsKnown {
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
@@ -196,7 +185,8 @@ struct CollectionStatusPanel: View {
                 } else if model.phase != .completing {
                     HStack(spacing: 7) {
                         ForEach(0..<3) { index in
-                            Circle().fill(reduceMotion || index == Int(context.date.timeIntervalSince1970) % 3
+                            Circle().fill(hasRecentMeasuredActivity(at: context.date) && !reduceMotion
+                                          && index == Int(context.date.timeIntervalSince1970) % 3
                                           ? Brand.lime : Brand.blue.opacity(0.45))
                                 .frame(width: 7, height: 7)
                         }
@@ -217,7 +207,8 @@ struct CollectionStatusPanel: View {
                         .foregroundStyle(Brand.muted)
                 }
                 if model.phase == .transferring && !model.transferIsKnown {
-                    Text("No backup bytes measured yet. The elapsed clock is not transfer progress.")
+                    Text(model.collectionStartedAt == nil ? "No backup bytes measured yet."
+                         : "No backup bytes measured yet. The elapsed clock is not transfer progress.")
                         .foregroundStyle(Brand.muted)
                 }
                 if model.phase == .processing && model.processedBytes == 0 {
@@ -232,11 +223,6 @@ struct CollectionStatusPanel: View {
                     }
                 }
                 Text(nextAction).foregroundStyle(Brand.body)
-                if model.phase == .connecting || model.phase == .transferring || model.phase == .processing {
-                    Text("While you wait · \(waitingLines[reduceMotion ? 0 : max(0, elapsed / 12) % waitingLines.count])")
-                        .font(Brand.bodyFont(16))
-                        .foregroundStyle(Brand.muted)
-                }
                 Text("Temporary local bytes are not saved account records.")
                     .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
@@ -262,9 +248,21 @@ struct CollectionStatusPanel: View {
         .accessibilityLabel("Stage \(activeStage + 1) of \(stages.count): \(stages[activeStage])")
     }
 
+    @ViewBuilder private var stopActions: some View {
+        Button("Stop on this Mac") { model.disconnect() }
+            .buttonStyle(SecondaryButton()).frame(minHeight: 44)
+        if model.phoneRun != nil {
+            Button("Stop in account…") {
+                returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+            }
+            .buttonStyle(QuietAction())
+            .help("Open your account's Stop control. Opening the account does not stop this collection by itself.")
+        }
+    }
+
     private var activityHeading: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
-            Text("LOCAL PHONE PROCESS · \(activeStage + 1) OF \(stages.count)")
+            Text("ON THIS MAC · STAGE \(activeStage + 1) OF \(stages.count)")
                 .font(Brand.bodyFont(13).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
             Text(model.phase == .transferring && !model.transferIsKnown
                  ? "Waiting for the first received byte" : model.phase == .processing && model.processedBytes == 0
@@ -272,8 +270,25 @@ struct CollectionStatusPanel: View {
                 .font(Brand.headingFont(23)).foregroundStyle(Brand.heading)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
-            Text(model.statusDetail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+            Text(activityDetail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
         }
+    }
+
+    private var activityDetail: String {
+        switch model.phase {
+        case .connecting: return "Connect by USB, unlock your iPhone and tap Trust if asked."
+        case .transferring: return model.transferIsKnown
+            ? "Keep the cable connected. The backup is being read on this Mac."
+            : "Keep the cable connected while waiting for backup data from your iPhone."
+        case .processing: return "Reading available metadata and cleaning up temporary backup files."
+        default: return model.statusDetail
+        }
+    }
+
+    private func hasRecentMeasuredActivity(at now: Date) -> Bool {
+        guard model.phase == .transferring || model.phase == .processing,
+              let last = model.lastCollectionActivityAt else { return false }
+        return now.timeIntervalSince(last) < 30
     }
 
     private func elapsedClock(_ seconds: Int) -> some View {
@@ -309,10 +324,20 @@ struct CollectionStatusPanel: View {
             if model.needsStorageReview && !model.helperRunning {
                 Button("Check temporary data") { model.inspectResidue() }.buttonStyle(SecondaryButton())
             }
+            if model.phase == .completed {
+                // The report itself needs the account's course scope, so open the signed-in account page.
+                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+                    .buttonStyle(LimeButton())
+                Link("View report in your account", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
+                    .buttonStyle(QuietAction())
+            }
         } else if model.phase == .selecting || model.phase == .reviewing {
-            Button("Disconnect") { confirmingDiscard = true }.buttonStyle(SecondaryButton())
+            Button("Discard review…") { confirmingDiscard = true }.buttonStyle(SecondaryButton())
         } else if model.phase == .passwordRequired {
-            Button("Cancel collection") { model.disconnect() }.buttonStyle(SecondaryButton())
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Brand.Space.item) { stopActions }
+                VStack(alignment: .leading, spacing: Brand.Space.item) { stopActions }
+            }
         }
     }
 }

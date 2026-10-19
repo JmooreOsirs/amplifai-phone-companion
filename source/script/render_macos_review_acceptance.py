@@ -39,6 +39,7 @@ def main():
     sources = sorted(p for p in (package / "Sources").rglob("*.swift") if "App" not in p.parts)
     executable = contents / "MacOS/RenderAcceptance"
     subprocess.run(["swiftc", "-whole-module-optimization", "-parse-as-library", "-F", str(framework_dir), *map(str, sources),
+        str(package / "Tests/Fixtures/SimulatedPhoneRunServer.swift"),
         str(package / "Tests/Fixtures/RenderMacReviewAcceptance.swift"), "-Xlinker", "-rpath", "-Xlinker",
         "@executable_path/../Frameworks", "-o", str(executable)], check=True, timeout=300)
     subprocess.run([str(executable), str(output), *(args.states or [])], check=True, timeout=600)

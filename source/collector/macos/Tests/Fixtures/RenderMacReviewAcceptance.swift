@@ -11,17 +11,34 @@ struct RenderMacReviewAcceptance {
         NSApplication.shared.setActivationPolicy(.prohibited)
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change"]
-        let allStates = ["main", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["setup", "consent", "password", "error", "completed", "no-selection", "unavailable", "connecting", "transferring", "processing", "completing", "cancelling"]
+        let shareStates = ["bind-uncertain", "bind-refused", "expired"]
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry", "adoption-retry", "adoption-checking", "adoption-recovered"] + shareStates
+        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
+        let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
+        let setupStates = ["setup"] + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
         guard !states.isEmpty, states.allSatisfy({ allStates.contains($0) }) else { throw CocoaError(.validationMissingMandatoryProperty) }
         for state in states {
             var commands: [Data] = []
-            let model = CollectorModel(commandWriter: { commands.append($0) })
+            let server = SimulatedPhoneRunServer()
+            let model = CollectorModel(commandWriter: { commands.append($0) },
+                                       runAuthority: PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate))
             let updater = CompanionUpdater(bundleInformation: [:])
             let start = Date()
-            if !["setup", "consent", "password", "error", "completed", "connecting", "transferring", "processing", "completing", "cancelling"].contains(state) {
+            func admit() throws {
+                let run = server.createRun(email: "synthetic.owner@example.invalid", course: "SYNTHETIC review course")
+                guard let link = PhoneRunLink(url: server.appLink(run)) else { throw FixtureError.unexpectedState("link") }
+                model.admitRunLink(PendingRunLink(link: link, returnBrowserBundleID: nil))
+            }
+            if !setupStates.contains(state) {
+                // A synthetic run, started on the simulated helper wire.
+                try admit()
+                guard model.startCollection() else { throw FixtureError.unexpectedState("\(state): start") }
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+                guard model.startCollectionWithAvailableData() else { throw FixtureError.unexpectedState("\(state): explicit available-data choice") }
                 let names = ["Priya Natarajan", "Marcus Bell", "Elena Fischer", "Sam Okafor", "Dana Whitfield", "Lin Zhao", "Omar Haddad", "Noor Khalil", "Grace Liu", "Tomás Rivera", "Aisha Bello", "Ruth Abara"]
                 let total = 5501
                 let rows: [[String: Any]] = (1...total).map { id in
@@ -40,6 +57,7 @@ struct RenderMacReviewAcceptance {
                                  "totalContacts": total, "nextCursor": end == total ? NSNull() : end, "contacts": Array(rows[cursor..<end])])
                 }
                 model.phase = .selecting
+                if state == "all-selected" { model.selectAllVerifiedContacts() }
                 if state == "all-exceptions" { model.showContactGroup(.all); model.selectAllVerifiedContacts(); model.toggle(7); model.toggle(total) }
                 if state == "review" { model.showContactGroup(.review) }
                 if state == "last-page" { model.showContactGroup(.all); for _ in 0..<27 { model.nextWorkspacePage() } }
@@ -78,33 +96,75 @@ struct RenderMacReviewAcceptance {
                               model.selectedIDs == Set(selected), model.handoffID.isEmpty else {
                             throw FixtureError.unexpectedState("\(state): exact local review was not accepted")
                         }
-                        if state != "local-review" {
-                            let handoffID = "00000000-0000-4000-8000-0000000000aa"
-                            let intentID = "00000000-0000-4000-8000-0000000000bb"
+                        let handoffID = "00000000-0000-4000-8000-0000000000aa"
+                        let pairing: [String: Any] = ["kind": "pairing", "pairCode": "1234567890", "port": 48751,
+                                                      "expiresInSeconds": 300, "handoffId": handoffID,
+                                                      "payloadSha256": String(repeating: "ab", count: 32)]
+                        if state == "link-failed" {
+                            // Automatic account link failure keeps the review and names the recovery action.
                             model.pairBrowser(automaticAccountNavigation: false)
-                            try receive(["kind": "pairing", "pairCode": "1234567890", "port": 48751,
-                                         "expiresInSeconds": 300, "handoffId": handoffID])
-                            try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
-                                         "intentId": intentID, "email": "synthetic@example.invalid", "course": "Synthetic review"])
-                            try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
-                                         "intentId": intentID])
-                            try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
-                            guard model.handoffID == handoffID, model.destinationApproved, model.browserReceived,
-                                  !model.canEditWorkspace, !model.handoffAcknowledged else {
-                                throw FixtureError.unexpectedState("\(state): synthetic handoff did not lock the review")
+                            var invalid = pairing
+                            invalid["pairCode"] = "invalid"
+                            try receive(invalid)
+                            guard model.errorMessage.contains("Continue"), model.accountNavigationID == nil else {
+                                throw FixtureError.unexpectedState("link-failed: recovery copy missing")
+                            }
+                        }
+                        if state == "bind-uncertain" { server.faultsByPath[PhoneRunContract.bindPath] = [.malformed, .malformed, .malformed] }
+                        if state == "bind-refused" { server.faultsByPath[PhoneRunContract.bindPath] = [.status(409)] }
+                        if state != "local-review" && state != "link-failed" {
+                            model.pairBrowser(automaticAccountNavigation: false)
+                            try receive(pairing)
+                            if ["handoff", "save-receipt", "expired", "verify-uncertain", "finish-retry"].contains(state) {
+                                guard model.handoffBound, !model.canEditWorkspace, !model.handoffAcknowledged else {
+                                    throw FixtureError.unexpectedState("\(state): synthetic handoff did not bind")
+                                }
+                                if state == "verify-uncertain" { server.faultsByPath[PhoneRunContract.verifyIntentPath] = [.malformed, .malformed, .malformed] }
+                                try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
+                                             "intentId": "00000000-0000-4000-8000-0000000000bb",
+                                             "email": "synthetic.owner@example.invalid", "course": "SYNTHETIC review course"])
+                                if state != "verify-uncertain" {
+                                    try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
+                                                 "intentId": "00000000-0000-4000-8000-0000000000bb"])
+                                } else if !model.canRetryDestinationVerification {
+                                    throw FixtureError.unexpectedState("verify-uncertain: exact retry not available")
+                                }
                             }
                             if state == "save-receipt" {
+                                try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
                                 try receive(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
-                                guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged,
-                                      !model.canRequestSelectionChange else {
+                                guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged else {
                                     throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
                                 }
                             }
-                            if state == "selection-change" {
-                                model.requestSelectionChange()
-                                guard model.selectionChangePending, !model.canEditWorkspace,
-                                      model.handoffID == handoffID, model.selectedIDs == Set(selected) else {
-                                    throw FixtureError.unexpectedState("Selection change must await helper revocation")
+                            if state == "finish-retry" {
+                                try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
+                                for _ in 0..<3 {
+                                    try receive(["kind": "handoff", "state": "saved", "handoffId": handoffID])
+                                    try receive(["kind": "error", "code": "handoff_unconfirmed"])
+                                }
+                                try receive(["kind": "handoff", "state": "saved", "handoffId": handoffID])
+                                guard model.canRetryAccountCompletion else { throw FixtureError.unexpectedState("finish-retry: exact receipt retry unavailable") }
+                            }
+                            if state == "expired" { try receive(["kind": "handoff", "state": "expired", "handoffId": handoffID]) }
+                            if state.hasPrefix("adoption-") {
+                                guard let original = model.phoneRun else { throw FixtureError.unexpectedState("adoption: missing run") }
+                                server.replace(original.runID, course: "SYNTHETIC updated course", categories: ["contacts"])
+                                server.faultsByPath[PhoneRunContract.bindPath] = [.loseReply, .malformed, .dropRequest]
+                                model.refreshRunStatus()
+                                guard model.canRetryApprovalAdoption, model.phoneRun?.claim == original.claim else {
+                                    throw FixtureError.unexpectedState("adoption: retained exact approval before retry")
+                                }
+                                if state == "adoption-checking" {
+                                    server.holdReplies = true
+                                    model.retryApprovalAdoption()
+                                    guard model.approvalAdoptionPending else { throw FixtureError.unexpectedState("adoption: checking") }
+                                } else if state == "adoption-recovered" {
+                                    model.retryApprovalAdoption()
+                                    guard model.runStatus == .current, model.phoneRun?.categories == ["contacts"],
+                                          model.handoffID == handoffID, model.selectedIDs == Set(selected) else {
+                                        throw FixtureError.unexpectedState("adoption: same-handoff recovery")
+                                    }
                                 }
                             }
                         }
@@ -115,26 +175,86 @@ struct RenderMacReviewAcceptance {
             else if state == "completed" { model.phase = .completed }
             else if state == "connecting" { model.phase = .connecting }
             else if state == "transferring" { model.phase = .transferring }
+            else if state == "transferring-progress" {
+                model.phase = .connecting
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"progress","value":42}"#.utf8)))
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"transfer","stage":"backup","receivedBytes":2147483648,"retainedBytes":402653184,"discardedBytes":1744830464,"filesReceived":812,"bytesPerSecond":31457280,"elapsedSeconds":68}"#.utf8)))
+            }
+            else if state == "run-claiming" {
+                server.holdReplies = true
+                try admit()
+            }
+            else if state == "run-uncertain" {
+                server.faults = [.dropRequest, .dropRequest, .dropRequest]
+                try admit()
+            }
+            else if state == "run-refused" {
+                server.faults = [.status(409)]
+                try admit()
+            }
+            else if state == "run-approved" || guideStates.contains(state) { try admit() }
+            else if state.hasPrefix("status-") {
+                try admit()
+                guard let runID = model.phoneRun?.runID else { throw FixtureError.unexpectedState("status: missing run") }
+                switch state {
+                case "status-uncertain": server.faultsByPath[PhoneRunContract.statusPath] = [.malformed, .malformed, .malformed]
+                case "status-expired": server.now = { Date().addingTimeInterval(13 * 60 * 60) }
+                case "status-revoked": server.revoke(runID)
+                default: server.changeApproval(runID)
+                }
+                model.refreshRunStatus()
+            }
+            else if state == "active-transfer" {
+                try admit()
+                guard model.startCollection() else { throw FixtureError.unexpectedState("active-transfer: check") }
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+                guard model.startCollectionWithAvailableData() else { throw FixtureError.unexpectedState("active-transfer: explicit start") }
+                model.phase = .transferring
+            }
+            else if state == "encryption-off" || state == "encryption-on" {
+                try admit()
+                model.checkBackupEncryptionStatus()
+                let event: [String: Any] = ["kind": "backup-encryption-status", "backupEncrypted": state == "encryption-on"]
+                model.receive(try AgentEvent.decode(JSONSerialization.data(withJSONObject: event)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+            }
+            else if state == "agree-checking" { try admit(); _ = model.startCollection() }
+            else if state == "agree-unknown" {
+                try admit()
+                _ = model.startCollection()
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"error","code":"phone_connection"}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 1)
+            }
             else if state == "processing" { model.phase = .processing }
             else if state == "completing" { model.phase = .completing }
             else if state == "cancelling" { model.phase = .cancelling }
-            guard model.accountNavigationID == nil, !model.helperRunning else {
+            guard model.accountNavigationID == nil, !model.helperRunning,
+                  model.operationID == nil || ["connecting", "agree-checking", "active-transfer"].contains(state) || !setupStates.contains(state) else {
                 throw FixtureError.unexpectedState("Fixture must not request account navigation or start the helper")
             }
             stateEvidence[state] = ["phase": String(describing: model.phase), "reviewPending": model.reviewPending,
                 "selectionNeedsReview": model.selectionNeedsReview, "canEditWorkspace": model.canEditWorkspace,
                 "handoffPresent": !model.handoffID.isEmpty, "browserReceived": model.browserReceived,
+                "runApproval": String(describing: model.runApproval), "runBinding": String(describing: model.runBinding),
+                "runStatus": String(describing: model.runStatus),
+                "approvalAdoptionPending": model.approvalAdoptionPending,
+                "canRetryApprovalAdoption": model.canRetryApprovalAdoption,
+                "approvedToSave": model.phoneRun.map { CollectorModel.approvedToSaveLabel($0.categories) } ?? "",
                 "saveReceiptPending": model.accountSaveAwaitingBrowserReceipt,
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
             timings[state] = Date().timeIntervalSince(start)
             for (width, height) in viewports {
-                if state == "consent" {
-                    guard model.beginBackupEncryptionStatusCheck() else { throw FixtureError.unexpectedState("Synthetic setting check did not begin") }
-                    model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                if let guideStep = guideStates.firstIndex(of: state) {
+                    try render(ScrollView {
+                        FinderEncryptionGuide(model: model, initialStep: guideStep, onClose: {})
+                            .panel().frame(maxWidth: 880).padding(28)
+                    }.background(Brand.background).tint(Brand.lime), width: width, height: height,
+                               path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
+                } else {
+                    try render(ContentView(model: model, updater: updater), width: width, height: height,
+                               path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 }
-                try render(ContentView(model: model, updater: updater,
-                           initialCollectionPreparation: state == "consent" ? .continueWithoutConfirmedCoverage : nil), width: width, height: height,
-                           path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
                     try render(ContactReviewView(model: model, workspace: workspace, wellHeight: 322,
                                search: .constant(workspace.query), showingGroupTools: .constant(state == "review"), confirmingBulkMove: .constant(false))
@@ -146,11 +266,28 @@ struct RenderMacReviewAcceptance {
                 try render(ContentView(model: model, updater: updater), width: 1440, height: 2400,
                            path: output.appendingPathComponent("mac-\(state)-overview-1440x2400.png"))
             }
+            if ["setup", "run-approved", "agree-unknown", "completed", "error", "expired", "link-failed"].contains(state) {
+                try render(ContentView(model: model, updater: updater),
+                           width: 1180, height: 1500, path: output.appendingPathComponent("mac-\(state)-tall-1180x1500.png"))
+            }
         }
         let receipt: [String: Any] = ["renderer": "offscreen NSHostingView bitmap of production views", "contacts": 5501,
             "viewports": viewports.map { [$0.0, $0.1] }, "states": states, "fixturePreparationSeconds": timings,
             "stateEvidence": stateEvidence,
             "font": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
+            "resolvedNativeStyle": [
+                "bodyFont": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
+                "headingFont": NSFont(name: "Arial-BoldMT", size: 28)?.fontName ?? "missing",
+                "bodySize": 16, "headingSize": 28, "pagePadding": Brand.Space.page,
+                "itemGap": Brand.Space.item, "sectionGap": Brand.Space.section,
+                "controlRadius": Brand.Radius.control, "panelRadius": Brand.Radius.panel,
+                "contactMinimum": Brand.Layout.contactMinimum,
+                "backgroundSRGB": rgb(Brand.background), "panelSRGB": rgb(Brand.panel),
+                "headingSRGB": rgb(Brand.heading), "bodySRGB": rgb(Brand.body),
+                "mutedSRGB": rgb(Brand.muted), "limeSRGB": rgb(Brand.lime), "blueSRGB": rgb(Brand.blue)
+            ],
+            "guideSymbolsAvailable": ["iphone.gen3", "cable.connector.horizontal", "laptopcomputer", "lock.iphone"]
+                .allSatisfy { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil },
             "screenCaptured": false, "windowCreated": false, "appActivated": false,
             "collectorStarted": false, "ownerWorkspaceRead": false, "updateControllerStarted": false]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
@@ -158,9 +295,21 @@ struct RenderMacReviewAcceptance {
         print("Rendered synthetic Mac states without a window, collection or account action")
     }
 
+    private static func rgb(_ color: Color) -> [Double] {
+        let resolved = NSColor(color).usingColorSpace(.sRGB)!
+        return [resolved.redComponent, resolved.greenComponent, resolved.blueComponent].map { Double($0) }
+    }
+
     private static func render<V: View>(_ view: V, width: Int, height: Int, path: URL) throws {
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark)
-            .frame(width: CGFloat(width), height: CGFloat(height)))
+            .frame(width: CGFloat(width), height: CGFloat(height))
+            .overlay(alignment: .bottomLeading) {
+                // Every image is labeled so a synthetic state cannot be mistaken for a real device or account.
+                Text("SYNTHETIC FIXTURE · no iPhone, helper or account")
+                    .font(.system(size: 11, weight: .bold)).foregroundStyle(.black)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.yellow, in: Capsule()).padding(8)
+            })
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { throw CocoaError(.coderInvalidValue) }

@@ -88,7 +88,8 @@ enum SourceDiagnosticChecks {
     }
     private static func historyRemainsSeparate() throws {
         let attempt: [String: Any] = ["attemptId": "12345678-1234-4123-8123-123456789abc", "createdAt": 1_800_000_000, "sourceDiagnostics": [record()]]
-        let model = CollectorModel(commandWriter: { _ in })
+        let server = SimulatedPhoneRunServer()
+        let model = CollectorModel(commandWriter: { _ in }, runAuthority: PhoneRunFlowChecks.client(server))
         model.receive(try event(["kind": "residue", "sessions": [], "sourceDiagnosticHistory": [attempt]]))
         try require(model.sourceDiagnosticHistory.count == 1 && model.currentSourceDiagnostics.isEmpty, "Restored diagnostics must be history only")
         model.receive(try event(capture([], missing: [])))
@@ -99,11 +100,13 @@ enum SourceDiagnosticChecks {
         model.receive(try event(selected))
         model.phase = .idle
         try require(!model.currentSourceDiagnostics.isEmpty, "Reset fixture must contain current failure evidence")
-        try require(model.beginBackupEncryptionStatusCheck(), "New collection setup must be available in fixture")
-        model.receive(try event(["kind": "backup-encryption-status", "backupEncrypted": false]))
-        try require(model.approveLocalCollection(for: model.collectionApprovalRunID, checked: true, callHistoryPreparation: .continueWithoutConfirmedCoverage), "Fixture approval must bind the new run")
-        model.connect() // This CLI fixture has no bundled helper; no process can start.
-        try require(!model.helperRunning && model.operationID == nil && model.currentSourceDiagnostics.isEmpty && model.sourceDiagnosticHistory.count == 1, "New run clears only current facts and cannot launch from this fixture")
+        try require(model.admitRunLink(PhoneRunFlowChecks.link(server, server.createRun())), "A new run link is admitted when idle")
+        try require(model.startCollection(), "New collection setup must be available in fixture")
+        model.receive(try event(["kind": "backup-encryption-status", "backupEncrypted": true]))
+        model.finished(mode: "backup-encryption-status", code: 0)
+        // The simulated helper wire records the launch; no process can start in this fixture.
+        try require(!model.helperRunning && model.phase == .connecting && model.currentSourceDiagnostics.isEmpty &&
+                    model.sourceDiagnosticHistory.count == 1, "New run clears only current facts")
         var invalid = attempt; invalid["attemptId"] = "12345678-1234-1123-8123-123456789abc"
         try rejected(["kind": "residue", "sourceDiagnosticHistory": [invalid]], "History identity must be canonical UUIDv4")
         invalid = attempt; invalid["createdAt"] = true

@@ -9,7 +9,45 @@ final class CollectorModel: ObservableObject {
     private let reviewPageSize = 1000
     private let maxContactQueryLength = 120
     private static let maxHelperCommandBytes = 600_000
-    static let collectionDisclosureVersion = "native-local-collection-v4"
+    /// The native per-run local collection approval, now composed only from a verified server run approval.
+    /// Earlier local-only versions (native-local-collection-v5 and before) never authorize a collection here.
+    static let collectionDisclosureVersion = "native-run-v1"
+    /// The only account origin the app opens (the helper bridge's ACCOUNT_ORIGIN).
+    static let accountOrigin = "https://amplifai.satoris.ai"
+    /// Timing, kept distinct (server values are enforced by the server; the app only stays truthful about them):
+    /// - start-key bootstrap: one use, 10 minutes after the website issues it (the website's approval window is 1 hour);
+    /// - Start deadline: status returns the original ten-minute deadline; status/replay never renew it;
+    /// - durable run: 12 hours after the claim, covering a long collection, review and bind;
+    /// - initial helper bridge: 5 minutes from `pair` (after review and Continue) to browser release;
+    /// - website connect intent: 5 minutes from creation to consume;
+    /// - active paged transfer: 2 hours without activity, refreshed by every page, keepalive and acknowledgement.
+    nonisolated static let runStartWindow: TimeInterval = 10 * 60
+    static var accountStartURL: URL { URL(string: accountOrigin + "/phone/account")! }
+    static func accountContinueURL(enrollmentID: String) -> URL? {
+        guard PhoneRunContract.isID(enrollmentID) else { return nil }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "amplifai.satoris.ai"
+        components.path = "/phone/account"
+        components.queryItems = [URLQueryItem(name: "continue", value: "reviewed"),
+                                 URLQueryItem(name: "enrollmentId", value: enrollmentID),
+                                 URLQueryItem(name: "week", value: "phone")]
+        return components.url
+    }
+    static let runRefusedMessage = "This approval can no longer start a collection. Nothing was collected. Approve again in your AMPLIFai account."
+    static let runUncertainMessage = "Your approval could not be checked with AMPLIFai. Nothing was collected. Try again, or approve again in your AMPLIFai account."
+    static let runExpiredMessage = "This approval has expired. Nothing was collected. Approve again in your AMPLIFai account."
+    static let bindRefusedMessage = "Your AMPLIFai account did not accept this collection for saving. Nothing was sent. To try again, start a new collection from your AMPLIFai account."
+    /// One bounded message for both helper expiries: the five-minute unclaimed pairing and the post-release
+    /// two-hour transfer deadline (after which some sources may already be saved in the account).
+    static let transferExpiredMessage = "This connection expired. Nothing more can be sent from this collection. Check your account for any sources already saved. Starting again needs a new collection."
+    static let bindUncertainMessage = "Your AMPLIFai account has not confirmed this collection yet. Nothing was sent. Try again."
+    static let missingRunMessage = "This collection has no approval from your AMPLIFai account. Nothing was sent. To try again, start a new collection from your AMPLIFai account."
+    /// Link and navigation problems that a matching browser receipt for the same handoff makes obsolete.
+    static let navigationFailedMessage = "The account page did not open automatically. Your review is kept on this Mac. Choose Continue in browser."
+    static let bridgeUnavailableMessage = "Local browser pairing could not start. Keep the review here or try again. The previous one-use link may no longer work."
+    static let handoffUnconfirmedMessage = "The browser has not confirmed this account save. Your local review remains available."
+    private static let handoffScopedMessages: Set<String> = [navigationFailedMessage, bridgeUnavailableMessage, handoffUnconfirmedMessage]
     private static let localCollectionScopes = ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"]
     enum CallHistoryPreparation: Equatable {
         case confirmedEncryptedBackup
@@ -24,20 +62,49 @@ final class CollectorModel: ObservableObject {
         let approvedAt: Date
         let scopes: [String]
         let callHistoryPreparation: CallHistoryPreparation
+        /// The verified server run this local approval was composed from, and its disclosure.
+        let serverRunID: String
+        let serverApprovalID: String
+        let serverDisclosureVersion: String
+    }
+    /// The verified server run approval for this one collection. The capability is generated here and kept.
+    struct PhoneRun: Equatable {
+        let runID: String
+        let capability: String
+        /// The exact prepared claim retained for uncertain claim recovery; status revalidates before Start.
+        let claimRequest: PhoneRunClaimRequest
+        var claim: PhoneRunClaim
+        let returnBrowserBundleID: String?
+        /// The course and categories the run saves to now; a replacement approval may update them, never the
+        /// account or enrollment.
+        var course: String
+        var categories: [String]
+        /// When this app first sent the claim (conservative: never later than the server's claim time).
+        let claimedAt: Date
+        var collectionStarted = false
+        var boundHandoffID: String?
+        var boundPayloadSha256: String?
+
+        /// Status supplies the original Start deadline. Legacy claim responses use a conservative local fallback.
+        var startDeadline: Date { claim.startExpiresAt ?? claimedAt.addingTimeInterval(CollectorModel.runStartWindow) }
+        var email: String { claim.email }
+        var enrollmentID: String { claim.enrollmentID }
+    }
+    enum RunApproval: Equatable { case none, claiming, uncertain, refused, approved }
+    enum RunBinding: Equatable { case none, binding, bound, uncertain, refused }
+    enum RunStatus: Equatable { case unchecked, checking, current, uncertain, replacementRequired, expired, revoked }
+    /// Revalidation of the run immediately before the helper launches.
+    enum StartConfirmation: Equatable { case none, confirming, uncertain }
+    struct AccountNavigation: Equatable {
+        let id: UUID
+        let url: URL
+        let handoffID: String
     }
     enum Phase: Equatable {
         case idle, connecting, transferring, passwordRequired, processing
         case selecting, reviewing, completing, completed, cancelling, error
     }
     enum DiagnosticDelivery: Equatable { case idle, sending, sent, failed }
-    struct DestinationApprovalRequest: Equatable {
-        let handoffID: String
-        let intentID: String
-        let email: String
-        let course: String
-
-        var attentionID: String { "\(handoffID):\(intentID)" }
-    }
 
     @Published var phase: Phase = .idle
     @Published var progress = 0.0
@@ -62,14 +129,73 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var errorElapsedSeconds = 0
     @Published private(set) var handoffID = ""
     @Published private(set) var handoffAcknowledged = false
+    private var finishAttemptCount = 0
+    @Published private(set) var completionNeedsRetry = false
+    private static let maximumFinishAttempts = 3
     @Published private(set) var destinationIntentID = ""
     @Published private(set) var destinationEmail = ""
     @Published private(set) var destinationCourse = ""
     @Published private(set) var destinationApproved = false
+    /// The automatic decision sent for the current intent (true = approve after an exact verified match,
+    /// false = deny after a refusal or mismatch), awaiting the helper's answer. Never sent twice for one intent.
+    @Published private(set) var submittedDestinationDecision: Bool?
+    var destinationDecisionPending: Bool { submittedDestinationDecision != nil }
+    /// The intent this app approved after verification, kept so a matching receipt can reconcile a lost answer.
+    private var approvedDestinationIntentID = ""
+    /// Only definitive outcomes close an intent. Transport uncertainty retains the exact prepared request.
+    private var verifiedDestinationIntentIDs: Set<String> = []
+    private var pendingVerify: PhoneRunVerifyRequest?
+    private var verifyAttemptCount = 0
+    private var verifyRetryAfter = Date.distantPast
+    private var verifyDeadline = Date.distantPast
+    private static let maximumVerifyRounds = 3
+    @Published private(set) var destinationVerificationPending = false
+    /// Verification stayed uncertain after exact retries. It remains undecided and can be reconciled safely.
+    @Published private(set) var destinationVerificationUncertain = false
     @Published private(set) var browserReceived = false
     @Published private(set) var accountSaveAwaitingBrowserReceipt = false
     private var closedDestinationIntentIDs: Set<String> = []
-    @Published private(set) var accountNavigationID: UUID?
+    @Published private(set) var accountNavigation: AccountNavigation?
+    var accountNavigationID: UUID? { accountNavigation?.id }
+    /// The one-approval run. A collection starts only from a verified, current, unstarted run.
+    @Published private(set) var phoneRun: PhoneRun?
+    @Published private(set) var runApproval: RunApproval = .none
+    @Published private(set) var runApprovalMessage = ""
+    @Published private(set) var runBinding: RunBinding = .none
+    @Published private(set) var runStatus: RunStatus = .unchecked
+    @Published private(set) var runStatusMessage = ""
+    private var runStatusToken: UUID?
+    private var lastBridgeAuthority: String?
+    private var runStatusPollTask: Task<Void, Never>?
+    var runStatusPollNanoseconds: UInt64 = 30_000_000_000
+    @Published private(set) var startConfirmation: StartConfirmation = .none
+    private var startConfirmationToken: UUID?
+    private var startPreparation: CallHistoryPreparation?
+    private var pendingClaim: PhoneRunClaimRequest?
+    private var pendingClaimBrowser: String?
+    /// A different link that arrived while an approved run waits for Start: claimed with its own capability while
+    /// the current grant stays in place, and it replaces the grant only if its claim succeeds.
+    private var candidateClaim: PhoneRunClaimRequest?
+    private var candidateClaimBrowser: String?
+    private var candidateClaimStartedAt = Date.distantPast
+    /// The candidate's claim was not confirmed; its exact request is kept for an identical retry.
+    @Published private(set) var candidateUncertain = false
+    @Published private(set) var candidateNotice = ""
+    private var pendingClaimStartedAt = Date.distantPast
+    private var pendingBind: PhoneRunBindRequest?
+    private var pendingAdoption: PhoneRunBindRequest?
+    @Published private(set) var approvalAdoptionPending = false
+    private var pairingPayloadSha256 = ""
+    private var startAfterSettingCheck = false
+    private let runAuthority: RunAuthority?
+    /// Clock seam for checks; the server remains the authority for every expiry.
+    var now: () -> Date = Date.init
+    /// Handoff status polling interval; checks shorten it.
+    var handoffPollNanoseconds: UInt64 = 2_000_000_000
+    /// Test seam: every helper event, in order, after it is applied.
+    var eventObserver: ((AgentEvent) -> Void)?
+    @Published private(set) var startupChecksFinished: Bool
+    var onReadyForRunLinks: (() -> Void)?
     @Published private(set) var selectionNeedsReview = true
     @Published var password = ""
     @Published var contacts: [ContactPreview] = []
@@ -184,8 +310,13 @@ final class CollectorModel: ObservableObject {
     private var attemptedDiagnosticCode: String?
     private var backupProgressSamples: [(date: Date, percent: Double)] = []
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
-    init(commandWriter: ((Data) -> Void)? = nil, bundleInformation: [String: Any]? = Bundle.main.infoDictionary) {
+    /// Without a `runAuthority` no approval can be claimed, bound or verified, so nothing can be collected or
+    /// sent; the production app passes `PhoneRunAuthorityClient.production()`. Checks never reach the network.
+    init(commandWriter: ((Data) -> Void)? = nil, bundleInformation: [String: Any]? = Bundle.main.infoDictionary,
+         runAuthority: RunAuthority? = nil, awaitsStartupInspection: Bool = false) {
         self.commandWriter = commandWriter
+        self.runAuthority = runAuthority
+        startupChecksFinished = !awaitsStartupInspection
         diagnosticBuild = SupportDiagnosticReporter.validatedBuild(bundleInformation)
     }
 
@@ -202,27 +333,487 @@ final class CollectorModel: ObservableObject {
         if companionStatus != status { companionStatus = status }
     }
 
+    /// A verified run for this collection that has not started and has not expired.
+    var hasStartableRun: Bool { runStartWindowOpen(at: now()) }
+
+    /// Before Start, a run is startable only inside its original ten-minute Start window; once collection has
+    /// started, the run stays valid for its 12 hours.
+    func runStartWindowOpen(at date: Date) -> Bool {
+        guard runApproval == .approved, let run = phoneRun else { return false }
+        return !run.collectionStarted && date < run.startDeadline && date < run.claim.expiresAt
+    }
+
+    /// The Start window passed without Start: show the approve-again state instead of a Start that would fail.
+    func refreshRunStartWindow() {
+        guard runApproval == .approved, let run = phoneRun, !run.collectionStarted, !helperRunning,
+              startConfirmation != .confirming, candidateClaim == nil,
+              !startAfterSettingCheck, !hasStartableRun else { return }
+        declineLocalCollection()
+        refuseRun(Self.runRefusedMessage)
+    }
+
     private var hasCurrentCollectionApproval: Bool {
-        guard let approval = localCollectionApproval else { return false }
+        guard let approval = localCollectionApproval, hasStartableRun, runStatus == .current, let run = phoneRun else { return false }
         return approval.runID == collectionApprovalRunID &&
-            approval.disclosureVersion == Self.collectionDisclosureVersion && approval.scopes == Self.localCollectionScopes
+            approval.disclosureVersion == Self.collectionDisclosureVersion && approval.scopes == Self.localCollectionScopes &&
+            approval.serverRunID == run.runID && approval.serverApprovalID == run.claim.approvalID &&
+            approval.serverDisclosureVersion == run.claim.disclosureVersion &&
+            PhoneRunContract.supportedDisclosureVersions.contains(run.claim.disclosureVersion)
     }
 
     var canConnect: Bool { canPrepareCollection && hasCurrentCollectionApproval }
 
+    /// Composes this run's local collection approval from the verified server run. There is no local consent
+    /// control: the owner's one agreement was given in the account. Nothing old is reused, and the approval is
+    /// consumed at launch, so it never authorizes a later collection.
     @discardableResult
-    func approveLocalCollection(for runID: UUID, checked: Bool, callHistoryPreparation: CallHistoryPreparation?) -> Bool {
-        guard canPrepareCollection, runID == collectionApprovalRunID else { return false }
-        guard checked else { declineLocalCollection(); return false }
-        guard let callHistoryPreparation else { return false }
-        guard backupEncryptionStatus != .notChecked, backupEncryptionStatus != .checking else { return false }
+    func composeRunCollectionApproval(callHistoryPreparation: CallHistoryPreparation) -> Bool {
+        guard canPrepareCollection, hasStartableRun, runStatus == .current, candidateClaim == nil, let run = phoneRun,
+              PhoneRunContract.supportedDisclosureVersions.contains(run.claim.disclosureVersion),
+              backupEncryptionStatus != .notChecked, backupEncryptionStatus != .checking else { return false }
         if callHistoryPreparation == .confirmedEncryptedBackup && backupEncryptionStatus != .encrypted { return false }
         localCollectionApproval = LocalCollectionApproval(
-            runID: runID, disclosureVersion: Self.collectionDisclosureVersion,
-            approvedAt: Date(), scopes: Self.localCollectionScopes,
-            callHistoryPreparation: callHistoryPreparation
+            runID: collectionApprovalRunID, disclosureVersion: Self.collectionDisclosureVersion,
+            approvedAt: now(), scopes: Self.localCollectionScopes,
+            callHistoryPreparation: callHistoryPreparation,
+            serverRunID: run.runID, serverApprovalID: run.claim.approvalID,
+            serverDisclosureVersion: run.claim.disclosureVersion
         )
         return true
+    }
+
+    // MARK: One-approval run
+
+    /// Start-up checks (the first temporary-data inspection) have finished, so a buffered link may be applied.
+    var readyForRunLinks: Bool { startupChecksFinished }
+
+    /// A link is admitted only when nothing is running or in progress: no helper process, no collection,
+    /// no review or handoff, and no claim in flight. A verified run that has not started may be replaced.
+    var admitsRunLink: Bool {
+        readyForRunLinks && runAuthority != nil && !helperRunning && process == nil && runApproval != .claiming &&
+            !updateInstallationInProgress && !hasUnsavedReview && handoffID.isEmpty && !pairingRequested &&
+            phoneRun?.collectionStarted != true && localCollectionApproval == nil && !startAfterSettingCheck &&
+            startConfirmation != .confirming && candidateClaim == nil &&
+            (phase == .idle || phase == .error || phase == .completed)
+    }
+
+    private func completeStartupChecks() {
+        guard !startupChecksFinished else { return }
+        startupChecksFinished = true
+        onReadyForRunLinks?()
+    }
+
+    /// Redeems the link's one-use bootstrap with a fresh capability this app generates and keeps.
+    @discardableResult
+    func admitRunLink(_ item: PendingRunLink) -> Bool {
+        guard admitsRunLink, let authority = runAuthority else { return false }
+        // The same link again (the owner opened the app twice) is a duplicate: the grant, its capability and
+        // any prepared claim stay exactly as they are.
+        if let run = phoneRun, run.runID == item.link.runID, run.claimRequest.bootstrap == item.link.bootstrap { return false }
+        if let pending = pendingClaim, pending.runID == item.link.runID, pending.bootstrap == item.link.bootstrap { return false }
+        var capability = PhoneRunContract.newCapability()
+        if capability == item.link.bootstrap { capability = PhoneRunContract.newCapability() }
+        guard let capability, let request = PhoneRunClaimRequest(runID: item.link.runID, bootstrap: item.link.bootstrap,
+                                                                 capability: capability) else { return false }
+        if runApproval == .approved, let run = phoneRun, !run.collectionStarted {
+            candidateClaim = request
+            candidateClaimBrowser = item.returnBrowserBundleID
+            candidateClaimStartedAt = now()
+            candidateUncertain = false
+            candidateNotice = ""
+            claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.candidateClaimFinished(request, outcome) }
+            return true
+        }
+        endPhoneRun()
+        if phase == .completed || phase == .error { errorMessage = ""; phase = .idle }
+        pendingClaim = request
+        pendingClaimBrowser = item.returnBrowserBundleID
+        pendingClaimStartedAt = now()
+        runApproval = .claiming
+        claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.claimFinished(request, outcome) }
+        return true
+    }
+
+    /// Try again after an uncertain claim: the identical request body, the same capability.
+    func retryRunClaim() {
+        guard runApproval == .uncertain, let request = pendingClaim, let authority = runAuthority else { return }
+        runApproval = .claiming
+        runApprovalMessage = ""
+        claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.claimFinished(request, outcome) }
+    }
+
+    /// A committed v1 claim may outlive its direct ten-minute readback window. Only the same already-bound
+    /// capability can recover it through status; a new capability never recovers or extends the approval.
+    private func claimWithRecovery(_ request: PhoneRunClaimRequest, authority: RunAuthority,
+                                   completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void) {
+        authority.claim(request) { outcome in
+            guard case .refused(status: 409, code: _) = outcome,
+                  let statusRequest = PhoneRunStatusRequest(runID: request.runID, capability: request.capability) else {
+                completion(outcome)
+                return
+            }
+            authority.status(statusRequest) { statusOutcome in
+                switch statusOutcome {
+                case .accepted(let status) where status.state == .current: completion(.accepted(status.claim))
+                case .accepted, .refused: completion(.refused(status: 409, code: "phone_run_changed"))
+                case .uncertain: completion(.uncertain)
+                case .malformed: completion(.malformed)
+                }
+            }
+        }
+    }
+
+    private func claimFinished(_ request: PhoneRunClaimRequest, _ outcome: PhoneRunOutcome<PhoneRunClaim>) {
+        guard pendingClaim == request, runApproval == .claiming else { return }
+        switch outcome {
+        case .accepted(let claim):
+            guard claimIsCurrent(claim) else {
+                refuseRun(Self.runRefusedMessage)
+                return
+            }
+            runStatusToken = nil
+            runStatus = .unchecked
+            runStatusMessage = ""
+            phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
+                                returnBrowserBundleID: pendingClaimBrowser, course: claim.course,
+                                categories: claim.categories, claimedAt: pendingClaimStartedAt)
+            pendingClaim = nil
+            runApprovalMessage = ""
+            runApproval = .approved
+            declineLocalCollection()
+        case .refused:
+            refuseRun(Self.runRefusedMessage)
+        case .uncertain, .malformed:
+            // An unreadable success can follow a committed one-use claim: keep the exact prepared request
+            // (same run, bootstrap and capability bytes) so Try again reads the same claim back.
+            runApproval = .uncertain
+            runApprovalMessage = Self.runUncertainMessage
+        }
+    }
+
+    private func claimIsCurrent(_ claim: PhoneRunClaim) -> Bool {
+        PhoneRunContract.supportedDisclosureVersions.contains(claim.disclosureVersion) && claim.expiresAt > now() &&
+            claim.expiresAt <= now().addingTimeInterval(PhoneRunContract.runLifetime + 3600)
+    }
+
+    /// Try the newer link's claim again with its identical bytes; the current grant stays as it is.
+    func retryCandidateClaim() {
+        guard candidateUncertain, let request = candidateClaim, let authority = runAuthority else { return }
+        candidateUncertain = false
+        candidateNotice = ""
+        claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.candidateClaimFinished(request, outcome) }
+    }
+
+    private func discardCandidate() {
+        candidateClaim = nil
+        candidateClaimBrowser = nil
+        candidateUncertain = false
+    }
+
+    private func candidateClaimFinished(_ request: PhoneRunClaimRequest, _ outcome: PhoneRunOutcome<PhoneRunClaim>) {
+        guard candidateClaim == request else { return }
+        // Replace only an approved run that is still idle; once the current grant started, the candidate is moot.
+        guard runApproval == .approved, let current = phoneRun, !current.collectionStarted, !helperRunning,
+              process == nil, !startAfterSettingCheck, startConfirmation != .confirming,
+              localCollectionApproval == nil else {
+            discardCandidate()
+            return
+        }
+        switch outcome {
+        case .accepted(let claim) where claimIsCurrent(claim):
+            // The previous Start may have exhausted its replies. It did not launch a collection, so this
+            // independently verified approval replaces it atomically and makes every old callback obsolete.
+            startConfirmationToken = nil
+            startConfirmation = .none
+            startPreparation = nil
+            runStatusToken = nil
+            runStatus = .unchecked
+            runStatusMessage = ""
+            phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
+                                returnBrowserBundleID: candidateClaimBrowser, course: claim.course,
+                                categories: claim.categories, claimedAt: candidateClaimStartedAt)
+            discardCandidate()
+            candidateNotice = ""
+            declineLocalCollection()
+        case .accepted, .refused:
+            // A definite answer: the candidate is discarded and the current grant is unchanged.
+            discardCandidate()
+            candidateNotice = "A newer approval link could not be used. The approval shown here is unchanged."
+        case .uncertain, .malformed:
+            // The candidate may have committed its one-use claim: keep its exact request for an identical retry.
+            candidateUncertain = true
+            candidateNotice = "A newer approval link could not be confirmed. The approval shown here is unchanged."
+        }
+    }
+
+    private func refuseRun(_ message: String) {
+        runStatusToken = nil
+        phoneRun = nil
+        pendingClaim = nil
+        startConfirmation = .none
+        startConfirmationToken = nil
+        startPreparation = nil
+        runApproval = .refused
+        runApprovalMessage = message
+    }
+
+    /// Not now: forget this verified, unstarted run. Nothing was collected.
+    func dismissRunApproval() {
+        guard phoneRun?.collectionStarted != true, !helperRunning else { return }
+        endPhoneRun()
+        declineLocalCollection()
+    }
+
+    /// Ends this app's use of the run: completion, discard, or a collection that stopped.
+    private func endPhoneRun() {
+        runStatusPollTask?.cancel()
+        runStatusPollTask = nil
+        runStatusToken = nil
+        runStatus = .unchecked
+        runStatusMessage = ""
+        phoneRun = nil
+        pendingClaim = nil
+        pendingClaimBrowser = nil
+        pendingBind = nil
+        pendingAdoption = nil
+        approvalAdoptionPending = false
+        runApproval = .none
+        runApprovalMessage = ""
+        runBinding = .none
+        startAfterSettingCheck = false
+        startConfirmation = .none
+        startConfirmationToken = nil
+        startPreparation = nil
+        discardCandidate()
+        candidateNotice = ""
+    }
+
+    var returnBrowserBundleID: String? { phoneRun?.returnBrowserBundleID ?? pendingClaimBrowser }
+
+    /// The run's categories describe what may be saved to the account. The unchanged helper still reads contacts,
+    /// calls and message metadata for the local review; this label never claims a smaller local read.
+    static func approvedToSaveLabel(_ categories: [String]) -> String {
+        let names = PhoneRunContract.categories.filter(categories.contains).map { category -> String in
+            switch category {
+            case "contacts": return "chosen contacts"
+            case "calls": return "their call metadata"
+            default: return "their message metadata"
+            }
+        }
+        return "Approved to save: " + names.joined(separator: ", ")
+    }
+
+    /// Continue can still pair and bind for this run.
+    var canContinueToAccount: Bool {
+        phoneRun?.collectionStarted == true && phoneRun?.boundHandoffID == nil && runBinding != .refused
+    }
+
+    /// The account page for this run's enrollment, or the account start page.
+    var accountContinueURL: URL {
+        phoneRun.flatMap { Self.accountContinueURL(enrollmentID: $0.enrollmentID) } ?? Self.accountStartURL
+    }
+
+    /// Start collection is an action, not consent: it runs the read-only iPhone setting check and then starts.
+    /// An unencrypted or unconfirmed setting stops here for Finder guidance or an explicit available-data choice.
+    @discardableResult
+    func startCollection() -> Bool {
+        refreshRunStartWindow()
+        guard hasStartableRun, canPrepareCollection, localCollectionApproval == nil,
+              candidateClaim == nil, startConfirmation == .none else { return false }
+        guard beginBackupEncryptionStatusCheck() else { return false }
+        startAfterSettingCheck = true
+        launch(mode: "backup-encryption-status")
+        return true
+    }
+
+    /// The owner chose to continue with available data after seeing Finder guidance. This is not new consent:
+    /// the same verified account run still provides authority, and Start revalidates it immediately below.
+    @discardableResult
+    func startCollectionWithAvailableData() -> Bool {
+        refreshRunStartWindow()
+        guard backupEncryptionStatus == .unencrypted || backupEncryptionStatus == .unknown,
+              !helperRunning, process == nil, hasStartableRun,
+              canPrepareCollection, candidateClaim == nil, startConfirmation == .none else { return false }
+        confirmRunThenStart(.continueWithoutConfirmedCoverage)
+        return true
+    }
+
+    @discardableResult
+    func startWithoutConfirmedCallHistory() -> Bool {
+        guard backupEncryptionStatus == .unknown else { return false }
+        return startCollectionWithAvailableData()
+    }
+
+    private func startAfterCheckIfReady() {
+        guard startAfterSettingCheck else { return }
+        startAfterSettingCheck = false
+        guard !needsStorageReview, process == nil, let preparation = settingCallHistoryPreparation,
+              backupEncryptionStatus == .encrypted else { return }
+        guard hasStartableRun, canPrepareCollection else { refreshRunStartWindow(); return }
+        confirmRunThenStart(preparation)
+    }
+
+    /// Start uses capability-authenticated current status, including the original ten-minute Start deadline.
+    /// It can recover a lost claim response without treating the twelve-hour run lifetime as a fresh Start.
+    private func confirmRunThenStart(_ preparation: CallHistoryPreparation) {
+        guard let run = phoneRun else { return }
+        let token = UUID()
+        startConfirmationToken = token
+        startPreparation = preparation
+        startConfirmation = .confirming
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.startConfirmationToken == token, self.startConfirmation == .confirming,
+                  let active = self.phoneRun, active.runID == run.runID, !active.collectionStarted else { return }
+            self.startConfirmationToken = nil
+            guard current else { self.startConfirmation = .uncertain; return }
+            self.startConfirmation = .none
+            self.startPreparation = nil
+            guard self.hasStartableRun else {
+                self.declineLocalCollection()
+                self.refuseRun(Self.runRefusedMessage)
+                return
+            }
+            guard self.canPrepareCollection, !self.helperRunning, self.process == nil,
+                  self.composeRunCollectionApproval(callHistoryPreparation: preparation) else { return }
+            self.connect()
+        }
+    }
+
+    func retryStartConfirmation() {
+        guard startConfirmation == .uncertain, let preparation = startPreparation, hasStartableRun,
+              candidateClaim == nil, canPrepareCollection, !helperRunning, process == nil else { return }
+        confirmRunThenStart(preparation)
+    }
+
+    var approvedPrivacyURL: URL? {
+        phoneRun.flatMap { PhoneRunContract.privacyURL(disclosureVersion: $0.claim.disclosureVersion) }
+    }
+
+    var canRefreshRunStatus: Bool { phoneRun != nil && runStatus != .checking }
+
+    /// A bounded explicit recheck. Existing collection/review is retained while transport is uncertain.
+    func refreshRunStatus() {
+        revalidateCurrentRun { _ in }
+    }
+
+    private func revalidateCurrentRun(_ completion: @escaping @MainActor (Bool) -> Void) {
+        guard let run = phoneRun, let authority = runAuthority, runStatus != .checking,
+              let request = PhoneRunStatusRequest(runID: run.runID, capability: run.capability) else {
+            completion(false)
+            return
+        }
+        let token = UUID()
+        runStatusToken = token
+        runStatus = .checking
+        synchronizeBridgeAuthority(paused: true)
+        authority.status(request) { [weak self] outcome in
+            guard let self, self.runStatusToken == token, var active = self.phoneRun,
+                  active.runID == run.runID, active.capability == run.capability else { return }
+            self.runStatusToken = nil
+            switch outcome {
+            case .accepted(let status):
+                guard status.state == .current else {
+                    self.stopForRunStatus(status.state)
+                    completion(false)
+                    if status.state == .replacementRequired { self.retryApprovalAdoption() }
+                    return
+                }
+                guard status.claim.expiresAt > self.now() else {
+                    self.stopForRunStatus(.expired)
+                    completion(false)
+                    return
+                }
+                guard status.claim.expiresAt == active.claim.expiresAt,
+                      active.claim.startExpiresAt == nil || status.claim.startExpiresAt == active.claim.startExpiresAt else {
+                    self.runStatus = .uncertain
+                    self.runStatusMessage = "Approval deadlines could not be reconciled. This connection stays paused."
+                    self.synchronizeBridgeAuthority(paused: true)
+                    completion(false)
+                    return
+                }
+                let same = status.claim.approvalID == active.claim.approvalID &&
+                    status.claim.enrollmentID == active.enrollmentID && status.claim.email == active.email &&
+                    status.claim.course == active.claim.course && status.claim.categories == active.claim.categories &&
+                    status.claim.disclosureVersion == active.claim.disclosureVersion
+                guard same else {
+                    self.stopForRunStatus(.replacementRequired)
+                    completion(false)
+                    // Status is observation only. The separate bind transition proves the owner's explicit
+                    // replacement, starting from the approval already persisted by this Mac.
+                    self.retryApprovalAdoption()
+                    return
+                }
+                active.claim = status.claim
+                self.phoneRun = active
+                self.runStatus = .current
+                self.runStatusMessage = ""
+                self.synchronizeBridgeAuthority(paused: false)
+                completion(true)
+            case .refused:
+                self.stopForRunStatus(.replacementRequired)
+                completion(false)
+            case .uncertain, .malformed:
+                self.runStatus = .uncertain
+                self.synchronizeBridgeAuthority(paused: true)
+                self.runStatusMessage = "Approval could not be checked. New connections and saving wait for a successful recheck."
+                completion(false)
+            }
+        }
+    }
+
+    private func synchronizeBridgeAuthority(paused: Bool) {
+        guard commandReady, !handoffID.isEmpty else { return }
+        let state = paused ? "paused" : "current"
+        let identity = handoffID + ":" + state
+        guard lastBridgeAuthority != identity else { return }
+        lastBridgeAuthority = identity
+        send(["action": "run-authority", "handoffId": handoffID, "state": state])
+    }
+
+    private func stopForRunStatus(_ state: PhoneRunStatus.State) {
+        if state == .replacementRequired || state == .current {
+            runStatus = .replacementRequired
+            runStatusMessage = "This connection is paused. Check the approval in your AMPLIFai account; this Mac keeps your collection."
+            synchronizeBridgeAuthority(paused: true)
+            return
+        }
+        let wasStarted = phoneRun?.collectionStarted == true
+        if wasStarted { disconnect() }
+        else { declineLocalCollection(); refuseRun(Self.runRefusedMessage) }
+        switch state {
+        case .revoked:
+            runStatus = .revoked
+            runStatusMessage = "This collection was stopped in your account. Already confirmed saves remain in your report."
+        case .expired:
+            runStatus = .expired
+            runStatusMessage = "This approval expired. Already confirmed saves remain in your account. A new collection needs a new approval."
+        case .current, .replacementRequired:
+            runStatus = .replacementRequired
+            runStatusMessage = "This approval changed. Collection and saving stopped. Check your AMPLIFai account before continuing."
+        }
+        if wasStarted { errorMessage = runStatusMessage }
+    }
+
+    private func pollRunStatus() {
+        guard commandWriter == nil, let runID = phoneRun?.runID, phoneRun?.collectionStarted == true else { return }
+        runStatusPollTask?.cancel()
+        runStatusPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: self?.runStatusPollNanoseconds ?? 30_000_000_000) }
+                catch { return }
+                guard let self, self.phoneRun?.runID == runID, self.phoneRun?.collectionStarted == true else { return }
+                if self.runStatus != .checking { self.refreshRunStatus() }
+            }
+        }
+    }
+
+    /// The read-only setting check reports the preparation facts; it cannot guarantee source availability.
+    var settingCallHistoryPreparation: CallHistoryPreparation? {
+        switch backupEncryptionStatus {
+        case .encrypted: return .confirmedEncryptedBackup
+        case .unencrypted, .unknown: return .continueWithoutConfirmedCoverage
+        case .notChecked, .checking: return nil
+        }
     }
 
     func declineLocalCollection() {
@@ -234,7 +825,8 @@ final class CollectorModel: ObservableObject {
 
     @discardableResult
     func beginBackupEncryptionStatusCheck() -> Bool {
-        guard canPrepareCollection, localCollectionApproval == nil else { return false }
+        guard canPrepareCollection, localCollectionApproval == nil, startConfirmation == .none,
+              candidateClaim == nil else { return false }
         if phase == .error { settingCheckAfterCollectionFailure = true }
         backupEncryptionStatus = .checking
         backupEncryptionCheckCode = nil
@@ -244,6 +836,7 @@ final class CollectorModel: ObservableObject {
 
     func checkBackupEncryptionStatus() {
         guard beginBackupEncryptionStatusCheck() else { return }
+        startAfterSettingCheck = false
         launch(mode: "backup-encryption-status")
     }
 
@@ -261,14 +854,12 @@ final class CollectorModel: ObservableObject {
     }
 
     var hasUnsavedReview: Bool { totalContacts > 0 && !handoffAcknowledged }
-    var pendingDestinationApproval: DestinationApprovalRequest? {
-        guard phase == .reviewing, !handoffID.isEmpty, !destinationIntentID.isEmpty,
-              !destinationEmail.isEmpty, !destinationCourse.isEmpty,
-              !destinationApproved, !selectionNeedsReview,
-              reviewedSelectionIDs == selectedIDs else { return nil }
-        return DestinationApprovalRequest(handoffID: handoffID, intentID: destinationIntentID,
-                                          email: destinationEmail, course: destinationCourse)
+    /// The current handoff is bound to this run on the server.
+    var handoffBound: Bool {
+        !handoffID.isEmpty && runBinding == .bound && phoneRun?.boundHandoffID == handoffID
     }
+    /// The website owns the flow from the bound handoff until the run ends.
+    var browserOwnsFlow: Bool { handoffBound || (phoneRun?.boundHandoffID != nil && hasUnsavedReview) }
     var isSearchingContacts: Bool { contactSearchPending && contacts.isEmpty }
     var hasPreviousContactPage: Bool { !contactPageStarts.isEmpty }
     var canSelectAllContacts: Bool {
@@ -301,10 +892,12 @@ final class CollectorModel: ObservableObject {
             !suggestionScanning && !reviewPending && !suggestionPagePending && !selectingAllContacts &&
             handoffID.isEmpty && !pairingRequested && !selectionChangePending
     }
+    /// The run binds one handoff once, so a selection cannot change after a bind was attempted for it.
     var canRequestSelectionChange: Bool {
         phase == .reviewing && commandReady && !handoffID.isEmpty &&
             reviewedSelectionIDs == selectedIDs && !pairingRequested && !selectionChangePending &&
-            !accountSaveAwaitingBrowserReceipt && !handoffAcknowledged
+            !accountSaveAwaitingBrowserReceipt && !handoffAcknowledged &&
+            runBinding == .none && phoneRun?.boundHandoffID == nil
     }
     var canSelectAllMain: Bool {
         guard canEditWorkspace, let workspace else { return false }
@@ -364,6 +957,26 @@ final class CollectorModel: ObservableObject {
         return suggestionPageCursor + suggestionVisible.count < suggestionMatches[kind, default: []].count
     }
     var activeFlow: Bool { helperRunning || hasUnsavedReview }
+    /// A one-time link was requested and the helper has not answered yet.
+    var accountLinkPending: Bool { pairingRequested }
+    /// The run bound this handoff: the account opens and owns save, progress, the report and recovery. This does
+    /// not wait for `received` (the helper reports it only after every page was delivered, after the website
+    /// saved them). The helper keeps running for the receipts.
+    var browserHandoffReady: Bool {
+        phase == .reviewing && handoffBound && !handoffAcknowledged && errorMessage.isEmpty
+    }
+    /// Approve · Collect · Choose · Save & report: 0...3 is the current step, 4 means every step finished.
+    /// A verified account agreement completes Approve even while the local setting check is idle or cancelled.
+    var journeyStep: Int {
+        switch phase {
+        case .idle, .error: return hasUnsavedReview ? 2 : (runApproval == .approved && phoneRun != nil ? 1 : 0)
+        case .cancelling: return backupSettingCheckInProgress && phoneRun == nil ? 0 : 1
+        case .connecting, .transferring, .passwordRequired, .processing: return 1
+        case .selecting: return 2
+        case .reviewing, .completing: return 3
+        case .completed: return 4
+        }
+    }
     func unavailableDescription(_ category: String) -> String {
         let label = category == "calls" ? "Call history" : "Message history"
         guard missingSources.contains(category) else { return "" }
@@ -1117,7 +1730,10 @@ final class CollectorModel: ObservableObject {
               !suggestionScanning, !suggestionPagePending,
               !reviewPending, !selectionNeedsReview, !pairingRequested, !selectionChangePending,
               !accountSaveAwaitingBrowserReceipt, !handoffAcknowledged,
-              reviewedSelectionIDs == selectedIDs else { return }
+              reviewedSelectionIDs == selectedIDs,
+              // Only this run's started collection can pair, and the run binds one handoff once.
+              phoneRun?.collectionStarted == true,
+              runBinding == .none || runBinding == .uncertain, phoneRun?.boundHandoffID == nil else { return }
         // Keep the old bridge binding until the helper confirms replacement.
         // An account receipt can race this command and cause the helper to
         // reject replacement while the original browser ACK remains live.
@@ -1127,19 +1743,282 @@ final class CollectorModel: ObservableObject {
     }
 
     func accountNavigationFailed() {
-        guard phase == .reviewing, !pairCode.isEmpty, !handoffID.isEmpty else { return }
-        errorMessage = "The account page did not open automatically. Your local review and one-use pairing remain available. Open AMPLIFai account in browser or copy the temporary code below."
+        guard phase == .reviewing, !handoffID.isEmpty else { return }
+        errorMessage = Self.navigationFailedMessage
     }
 
-    func decideAccountDestination(_ approved: Bool, request: DestinationApprovalRequest) {
-        guard pendingDestinationApproval == request else { return }
+    /// After the helper's pairing: associate this handoff and its digest with the run, once.
+    private func bindHandoff() {
+        guard let run = phoneRun, run.collectionStarted, let authority = runAuthority,
+              let request = PhoneRunBindRequest(runID: run.runID, capability: run.capability, handoffID: handoffID,
+                                                payloadSha256: pairingPayloadSha256, previousApprovalID: run.claim.approvalID) else {
+            refuseBinding(Self.missingRunMessage)
+            return
+        }
+        pendingBind = request
+        runBinding = .binding
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingBind == request, self.runBinding == .binding else { return }
+            guard current else { self.runBinding = .uncertain; self.errorMessage = Self.bindUncertainMessage; return }
+            authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        }
+    }
+
+    /// Try again after an uncertain bind: the identical request for the same handoff.
+    func retryRunBinding() {
+        guard runBinding == .uncertain, let request = pendingBind, request.handoffID == handoffID,
+              let authority = runAuthority else { return }
+        runBinding = .binding
+        errorMessage = ""
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingBind == request, self.runBinding == .binding else { return }
+            guard current else { self.runBinding = .uncertain; self.errorMessage = Self.bindUncertainMessage; return }
+            authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        }
+    }
+
+    private func bindFinished(_ request: PhoneRunBindRequest, _ outcome: PhoneRunOutcome<PhoneRunBoundApproval>) {
+        guard pendingBind == request, runBinding == .binding, var run = phoneRun, run.runID == request.runID else { return }
+        guard handoffID == request.handoffID, phase == .reviewing else {
+            // The pairing ended while binding; a late answer cannot revive it.
+            runBinding = .uncertain
+            return
+        }
+        switch outcome {
+        case .accepted(let bound):
+            let destination = bound.claim
+            // Binding must match the original current approval across owner, enrollment, course and scope.
+            // A contradictory reply cannot silently rewrite a started collection's authority.
+            guard bound.previousApprovalID == request.previousApprovalID,
+                  destination.approvalID == request.previousApprovalID,
+                  destination.disclosureVersion == run.claim.disclosureVersion, destination.expiresAt == run.claim.expiresAt,
+                  destination.enrollmentID == run.enrollmentID, destination.email == run.email,
+                  destination.course == run.claim.course, destination.categories == run.claim.categories else {
+                refuseBinding(Self.bindRefusedMessage)
+                return
+            }
+            run.course = destination.course
+            run.categories = destination.categories
+            run.boundHandoffID = request.handoffID
+            run.boundPayloadSha256 = request.payloadSha256
+            phoneRun = run
+            pendingBind = nil
+            runBinding = .bound
+            if navigateOnPairing, let url = Self.accountContinueURL(enrollmentID: run.enrollmentID) {
+                accountNavigation = AccountNavigation(id: UUID(), url: url, handoffID: request.handoffID)
+            }
+            if !destinationIntentID.isEmpty { verifyDestination() }
+        case .refused:
+            refuseBinding(Self.bindRefusedMessage)
+        case .uncertain, .malformed:
+            // The bind may have committed: keep the same body and the helper pairing, revoke nothing.
+            runBinding = .uncertain
+            errorMessage = Self.bindUncertainMessage
+        }
+    }
+
+    /// Existing captured handoffs can adopt a separately approved website replacement. This action itself
+    /// never creates approval, changes the handoff, extends deadlines or infers authority from status fields.
+    var canRetryApprovalAdoption: Bool {
+        phoneRun?.collectionStarted == true && phoneRun?.boundHandoffID == handoffID &&
+            !handoffID.isEmpty && !approvalAdoptionPending &&
+            (phase == .reviewing || phase == .completing) &&
+            (runStatus == .replacementRequired || pendingAdoption != nil)
+    }
+
+    func retryApprovalAdoption() {
+        guard canRetryApprovalAdoption, let run = phoneRun, let authority = runAuthority,
+              let digest = run.boundPayloadSha256 else { return }
+        if pendingAdoption == nil {
+            pendingAdoption = PhoneRunBindRequest(runID: run.runID, capability: run.capability,
+                handoffID: handoffID, payloadSha256: digest, previousApprovalID: run.claim.approvalID)
+        }
+        guard let request = pendingAdoption, request.runID == run.runID,
+              request.previousApprovalID == run.claim.approvalID, request.handoffID == handoffID,
+              request.payloadSha256 == digest else { return }
+        approvalAdoptionPending = true
+        synchronizeBridgeAuthority(paused: true)
+        authority.bind(request) { [weak self] outcome in self?.approvalAdoptionFinished(request, outcome) }
+    }
+
+    private func approvalAdoptionFinished(_ request: PhoneRunBindRequest, _ outcome: PhoneRunOutcome<PhoneRunBoundApproval>) {
+        guard pendingAdoption == request, approvalAdoptionPending, var run = phoneRun,
+              run.runID == request.runID, run.claim.approvalID == request.previousApprovalID,
+              run.boundHandoffID == request.handoffID, run.boundPayloadSha256 == request.payloadSha256,
+              handoffID == request.handoffID, pairingPayloadSha256 == request.payloadSha256 else { return }
+        approvalAdoptionPending = false
+        switch outcome {
+        case .accepted(let bound):
+            let next = bound.claim
+            let transferReceived = browserReceived || accountSaveAwaitingBrowserReceipt || handoffAcknowledged
+            guard bound.previousApprovalID == request.previousApprovalID,
+                  next.email == run.email, (!transferReceived || next.enrollmentID == run.enrollmentID),
+                  Set(next.categories).isSubset(of: Set(run.claim.categories)),
+                  next.expiresAt == run.claim.expiresAt, next.expiresAt > now(),
+                  PhoneRunContract.supportedDisclosureVersions.contains(next.disclosureVersion),
+                  // An unchanged approval ID cannot silently acquire a different meaning.
+                  next.approvalID != run.claim.approvalID ||
+                    (next.enrollmentID == run.enrollmentID && next.course == run.claim.course &&
+                     next.categories == run.claim.categories && next.disclosureVersion == run.claim.disclosureVersion) else {
+                runStatusMessage = "The replacement approval did not match this collection. Keep it paused and check your account."
+                return
+            }
+            let changed = next.approvalID != run.claim.approvalID
+            run.claim = PhoneRunClaim(approvalID: next.approvalID, enrollmentID: next.enrollmentID,
+                email: next.email, course: next.course, categories: next.categories,
+                disclosureVersion: next.disclosureVersion, expiresAt: next.expiresAt,
+                startExpiresAt: run.claim.startExpiresAt)
+            run.course = next.course
+            run.categories = next.categories
+            phoneRun = run
+            pendingAdoption = nil
+            clearDestinationVerification()
+            if changed && !transferReceived {
+                if !destinationIntentID.isEmpty { closedDestinationIntentIDs.insert(destinationIntentID) }
+                destinationIntentID = ""
+                destinationEmail = ""
+                destinationCourse = ""
+                destinationApproved = false
+                submittedDestinationDecision = nil
+                approvedDestinationIntentID = ""
+            }
+            runStatus = .current
+            runStatusMessage = ""
+            synchronizeBridgeAuthority(paused: false)
+        case .refused:
+            runStatus = .replacementRequired
+            runStatusMessage = "Check this collection's approval in your account. This Mac keeps the same handoff paused."
+        case .uncertain, .malformed:
+            runStatus = .uncertain
+            runStatusMessage = "Replacement approval was not confirmed. Retry checks the same captured handoff."
+        }
+    }
+
+    /// A definite refusal: close the helper's bridge so no browser can connect, keep the local review.
+    private func refuseBinding(_ message: String) {
+        pendingBind = nil
+        resetHandoff()
+        send(["action": "revoke"])
+        runBinding = .refused
+        errorMessage = message
+    }
+
+    /// The helper reported a pending connect intent: check it against the run before answering automatically.
+    /// Polls can reconcile an uncertain response, with a bounded backoff and the identical request/capability.
+    private func verifyDestination() {
+        guard handoffBound, let run = phoneRun, let handoff = run.boundHandoffID, let digest = run.boundPayloadSha256,
+              !destinationIntentID.isEmpty, !destinationApproved, submittedDestinationDecision == nil,
+              !destinationVerificationPending, !verifiedDestinationIntentIDs.contains(destinationIntentID),
+              let authority = runAuthority else { return }
+        if pendingVerify == nil {
+            guard let request = PhoneRunVerifyRequest(runID: run.runID, capability: run.capability,
+                                                      intentID: destinationIntentID, handoffID: handoff,
+                                                      payloadSha256: digest, expectedApprovalID: run.claim.approvalID) else { return }
+            pendingVerify = request
+            verifyAttemptCount = 0
+            verifyRetryAfter = .distantPast
+            // The server enforces the actual intent expiry. This local ceiling cannot extend it.
+            verifyDeadline = min(now().addingTimeInterval(5 * 60), run.claim.expiresAt)
+        }
+        guard let request = pendingVerify, request.runID == run.runID, request.intentID == destinationIntentID,
+              request.handoffID == handoff, request.payloadSha256 == digest,
+              verifyAttemptCount < Self.maximumVerifyRounds, now() >= verifyRetryAfter,
+              now() < verifyDeadline else { return }
+        verifyAttemptCount += 1
+        destinationVerificationPending = true
+        destinationVerificationUncertain = false
+        let pendingEmail = destinationEmail
+        let pendingCourse = destinationCourse
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingVerify == request, self.destinationVerificationPending else { return }
+            guard current else {
+                self.verifyFinished(request, pendingEmail: pendingEmail, pendingCourse: pendingCourse, .uncertain)
+                return
+            }
+            authority.verifyIntent(request) { [weak self] outcome in
+                self?.verifyFinished(request, pendingEmail: pendingEmail, pendingCourse: pendingCourse, outcome)
+            }
+        }
+    }
+
+    /// An owner/browser-directed retry after automatic retries were exhausted. It keeps the immutable request;
+    /// no fresh approval, handoff, capability or selection is created from an uncertain answer.
+    var canRetryDestinationVerification: Bool {
+        destinationVerificationUncertain && !destinationVerificationPending && !destinationApproved &&
+            submittedDestinationDecision == nil && pendingVerify?.intentID == destinationIntentID &&
+            !destinationIntentID.isEmpty && now() < verifyDeadline && handoffBound
+    }
+
+    func retryDestinationVerification() {
+        guard canRetryDestinationVerification else { return }
+        verifyAttemptCount = 0
+        verifyRetryAfter = .distantPast
+        verifyDestination()
+    }
+
+    private func clearDestinationVerification() {
+        pendingVerify = nil
+        verifyAttemptCount = 0
+        verifyRetryAfter = .distantPast
+        verifyDeadline = .distantPast
+        destinationVerificationPending = false
+        destinationVerificationUncertain = false
+    }
+
+    private func verifyFinished(_ request: PhoneRunVerifyRequest, pendingEmail: String, pendingCourse: String,
+                                _ outcome: PhoneRunOutcome<PhoneRunDestination>) {
+        guard pendingVerify == request, destinationVerificationPending,
+              handoffID == request.handoffID, destinationIntentID == request.intentID,
+              destinationEmail == pendingEmail, destinationCourse == pendingCourse,
+              !destinationApproved, submittedDestinationDecision == nil, var run = phoneRun,
+              run.runID == request.runID else { return }
+        destinationVerificationPending = false
+        switch outcome {
+        case .accepted(let verified):
+            verifiedDestinationIntentIDs.insert(request.intentID)
+            let exact = now() < verifyDeadline && verified.approvalID == request.expectedApprovalID &&
+                verified.approvalID == run.claim.approvalID && verified.email == pendingEmail && verified.course == pendingCourse &&
+                verified.enrollmentID == run.enrollmentID && verified.email == run.email &&
+                verified.course == run.claim.course && verified.categories == run.claim.categories &&
+                run.boundHandoffID == request.handoffID && run.boundPayloadSha256 == request.payloadSha256 &&
+                pairingPayloadSha256 == request.payloadSha256
+            if exact {
+                run.course = verified.course
+                run.categories = verified.categories
+                phoneRun = run
+                decideDestination(true, request)
+            } else {
+                decideDestination(false, request)
+            }
+        case .refused:
+            verifiedDestinationIntentIDs.insert(request.intentID)
+            // The website shows its one replacement approval; nothing native asks the owner.
+            decideDestination(false, request)
+        case .uncertain, .malformed:
+            // Unknown is never a grant or denial. Repeated polling is bounded and never changes the body.
+            destinationVerificationUncertain = true
+            verifyRetryAfter = now().addingTimeInterval(Double(verifyAttemptCount * 4))
+        }
+    }
+
+    private func decideDestination(_ approved: Bool, _ request: PhoneRunVerifyRequest) {
+        submittedDestinationDecision = approved
+        approvedDestinationIntentID = approved ? request.intentID : ""
         send(["action": "destination-decision", "handoffId": request.handoffID,
               "intentId": request.intentID, "approved": approved])
     }
 
     func disconnect() {
+        runStatusToken = nil
+        if runStatus == .checking { runStatus = .unchecked }
         declineLocalCollection()
+        startAfterSettingCheck = false
+        startConfirmationToken = nil
+        if startConfirmation != .none { startConfirmation = .none; startPreparation = nil }
+        // Discarding or cancelling a started collection ends its run; cancelling the pre-start check does not.
+        if phoneRun?.collectionStarted == true { endPhoneRun() }
         guard let process else {
+            if commandReady { send(["action": "disconnect"]) }
             // Explicit owner discard remains usable after an unexpected helper exit.
             clearPrivateReview()
             resetHandoff()
@@ -1194,6 +2073,11 @@ final class CollectorModel: ObservableObject {
     }
 
     private func resetHandoff() {
+        pendingAdoption = nil
+        approvalAdoptionPending = false
+        lastBridgeAuthority = nil
+        finishAttemptCount = 0
+        completionNeedsRetry = false
         handoffPollTask?.cancel()
         handoffPollTask = nil
         pairingRequested = false
@@ -1207,11 +2091,33 @@ final class CollectorModel: ObservableObject {
         destinationEmail = ""
         destinationCourse = ""
         destinationApproved = false
+        submittedDestinationDecision = nil
+        approvedDestinationIntentID = ""
+        verifiedDestinationIntentIDs = []
+        clearDestinationVerification()
         closedDestinationIntentIDs = []
         pairCode = ""
         pairPort = 0
+        pairingPayloadSha256 = ""
         navigateOnPairing = false
-        accountNavigationID = nil
+        accountNavigation = nil
+        if runBinding == .binding { runBinding = .uncertain }
+    }
+
+    /// Retrying finalization only asks for the same handoff's receipt. It never pairs again or re-saves sources.
+    var canRetryAccountCompletion: Bool {
+        completionNeedsRetry && phase == .reviewing && commandReady && handoffBound &&
+            finishAttemptCount >= Self.maximumFinishAttempts
+    }
+
+    func retryAccountCompletion() {
+        guard canRetryAccountCompletion else { return }
+        finishAttemptCount = 0
+        completionNeedsRetry = false
+        handoffNotice = "Checking this account save's final receipt."
+        errorMessage = ""
+        send(["action": "handoff-status", "handoffId": handoffID])
+        pollHandoff()
     }
 
     private func pollHandoff() {
@@ -1220,7 +2126,7 @@ final class CollectorModel: ObservableObject {
         handoffPollTask?.cancel()
         handoffPollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
+                do { try await Task.sleep(nanoseconds: self?.handoffPollNanoseconds ?? 2_000_000_000) } catch { return }
                 guard let self, self.operationID == operation, self.handoffID == binding,
                       self.phase == .reviewing, !self.cancellationRequested else { return }
                 self.send(["action": "handoff-status", "handoffId": binding])
@@ -1260,11 +2166,13 @@ final class CollectorModel: ObservableObject {
         if mode == "connect" {
             guard companionStatusAllowsWork, phase == .connecting, !needsStorageReview, residues.isEmpty, !hasUnsavedReview,
                   hasCurrentCollectionApproval, let approval = localCollectionApproval else {
-                fail("Review and explicitly agree to this local collection before connecting.")
+                fail("This local collection needs a current approval from your AMPLIFai account before connecting.")
                 return
             }
             id = approval.runID
             requireEncryptedBackup = approval.callHistoryPreparation == .confirmedEncryptedBackup
+            // The run authorizes exactly this one collection; it can never start another.
+            phoneRun?.collectionStarted = true
         } else if mode == "backup-encryption-status" {
             guard canPrepareCollection, backupEncryptionStatus == .checking,
                   localCollectionApproval == nil else { return }
@@ -1277,8 +2185,15 @@ final class CollectorModel: ObservableObject {
         }
         // Receipt consumption precedes filesystem/helper access and cannot authorize a retry.
         if mode != "backup-encryption-status" { declineLocalCollection() }
+        if commandWriter != nil {
+            // Simulated helper wire (checks and fixtures): record the owned operation, spawn nothing.
+            operationID = id
+            activeHelperMode = mode
+            return
+        }
         guard let resources = Bundle.main.resourceURL else {
             fail("The app bundle is missing its local helper.")
+            if mode == "inspect" { completeStartupChecks() }
             return
         }
         let portableHelper = resources.appendingPathComponent("helper/amplifai-agent")
@@ -1288,6 +2203,7 @@ final class CollectorModel: ObservableObject {
         guard portable || (FileManager.default.isExecutableFile(atPath: uvxHelper.path) &&
                            FileManager.default.fileExists(atPath: module.appendingPathComponent("amplifai_phone/agent.py").path)) else {
             fail("The local collector runtime is missing. Download and reinstall the signed Mac companion.")
+            if mode == "inspect" { completeStartupChecks() }
             return
         }
 
@@ -1329,6 +2245,7 @@ final class CollectorModel: ObservableObject {
         }
         do {
             try runner.run()
+            if mode == "connect" { pollRunStatus() }
             output.fileHandleForWriting.closeFile()
             input.fileHandleForReading.closeFile()
         } catch {
@@ -1342,6 +2259,7 @@ final class CollectorModel: ObservableObject {
             inputHandle = nil
             helperRunning = false
             fail("The local helper could not start. Reopen the app or reinstall the signed Mac companion.")
+            if mode == "inspect" { completeStartupChecks() }
         }
     }
 
@@ -1442,6 +2360,11 @@ final class CollectorModel: ObservableObject {
     }
 
     func receive(_ event: AgentEvent) {
+        apply(event)
+        eventObserver?(event)
+    }
+
+    private func apply(_ event: AgentEvent) {
         if cancellationRequested && event.kind != "error" && event.kind != "state" { return }
         if cancellationRequested && event.kind == "state"
             && event.state != "cancelled" && event.state != "disconnected" { return }
@@ -1457,7 +2380,12 @@ final class CollectorModel: ObservableObject {
             case "disconnected", "cancelled":
                 declineLocalCollection()
                 if handoffAcknowledged && !cancellationRequested { phase = .completing }
-                else { clearPrivateReview(); resetHandoff(); phase = .idle }
+                else {
+                    clearPrivateReview()
+                    resetHandoff()
+                    if phoneRun?.collectionStarted == true { endPhoneRun() }
+                    phase = .idle
+                }
             case "completed":
                 if handoffAcknowledged { phase = .completing }
             case "pairing_revoked":
@@ -1465,7 +2393,7 @@ final class CollectorModel: ObservableObject {
                       !handoffAcknowledged else { break }
                 resetHandoff()
                 errorMessage = ""
-                handoffNotice = "The old browser link is closed. Your local review is still here; change selected contacts, then Save and continue again."
+                handoffNotice = "The old browser link is closed. Your local review is still here. Change your selection, then choose Continue to account again."
             default: break
             }
         case "progress":
@@ -1718,44 +2646,61 @@ final class CollectorModel: ObservableObject {
                   reviewedSelectionIDs == selectedIDs else { return }
             guard pairingRequested || handoffID.isEmpty else { return }
             let automaticNavigation = navigateOnPairing
-            if automaticNavigation {
-                let validCode = event.pairCode?.utf8.count == 10 &&
-                    event.pairCode?.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) == true
-                guard pairingRequested, validCode, event.port == 48751,
-                      event.expiresInSeconds == 300,
-                      event.handoffId.flatMap(UUID.init(uuidString:)) != nil else {
-                    resetHandoff()
-                    send(["action": "revoke"])
-                    errorMessage = "The one-use account connection was not ready. Your local review is intact; retry Save and continue or use the temporary code."
-                    return
-                }
+            let validCode = event.pairCode?.utf8.count == 10 &&
+                event.pairCode?.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) == true
+            let handoff = event.handoffId.flatMap { UUID(uuidString: $0)?.uuidString.lowercased() } ?? ""
+            let digest = event.payloadSha256 ?? ""
+            // Every pairing is bound to the run, so it must be exactly the helper's real shape.
+            guard pairingRequested, validCode, event.port == 48751, event.expiresInSeconds == 300,
+                  PhoneRunContract.isID(handoff), PhoneRunContract.isDigest(digest) else {
+                resetHandoff()
+                send(["action": "revoke"])
+                errorMessage = "The one-time account link was not ready. Your review is kept on this Mac. Choose Continue to try again."
+                return
             }
             resetHandoff()
             errorMessage = ""
+            navigateOnPairing = automaticNavigation
             pairCode = event.pairCode ?? ""
             pairPort = event.port ?? 0
-            handoffID = event.handoffId.flatMap { UUID(uuidString: $0)?.uuidString.lowercased() } ?? ""
+            handoffID = handoff
+            pairingPayloadSha256 = digest
             pollHandoff()
-            if automaticNavigation { accountNavigationID = UUID() }
+            // Nothing opens until the run accepts this handoff; then the account owns the flow.
+            bindHandoff()
         case "destination":
             guard !handoffID.isEmpty, event.handoffId?.lowercased() == handoffID,
                   phase == .reviewing, !reviewPending, !selectionNeedsReview,
                   reviewedSelectionIDs == selectedIDs else { return }
             if event.state == "pending", let intent = event.intentId.flatMap(UUID.init(uuidString:)),
                let email = event.email, let course = event.course,
-               email.contains("@"), email.count <= 254, !course.isEmpty, course.count <= 160 {
-                if destinationIntentID.isEmpty && !closedDestinationIntentIDs.contains(intent.uuidString.lowercased()) {
-                    destinationIntentID = intent.uuidString.lowercased()
+               PhoneRunContract.isEmail(email), PhoneRunContract.isCourse(course) {
+                let incoming = intent.uuidString.lowercased()
+                // The helper emits a different pending intent only after fixed-authority authentication
+                // supersedes an unconsumed attempt. An old callback or delayed pending cannot revive it.
+                if incoming != destinationIntentID, !closedDestinationIntentIDs.contains(incoming),
+                   !browserReceived, !accountSaveAwaitingBrowserReceipt, !handoffAcknowledged {
+                    if !destinationIntentID.isEmpty { closedDestinationIntentIDs.insert(destinationIntentID) }
+                    clearDestinationVerification()
+                    submittedDestinationDecision = nil
+                    approvedDestinationIntentID = ""
+                    destinationIntentID = incoming
                     destinationEmail = email
                     destinationCourse = course
                     destinationApproved = false
                 }
+                // Answered automatically, once per intent, only after verify-intent matches exactly.
+                verifyDestination()
             } else if event.state == "approved", event.intentId?.lowercased() == destinationIntentID,
                       !destinationIntentID.isEmpty {
                 destinationApproved = true
+                submittedDestinationDecision = nil
             } else if event.state == "denied", event.intentId?.lowercased() == destinationIntentID,
                       !destinationApproved {
                 closedDestinationIntentIDs.insert(destinationIntentID)
+                submittedDestinationDecision = nil
+                approvedDestinationIntentID = ""
+                clearDestinationVerification()
                 destinationIntentID = ""
                 destinationEmail = ""
                 destinationCourse = ""
@@ -1765,6 +2710,18 @@ final class CollectorModel: ObservableObject {
             guard !handoffID.isEmpty, event.handoffId?.lowercased() == handoffID,
                   phase == .reviewing, !reviewPending, !selectionNeedsReview,
                   reviewedSelectionIDs == selectedIDs else { return }
+            // A matching receipt can only follow an approved destination: it reconciles a lost
+            // acknowledgement, but only for this app's verified approval of this intent on this handoff.
+            if ["received", "saved_pending_browser_receipt", "saved"].contains(event.state ?? ""),
+               !destinationIntentID.isEmpty, approvedDestinationIntentID == destinationIntentID {
+                destinationApproved = true
+                submittedDestinationDecision = nil
+            }
+            if ["received", "saved_pending_browser_receipt", "saved"].contains(event.state ?? ""),
+               Self.handoffScopedMessages.contains(errorMessage) {
+                // The browser demonstrably has this handoff, so only these link problems are obsolete.
+                errorMessage = ""
+            }
             if event.state == "received" { browserReceived = true }
             if event.state == "saved_pending_browser_receipt" {
                 pairingRequested = false
@@ -1777,11 +2734,26 @@ final class CollectorModel: ObservableObject {
                 accountSaveAwaitingBrowserReceipt = true
             }
             if event.state == "expired" {
+                // Limit: the helper reports `expired` both when the browser did not connect within the five-minute
+                // pairing (PAIR_SECONDS) and when a released transfer went two hours without activity. A new
+                // `pair` always creates a new handoffId, while the run binds one handoff and digest immutably
+                // (identical retry only), so there is no same-run recovery: the run is spent. Nothing re-pairs,
+                // rebinds, mints a capability, decides a destination or marks anything received.
                 resetHandoff()
-                errorMessage = "This browser pairing expired. Your local review remains available; create a new pairing when ready."
+                if phoneRun != nil { endPhoneRun() }
+                errorMessage = Self.transferExpiredMessage
                 return
             }
             if event.state == "saved" {
+                // A lost/uncertain finish response can return us to review while the same receipt is still
+                // available. Bound automatic retries; explicit retry resumes this same handoff afterwards.
+                guard finishAttemptCount < Self.maximumFinishAttempts else {
+                    completionNeedsRetry = true
+                    handoffNotice = "Your account save is confirmed. Retry finishing on this Mac."
+                    return
+                }
+                finishAttemptCount += 1
+                completionNeedsRetry = false
                 pairingRequested = false
                 navigateOnPairing = false
                 selectionChangePending = false
@@ -1790,7 +2762,7 @@ final class CollectorModel: ObservableObject {
                 handoffPollTask?.cancel()
                 handoffPollTask = nil
                 phase = .completing
-                if helperRunning { send(["action": "finish", "handoffId": handoffID]) }
+                if commandReady { send(["action": "finish", "handoffId": handoffID]) }
             }
         case "residue":
             declineLocalCollection()
@@ -1845,11 +2817,16 @@ final class CollectorModel: ObservableObject {
                 errorMessage = "Choose supported contacts from this phone."
             } else if event.code == "bridge_unavailable" {
                 if pairingRequested { resetHandoff() }
-                errorMessage = "Local browser pairing could not start. Keep the review here or try again. The previous one-use link may no longer work."
+                errorMessage = Self.bridgeUnavailableMessage
             } else if event.code == "handoff_unconfirmed" {
                 handoffAcknowledged = false
+                submittedDestinationDecision = nil
                 phase = .reviewing
-                errorMessage = "The browser has not confirmed this account save. Your local review remains available."
+                completionNeedsRetry = finishAttemptCount > 0
+                errorMessage = Self.handoffUnconfirmedMessage
+                // Finish had stopped polling. Restore receipt reconciliation without changing selection,
+                // handoff, approval or save authority; the helper still validates the final ACK.
+                pollHandoff()
             } else {
                 if event.cleanupRequired == true {
                     needsStorageReview = true
@@ -1908,6 +2885,7 @@ final class CollectorModel: ObservableObject {
         handoffPollTask = nil
         if mode == "connect" && code == 0 && handoffAcknowledged && !needsStorageReview {
             clearPrivateReview()
+            endPhoneRun()
             phase = .completed
         }
         if mode == "connect" && code != 0 && phase != .error && phase != .idle {
@@ -1918,12 +2896,17 @@ final class CollectorModel: ObservableObject {
         }
         if mode == "connect" && needsStorageReview { inspectResidue() }
         if mode == "backup-encryption-status" && needsStorageReview { inspectResidue() }
+        if mode == "backup-encryption-status" { startAfterCheckIfReady() }
+        if mode == "inspect" { completeStartupChecks() }
     }
 
     private func fail(_ message: String) {
         let failedSettingCheck = backupEncryptionStatus == .checking && statusCheckFailureActive
         if !failedSettingCheck { settingCheckAfterCollectionFailure = false }
         declineLocalCollection()
+        startAfterSettingCheck = false
+        // A started collection that stopped can never be handed off: its run ends here.
+        if phoneRun?.collectionStarted == true { endPhoneRun() }
         if failedSettingCheck {
             backupEncryptionStatus = .unknown
             backupEncryptionCheckCode = "collection_failed"
@@ -1956,10 +2939,10 @@ final class CollectorModel: ObservableObject {
         case .processing: return "Finishing local collection"
         case .selecting: return "Choose the people to review"
         case .reviewing:
-            if accountSaveAwaitingBrowserReceipt { return "Waiting for the browser's final save confirmation" }
-            return browserReceived ? "Browser received the reviewed preview" : "Your local review is ready"
-        case .completing: return "Account save acknowledged; finishing safely"
-        case .completed: return "Saved in your account"
+            if browserOwnsFlow { return "Saving in your AMPLIFai account" }
+            return "Your local review is ready"
+        case .completing: return "Saved — finishing on this Mac"
+        case .completed: return "Saved — your report is in your account"
         case .cancelling: return "Stopping and checking temporary data"
         case .error: return settingCheckAfterCollectionFailure ? "Previous collection stopped" : "Collection stopped"
         }
@@ -1984,16 +2967,23 @@ final class CollectorModel: ObservableObject {
         case .processing:
             return "The helper is finishing metadata reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
         case .selecting:
-            return "\(totalContacts) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then review their matching metadata."
+            return "\(totalContacts) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then Continue: only those are saved to the account you approved."
         case .reviewing:
+            // Only what the helper has reported; nothing here claims pages received or saved early.
             if accountSaveAwaitingBrowserReceipt {
-                return "The Mac received the first bound account-save receipt. Keep this review open until the browser confirms the final receipt; an interrupted reply may need account readback."
+                return "Your account reported the save. This Mac keeps its private copy until your browser confirms the final receipt."
             }
-            return browserReceived ? "A received preview is not the final account-save acknowledgment. Verify each source in the account and keep this review open until the matching final receipt arrives." : "Review the counts and observed dates. Creating a pairing only permits local transfer; cloud saving requires separate approval in your account."
+            if browserReceived {
+                return "Your browser has every selected page. This Mac keeps its private copy until your account confirms the save."
+            }
+            if browserOwnsFlow {
+                return "Your AMPLIFai account in your browser is saving the contacts you chose. You can keep this window minimized."
+            }
+            return "Review the counts and observed dates. Continue saves the contacts you chose to the account you approved."
         case .completing:
-            return "The matching browser run acknowledged its account save. This window stays open until the owned helper finishes safely."
+            return "Your account confirmed the save. This window stays available until the owned helper finishes safely."
         case .completed:
-            return "The matching save was acknowledged and the helper exited. Continue in the account browser to review your saved sources and results."
+            return "Your report is ready in your AMPLIFai account. This Mac's private copy was cleared."
         case .cancelling:
             return "Wait for the owned helper to stop. If temporary phone data remains, inspect it here before reconnecting; cleanup never targets other backups."
         }
@@ -2005,8 +2995,8 @@ final class CollectorModel: ObservableObject {
         }
         switch lastErrorCode {
         case "backup_password": return ["Check the existing encrypted computer-backup password with its owner.", "Reconnect and enter it only in this companion. Do not reset encryption to bypass this step."]
-        case "backup_encryption_disabled": return ["No backup started. This iPhone reported local backup encryption off, despite your call-history choice.", "If Calls matter, choose Encrypt local backup for this iPhone in Finder and keep its password, then start a fresh collection. Finder may create its own full backup and needs Mac storage."]
-        case "backup_encryption_unknown": return ["No backup started because this companion could not confirm the iPhone's backup encryption setting.", "Check the setting in Finder, reconnect, and retry. You can instead explicitly choose to continue without confirmed call-history coverage."]
+        case "backup_encryption_disabled": return ["No backup started. This iPhone now reports local backup encryption off, although the earlier check reported it on.", "If Calls matter, choose Encrypt local backup for this iPhone in Finder and keep its password, then start a fresh collection. Finder may create its own full backup and needs Mac storage."]
+        case "backup_encryption_unknown": return ["No backup started because this companion could not confirm the iPhone's backup encryption setting.", "Check the setting in Finder, then choose Check iPhone again. You can instead choose Start without confirmed call history."]
         case "backup_encryption_changed": return ["The completed backup did not confirm encryption after the earlier preflight; no preview was admitted.", "Check the iPhone's current Finder backup setting, then start a new collection. Do not treat this run as saved data."]
         case "workspace_low_space": return ["Free space for retained source databases, their parsing copies and a further 2 GiB reserve on the temporary-storage volume.", "Keep other backups intact, then reconnect."]
         case "backup_host_space": return ["The iPhone refused the host-space answer before a verified backup completion. Check available space on the Mac's temporary-storage volume; do not delete other backups just to satisfy this app.", "If a normal Finder backup works on this Mac but collection repeats this code, share the safe reference with support before another long retry."]
@@ -2032,7 +3022,7 @@ final class CollectorModel: ObservableObject {
         case "trust_required": return "Unlock the iPhone and approve its Trust prompt, then try again."
         case "backup_password": return "The existing encrypted-backup password was not accepted. Check it and retry."
         case "backup_encryption_disabled": return "Collection stopped before backup: this iPhone reported local backup encryption off. Calls may be unavailable. Check Finder if Calls matter."
-        case "backup_encryption_unknown": return "Collection stopped before backup: the iPhone's backup encryption setting could not be confirmed. Check Finder, then retry or choose to continue without confirmed Calls coverage."
+        case "backup_encryption_unknown": return "Collection stopped before backup: the iPhone's backup encryption setting could not be confirmed. Check Finder, then check the iPhone again or choose Start without confirmed call history."
         case "backup_encryption_changed": return "The completed backup did not confirm encryption. No local preview or account save was made. Check Finder before a new collection."
         case "unsupported_schema": return "This iPhone backup format is not supported safely yet. No metadata was saved."
         case "backup_control_invalid": return "Required iPhone backup control metadata was missing or invalid. No metadata was saved."

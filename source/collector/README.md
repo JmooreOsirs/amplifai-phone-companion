@@ -102,7 +102,7 @@ five-minute loopback pairing candidate. It binds only `127.0.0.1:48751`,
 requires exact Host and one exact HTTPS Origin, either
 `https://amplifai.satoris.ai` or `https://amplifai-database-engine.vercel.app`,
 fixed to whichever first pairs or connects, a one-time ten-digit code,
-and a one-use bearer token. It hands off only selected contact names/phones
+and a bearer token bound to one transfer. It hands off only selected contact names/phones
 and matching call/message metadata; message bodies, source backups and
 passwords never enter the bridge. Requests and payloads are bounded. The
 source includes a publicly deployed owner-test `/phone` receiver. A synthetic
@@ -111,6 +111,30 @@ address in CSP. Hosted navigation and route security headers were verified,
 but public HTTPS-to-loopback pairing and cross-browser local-network behavior
 remain unverified. No helper starts collection or the bridge merely because a
 site is visited.
+
+Account connection recovery replays the exact `/v3/connect` proof without
+resetting an already approved destination. An exact `/v3/release` retry retains
+the same token, handoff and payload digest; it revalidates the fixed authority's
+consume proof before returning them. Different intent credentials or release
+codes cannot recover that token. Released paged transfers use their existing
+two-hour inactivity deadline; retries do not create another collection or
+extend an expired transfer. `/v1/complete` and both save-receipt steps can be
+reconciled on the same transfer without delivering or saving sources again.
+These local guarantees require matching idempotent server proof enforcement;
+synthetic bridge tests do not establish production authorization or persistence.
+
+Before consumption, a different intent may replace the pending destination only
+after a fresh successful claim from the fixed account authority. It requires
+fresh native verification; an old destination approval cannot approve the new
+intent. A consumed transfer refuses replacement. On status uncertainty the
+native controller sends the exact helper command
+`{"action":"run-authority","handoffId":"<current handoff>","state":"paused"}`.
+This pauses new connection, release and page delivery without discarding the
+transfer or a confirmed receipt. The same command with `state: "current"`
+resumes admission without renewing deadlines. Completion and receipt recovery
+remain available for the original transfer. Explicit revocation or expiry
+disconnects the helper.
+
 An earlier USB charge or Trust tap alone does not prove Wi-Fi availability.
 Apple documents a separate Finder **General → Show this iPhone when on Wi-Fi**
 setting, enabled while the phone is connected by USB; this app does not change

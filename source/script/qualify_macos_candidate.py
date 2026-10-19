@@ -50,7 +50,8 @@ def main():
     if args.preview:
         info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
         candidate = {"sourceCommit": commit, "channel": args.channel,
-                     "version": info["CFBundleShortVersionString"], "build": info["CFBundleVersion"]}
+                     "version": info["CFBundleShortVersionString"], "build": info["CFBundleVersion"],
+                     "qualificationProfile": producer.release.PHONE_RUN_QUALIFICATION}
         producer.qualify(candidate, checkout, app, source, args.output / "delivery", int(os.environ.get("GITHUB_RUN_ID", "0")))
     else:
         subprocess.run([sys.executable, str(checkout / "release_control/producer.py"),
