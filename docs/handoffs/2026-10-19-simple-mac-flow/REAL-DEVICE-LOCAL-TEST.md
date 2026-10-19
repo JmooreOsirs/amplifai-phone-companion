@@ -42,7 +42,7 @@ It builds this branch's Mac app and writes a new, never-reused `/private/tmp/amp
    - Start within 10 minutes of the app opening with the approval.
    - After **Continue**, the browser must connect within 5 minutes (sign in beforehand).
    - A released transfer stays open while it's active, with a 2-hour inactivity limit.
-   - An expired connection can't be resumed; it needs a new collection.
+   - An expired connection can't be resumed. Choose **Discard review** in the app, then approve and collect again.
 5. **Data scope:**
    - The full iPhone backup arrives on this Mac temporarily, and the helper reads contacts, calls and messages metadata for the review.
    - After **Continue**, the chosen contacts and their available call and message metadata are saved automatically to the approved account and course.

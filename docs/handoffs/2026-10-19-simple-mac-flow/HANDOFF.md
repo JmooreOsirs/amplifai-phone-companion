@@ -59,24 +59,40 @@ This branch makes the Mac half of that flow: **one informed approval in the sign
 
 ## Known limits
 
-- **An expired connection can't be resumed.** The helper reports `expired` before release (no browser connection within 5 minutes of Continue) and after release (2 hours without activity; some sources may already be saved). A new `pair` always creates a new handoff, and the run binds one handoff and digest once, so the run is spent. The app says: "This connection expired. Nothing more can be sent from this collection. Check your account for any sources already saved. Starting again needs a new collection." It never re-pairs, rebinds or marks anything received.
+- **An expired connection can't be resumed.** The helper reports `expired` before release (no browser connection within 5 minutes of Continue) and after release (2 hours without activity; some sources may already be saved). A new `pair` always creates a new handoff, and the run binds one handoff and digest once, so the run is spent. The app says: "This connection expired. Nothing more can be sent from this collection. Check your account for any sources already saved. Starting again needs a new collection." It never re-pairs, rebinds or marks anything received. Smallest recovery: **Discard review** in the app (a new link is ignored while a review is open), then **Agree and collect** and **Open AMPLIFai Phone** on the website, and collect again.
 - **Start within 10 minutes of the claim.** After that, the app shows "approve again" in place of Start. Once collection starts, the run lasts 12 hours, so a normal 35-minute collection still binds.
 - **Browser profile and tab.** Account pages reopen in the browser that sent the link, which is read from the Apple Event sender, or else the default browser. macOS can't choose that browser's profile, window or tab. This is untested on a real browser, and the fake website fixture doesn't prove it.
-- **Requires the website.** This build needs a website with `0058` installed and the run flag on. Without them it offers only **Start in your AMPLIFai account**.
+- **Requires the website.** This build has no legacy flow. It needs a website with `0058` installed and the run flag on; without them it offers only **Start in your AMPLIFai account** and can't collect.
 - **Older apps.** RC28 and earlier don't handle the `amplifai-phone` link. See the release order.
 
-## Release order (with website PR #5)
+## Release and rollback order (coordinated: website PR #5 and Mac PR #10)
 
-1. Qualify `0058` on an isolated database. This is required, and its PostgreSQL fixture has never run. Then apply it.
-2. Deploy the website with `NEXT_PUBLIC_PHONE_RUN_APPROVAL_RELEASE` **off**.
-3. Publish this Mac build: next identity, protected ARM and Intel builds, `approvedSources` approval, signing, notarization and feeds. Confirm existing installs update.
-4. Enable the flag only after a version-compatibility check: a test Mac on this build opens the link and redeems the run.
+**The two sides don't fall back to each other:**
+- **RC28 and earlier** can't handle the `amplifai-phone` link. They use the legacy flow, which works only while the website flag is **off**.
+- **The new Mac build has no legacy flow.** It always needs a website run, so with the flag off it can only offer **Start in your AMPLIFai account**, and nothing can be collected.
+- Turning the flag off restores collection for RC28 users only.
 
-**Owners still on an older app:** once the flag is on, an owner who hasn't updated sees nothing open.
-- **Recovery:** update AMPLIFai Phone, then select **Open AMPLIFai Phone** again within the 1-hour window.
-- **Fallback:** turn the flag off to stop new links.
+**Order:**
+1. **Qualify `0058`** on an isolated database (required; its PostgreSQL fixture has never run). Then apply it. Enforcement switches on with the schema, and no runs exist yet.
+2. **Deploy the website with `NEXT_PUBLIC_PHONE_RUN_APPROVAL_RELEASE` off.** RC28 keeps the legacy flow.
+3. **Build and sign the new Mac build, staged but not in the production feed or download yet.**
+4. **Accept it before any broad rollout:** a signed build against a website with the flag on, on an approved official origin (the Mac bridge accepts only `amplifai.satoris.ai` and `amplifai-database-engine.vercel.app`). Run:
+   - a full-size collection (about 35 minutes; 5,134 contacts and 302,190 messages);
+   - the automatic save, report, Done and Print;
+   - a check that the real browser comes forward and the Mac never does;
+   - the revoke, replacement and expiry paths.
 
-**Rollback:** the flag off stops new runs. Existing runs keep their server-side fences. Reverting to RC28 uses the legacy flow, and run-bound handoffs fail closed.
+   **Gap:** the flag is a single build-time switch, and there's no per-account test gate. Turning it on in Production affects every owner, and RC28 owners would get a link they can't open. Jeff decides before this step: a short controlled window, or adding an account-level gate first.
+5. **Coordinate availability:** publish the accepted Mac build to the feed and download, confirm existing installs update, then enable the flag.
+
+**Owners still on RC28 after the flag is on:** nothing opens. **Recovery:** update AMPLIFai Phone, then select **Open AMPLIFai Phone** again within the 1-hour approval window. After that window, agree again.
+
+**Rollback:**
+- **Website flag off:** stops new runs. Existing runs keep their server-side fences, and RC28 owners get the legacy flow back. Owners already on the new Mac build **can't collect** until the flag is on again, or until a Mac build with the legacy flow is published.
+- **Mac rollback:** Sparkle doesn't downgrade, so going back means publishing a new, higher build that carries the earlier behavior. Run-bound handoffs from this build then fail closed.
+- **Keep the `0058` tables and functions.** Dropping them removes release history and save-authority links.
+
+**An expired connection, smallest recovery:** in AMPLIFai Phone, choose **Discard review**. A new link is ignored while a review is still open. Then, on the website, **Agree and collect** and **Open AMPLIFai Phone**, and collect again. Anything already saved stays in the account.
 
 ## Evidence
 
@@ -144,7 +160,7 @@ The system Python 3.9.6 can't run them (`hashlib.file_digest` needs 3.11+).
 ## Steps for Jeff
 
 1. Review this PR together with website PR #5. Note that the destination sheet and the local consent checkbox are gone by design.
-2. Qualify `0058` and roll it out in the order above.
+2. Qualify `0058` and roll out in the order above. Signed-build acceptance comes before any feed or flag change.
 3. Choose the next identity (build above `26101628`), build ARM and Intel with the protected workflows, approve `approvedSources`, then sign, notarize and publish. Update the feeds, `releases.json` and the website's pinned build numbers as for RC28.
 4. Real-device acceptance on the signed build, with the website flag on in a test environment:
    - Agree and collect → Open AMPLIFai Phone → Start → Trust and password → a 35-minute collection is fine → choose → Continue → the browser comes forward → automatic save of a large selection → report → Done and Print.
