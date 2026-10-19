@@ -4,6 +4,7 @@ import AppKit
 /// activation APIs (a flow check enforces it). The director never calls the restore/activate/raise methods.
 @MainActor final class AppKitCompanionSurface: CompanionWindowSurface {
     private weak var window: NSWindow?
+    private weak var closeConfirmationSheet: NSWindow?
     private let originalLevel: NSWindow.Level
     private let originalHides: Bool
     var returnToBrowser: ReturnToBrowserAction
@@ -42,9 +43,13 @@ import AppKit
         alert.informativeText = detail
         alert.addButton(withTitle: "Keep window open")
         alert.addButton(withTitle: "Cancel and close")
-        alert.beginSheetModal(for: window) { [weak self] response in
+        let sheet = alert.window
+        closeConfirmationSheet = sheet
+        alert.beginSheetModal(for: window) { [weak self, weak sheet] response in
             MainActor.assumeIsolated {
-                guard self?.window != nil else { return }
+                guard let self, let sheet, self.closeConfirmationSheet === sheet else { return }
+                self.closeConfirmationSheet = nil
+                guard self.window != nil else { return }
                 completion(response == .alertSecondButtonReturn)
             }
         }
@@ -61,7 +66,9 @@ import AppKit
     func invalidate() {
         guard let window else { return }
         self.window = nil
-        if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .abort) }
+        let sheet = closeConfirmationSheet
+        closeConfirmationSheet = nil
+        if let sheet, sheet.sheetParent === window { window.endSheet(sheet, returnCode: .abort) }
         window.level = originalLevel
         window.hidesOnDeactivate = originalHides
     }

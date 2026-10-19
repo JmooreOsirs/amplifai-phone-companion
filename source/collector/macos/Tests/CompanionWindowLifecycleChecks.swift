@@ -153,6 +153,24 @@ enum CompanionWindowLifecycleChecks {
         host.close()
     }
 
+    static func detachPreservesAnotherOwnersSheet() throws {
+        let model = CollectorModel(commandWriter: { _ in })
+        let coordinator = ActiveCompanionWindow.Coordinator(model: model)
+        let host = window()
+        let view = probe(coordinator)
+        host.contentView = view
+        let foreignSheet = window()
+        host.beginSheet(foreignSheet)
+        try require(host.attachedSheet === foreignSheet, "An unrelated component owns an attached AppKit sheet")
+        ActiveCompanionWindow.dismantleNSView(view, coordinator: coordinator)
+        drain()
+        try require(host.attachedSheet === foreignSheet && foreignSheet.sheetParent === host,
+                    "Adapter teardown must leave another component's sheet attached")
+        host.endSheet(foreignSheet)
+        foreignSheet.close()
+        host.close()
+    }
+
     static func repeatedRepresentableDestruction() throws {
         for iteration in 0..<40 {
             weak var releasedWindow: NSWindow?
@@ -188,6 +206,7 @@ enum CompanionWindowLifecycleChecks {
             try cancelThenCloseAndQueuedUpdates()
             try lateBrowserReplyAfterDetach()
             try dismantledConfirmationCannotDiscard()
+            try detachPreservesAnotherOwnersSheet()
             try repeatedRepresentableDestruction()
             try require(!application.isActive, "The harness must not activate the application")
             print("PASS: real offscreen AppKit lifecycle checks; 40 SwiftUI close/reopen cycles; no helper/device/account/browser")
