@@ -77,7 +77,10 @@ def main():
     self_test = subprocess.run([str(executable), "--sandbox-self-test"], capture_output=True, text=True, timeout=60)
     probe = subprocess.run(["sandbox-exec", "-f", str(profile), "/usr/bin/nc", "-v", "-z", "-w", "1", "127.0.0.1", "9"],
                            capture_output=True, text=True, timeout=30)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=SOURCE, text=True).strip()
+    dirty = subprocess.check_output(["git", "status", "--porcelain", "--", "."], cwd=SOURCE, text=True).strip()
     evidence = {
+        "sourceCommit": commit, "sourceTreeClean": not dirty,
         "bundle": str(app), "bundleIdentifier": identifier,
         "notProductionIdentity": identifier not in PRODUCTION_IDS,
         "outsideApplications": not str(app).startswith("/Applications/"),
