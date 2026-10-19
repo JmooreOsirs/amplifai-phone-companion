@@ -920,7 +920,7 @@ struct CollectorFlowChecks {
                     "The matching final receipt finishes the run")
         model.finished(mode: "connect", code: 0)
         try require(model.phase == .completed && model.contacts.isEmpty && model.selectedIDs.isEmpty &&
-                    model.statusTitle == "Saved in your account" && model.statusDetail.contains("saved phone report"),
+                    model.statusTitle == "Saved in your account" && model.statusDetail.contains("report is ready"),
                     "Completion clears the private review and points to the saved report")
         try require(model.journeyStep == 4, "Every step shows finished only after the confirmed save")
 

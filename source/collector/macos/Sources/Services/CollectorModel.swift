@@ -2053,7 +2053,7 @@ final class CollectorModel: ObservableObject {
         case .completing:
             return "The matching browser run acknowledged its account save. This window stays open until the owned helper finishes safely."
         case .completed:
-            return "Your account confirmed the matching save, the local helper finished, and this Mac's private review copy was cleared. Your saved phone report is in your AMPLIFai account. Choose Done to close this window."
+            return "Your report is ready in your AMPLIFai account. This Mac's private copy was cleared."
         case .cancelling:
             return "Wait for the owned helper to stop. If temporary phone data remains, inspect it here before reconnecting; cleanup never targets other backups."
         }

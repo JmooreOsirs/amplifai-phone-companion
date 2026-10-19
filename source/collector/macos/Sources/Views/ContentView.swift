@@ -8,8 +8,9 @@ struct ContentView: View {
     @State private var search = ""
     @State private var confirmingCleanup = false
     @State private var showingConnectionHelp = false
-    @State private var showingReviewedContacts = false
     @State private var destinationPromptVisible = false
+    @State private var showingShareDetails = false
+    @Environment(\.returnToBrowser) private var returnToBrowser
     @State private var destinationReviewRequestID: UUID?
     @State private var localCollectionChecked = false
     @State private var showingCollectionDetails = false
@@ -61,16 +62,9 @@ struct ContentView: View {
                 }
                 if model.phase == .reviewing {
                     reviewPanel
-                    if model.canEditWorkspace {
-                        // No link is open, so the selection can change; an edit returns to Choose.
+                    if model.canEditWorkspace && !model.handoffNotice.isEmpty {
+                        // Change selected contacts closed the link, so the selection is editable again.
                         contactPanel(wellHeight: Brand.Layout.contactWellHeight(windowHeight: geometry.size.height))
-                    } else {
-                        // The locked selection stays available without pushing the next action below the fold.
-                        DisclosureGroup("Show the \(model.selectedIDs.count.formatted()) selected contacts", isExpanded: $showingReviewedContacts) {
-                            contactPanel(wellHeight: Brand.Layout.contactWellHeight(windowHeight: geometry.size.height))
-                                .padding(.top, 12)
-                        }
-                        .font(Brand.bodyFont(15))
                     }
                 }
             }
@@ -826,79 +820,77 @@ struct ContentView: View {
     }
 
     private var reviewPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Share with your account")
                 .font(Brand.headingFont(28))
                 .foregroundStyle(Brand.heading)
                 .accessibilityAddTraits(.isHeader)
-            Text(model.statusTitle)
-                .font(Brand.headingFont(16))
-                .foregroundStyle(Brand.heading)
-            Text("Shared after you confirm the account: the \(model.selectedIDs.count.formatted()) selected contacts' names and phone numbers and their matching call and message metadata. Never shared: message text, backup files or passwords. Save is approved separately in your account.")
-                .font(Brand.bodyFont(15))
+            Text(shareSummary)
+                .font(Brand.bodyFont(16))
             shareNextStep
             if !model.handoffNotice.isEmpty {
-                Text(model.handoffNotice)
-                    .font(Brand.bodyFont(13))
-                    .foregroundStyle(Brand.muted)
+                Text(model.handoffNotice).font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
             }
             if !model.errorMessage.isEmpty {
                 Text(model.errorMessage).foregroundStyle(.red).textSelection(.enabled)
             }
-            Text("Local review of the contacts you chose")
-                .font(Brand.headingFont(16))
-                .foregroundStyle(Brand.heading)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], alignment: .leading, spacing: 16) {
-                metric(model.selectedIDs.count, "Selected contacts")
-                metric(model.matchedCalls, "Matching calls", unavailable: model.missingSources.contains("calls"))
-                metric(model.matchedMessages, "Matching messages", unavailable: model.missingSources.contains("messages"))
+            // Everything that is not the next step: what is shared, counts and caveats, changes and recovery.
+            DisclosureGroup("Details and options", isExpanded: $showingShareDetails) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Shared after you confirm the account: the selected contacts' names and phone numbers and their matching call and message metadata. Never shared: message text, backup files or passwords. Nothing is saved until you save in your account.")
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], alignment: .leading, spacing: 16) {
+                        metric(model.selectedIDs.count, "Selected contacts")
+                        metric(model.matchedCalls, "Matching calls", unavailable: model.missingSources.contains("calls"))
+                        metric(model.matchedMessages, "Matching messages", unavailable: model.missingSources.contains("messages"))
+                    }
+                    .brandWell()
+                    Text("The collector attempted all retained available history. The observed dates below do not prove complete phone history.")
+                    Text("Observed calls: \(model.missingSources.contains("calls") ? "unavailable" : dateRange(model.observedCallEarliest, model.observedCallLatest)).")
+                    Text("Observed messages: \(model.missingSources.contains("messages") ? "unavailable" : dateRange(model.observedMessageEarliest, model.observedMessageLatest)).")
+                    currentSourceDetails
+                    Text("A shared preview is not an account save. This Mac keeps its private local review until your account confirms the matching save, then clears it.")
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) { reviewRecoveryActions }
+                        VStack(alignment: .leading, spacing: 12) { reviewRecoveryActions }
+                    }
+                    if model.selectionChangePending {
+                        Text("Checking that changing contacts won’t interrupt a save…")
+                    }
+                    connectionHelp
+                }
+                .font(Brand.bodyFont(13))
+                .foregroundStyle(Brand.muted)
+                .padding(.top, 8)
             }
-            .brandWell()
-            Text("The collector attempted all retained available history. The observed dates below do not prove complete phone history.")
-                .font(Brand.bodyFont(13))
-                .foregroundStyle(Brand.muted)
-            Text("Observed calls: \(model.missingSources.contains("calls") ? "unavailable" : dateRange(model.observedCallEarliest, model.observedCallLatest)).")
-                .font(Brand.bodyFont(13))
-                .foregroundStyle(Brand.muted)
-            Text("Observed messages: \(model.missingSources.contains("messages") ? "unavailable" : dateRange(model.observedMessageEarliest, model.observedMessageLatest)).")
-                .font(Brand.bodyFont(13))
-                .foregroundStyle(Brand.muted)
-            currentSourceDetails
-            Text("A shared preview is not an account save. This Mac keeps its private local review until your account confirms the matching save, then clears it.")
-                .font(Brand.bodyFont(13))
-                .foregroundStyle(Brand.muted)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { reviewRecoveryActions }
-                VStack(alignment: .leading, spacing: 12) { reviewRecoveryActions }
-            }
-            if model.selectionChangePending {
-                Text("Checking that changing contacts won’t interrupt a save…")
-                    .font(Brand.bodyFont(13))
-                    .foregroundStyle(Brand.muted)
-            }
-            connectionHelp
+            .font(Brand.bodyFont(14))
         }
         .panel()
     }
 
-    /// The one normal next action for sharing; later gates stay on this Mac and in the account.
+    private var shareSummary: String {
+        let calls = model.missingSources.contains("calls") ? "calls unavailable" : "\(model.matchedCalls.formatted()) calls"
+        let messages = model.missingSources.contains("messages") ? "messages unavailable" : "\(model.matchedMessages.formatted()) messages"
+        return "\(model.selectedIDs.count.formatted()) contacts · \(calls) · \(messages)"
+    }
+
+    /// One next action per state. Sharing waits for the Mac sheet; saving happens only in the account.
     @ViewBuilder private var shareNextStep: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.accountSaveAwaitingBrowserReceipt {
-                progressLine("Saving — waiting for your browser to confirm")
-                Text("Your account received the first save receipt. Keep this window open until the browser confirms the final receipt.")
-                    .foregroundStyle(Brand.body)
+                progressLine("Saving in your account…")
+                Text("Keep this window open until your browser confirms.").foregroundStyle(Brand.body)
             } else if !model.destinationIntentID.isEmpty {
                 Text("Account: \(model.destinationEmail) · Course: \(model.destinationCourse)")
                     .foregroundStyle(Brand.heading)
                 if model.destinationApproved {
                     if model.browserReceived {
-                        Text("Preview received — finish Save in your browser")
-                            .font(Brand.headingFont(18)).foregroundStyle(Brand.heading)
-                        Text("Save each source in your AMPLIFai account. Nothing is saved until you do. This Mac keeps its review until your account confirms the save.")
+                        Text("Finish in your browser").font(Brand.headingFont(18)).foregroundStyle(Brand.heading)
+                        Text("Your AMPLIFai account in your browser has these contacts. Save them there to see your report.")
                             .foregroundStyle(Brand.body)
+                        Button("Continue in browser") { returnToBrowser() }
+                            .buttonStyle(LimeButton())
                     } else {
-                        progressLine("Sending the preview to your browser…")
+                        progressLine("Sending to your browser…")
                     }
                 } else if let choice = model.submittedDestinationDecision {
                     progressLine(choice ? "Confirming your sharing choice…" : "Declining this account…")
@@ -917,13 +909,12 @@ struct ContentView: View {
                     .buttonStyle(QuietAction())
                 }
             } else if !model.pairCode.isEmpty {
-                Text("In your browser, under Connect your reviewed phone, choose Connect. This Mac then asks you to confirm the account and course before anything is sent.")
+                Text("Finish connecting in your browser. This Mac then asks you to confirm the account before anything is sent.")
                     .foregroundStyle(Brand.body)
-                Link("Open AMPLIFai account in browser", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
+                Button("Continue in browser") { returnToBrowser() }
                     .buttonStyle(LimeButton())
             } else if model.accountLinkPending {
-                Text("Opening your signed-in AMPLIFai account…")
-                    .foregroundStyle(Brand.body)
+                progressLine("Opening your AMPLIFai account…")
             } else {
                 Text("Open your signed-in AMPLIFai account to continue. You will confirm the account here before sharing.")
                     .foregroundStyle(Brand.body)
@@ -966,6 +957,8 @@ struct ContentView: View {
                 Button(model.pairCode.isEmpty ? "Create one-time link" : "Create a new one-time link") { model.pairBrowser() }
                     .buttonStyle(SecondaryButton())
                     .disabled(!canCreateLink)
+                Link("Open AMPLIFai account in a new browser tab", destination: URL(string: "https://amplifai.satoris.ai/phone/account?continue=reviewed")!)
+                    .buttonStyle(QuietAction())
                 if !model.pairCode.isEmpty {
                     Text("One-time code: \(model.pairCode.prefix(5))-\(model.pairCode.suffix(5))")
                         .font(Brand.headingFont(18))
