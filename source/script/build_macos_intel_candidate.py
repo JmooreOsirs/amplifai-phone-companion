@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build RC28 as a separate, ad-hoc signed Intel candidate; never install it.
+"""Build RC29 as a separate, ad-hoc signed Intel candidate; never install it.
 
 Run with the prepared CPython 3.12 Intel environment. This intentionally does
 not modify the existing ARM release scripts, sign with Developer ID, contact
@@ -22,9 +22,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "source"
 MINIMUM = "14.0"
-VERSION = "2026.10.16-rc28-intel1"
-BUILD = "261016281"
-RELEASE = "macos-2026.10.16-rc28-intel1-test"
+VERSION = "2026.10.19-rc29-intel1"
+BUILD = "261019291"
+RELEASE = "macos-2026.10.19-rc29-intel1-test"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
@@ -81,7 +81,7 @@ def source_freeze(repo: Path, expected_commit: str) -> dict:
     if (_git(repo, "rev-parse", "HEAD").decode().strip() != expected_commit
             or _git(repo, "status", "--porcelain=v1", "--untracked-files=all")):
         raise ValueError("Authored source changed while freezing")
-    return {"schema": 1, "kind": "intel-rc28-authored-source-freeze", "version": VERSION,
+    return {"schema": 1, "kind": "intel-rc29-authored-source-freeze", "version": VERSION,
             "build": BUILD, "commit": commit,
             "tree": _git(repo, "rev-parse", commit + "^{tree}").decode().strip(),
             "files": sorted(records, key=lambda record: record["path"])}
@@ -92,12 +92,12 @@ def freeze_bytes(receipt: dict) -> bytes:
 
 
 def verify_release_policy(repo: Path = ROOT) -> dict:
-    policy = json.loads((repo / "docs/INTEL-RC28-BASELINE.json").read_text())
+    policy = json.loads((repo / "docs/INTEL-RC29-BASELINE.json").read_text())
     if (policy.get("schema") != 1 or policy.get("release") != RELEASE
             or policy.get("version") != VERSION or policy.get("build") != BUILD
             or policy.get("bundle_id") != "ai.satoris.amplifai.phone.intel-candidate"
             or policy.get("channel") != "macos-intel-test" or policy.get("minimum_macos") != MINIMUM):
-        raise ValueError("Intel release policy differs from the approved rc28 identity")
+        raise ValueError("Intel release policy differs from the approved rc29 identity")
     expected = {"source/collector/portable-requirements.lock", "source/collector/intel-dependency-inputs.json",
                 "source/collector/intel-python-inputs.json", "source/collector/macos/Package.resolved"}
     if set(policy["pinned_inputs"]) != expected:
@@ -262,7 +262,7 @@ def main() -> int:
                      "and notices. Other Python package versions are unchanged.\n")
     (legal / "SOURCE-README.md").write_text(
         "# Intel candidate corresponding source\n\n"
-        "This is a modified, ad-hoc signed RC28 Intel test build.\n"
+        "This is a modified, ad-hoc signed RC29 Intel test build.\n"
         "Exact current authored source and commit are in the adjacent authored-source-freeze.json and accompanying Intel build-source archive.\n"
         "Historical unchanged dependency source only: " + policy["historical_dependency_source"]["archive_url"] + "\n"
         "The adjacent Intel dependency receipt identifies rebuilt native dependencies.\n"
