@@ -11,7 +11,8 @@ struct RenderMacReviewAcceptance {
         NSApplication.shared.setActivationPolicy(.prohibited)
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change", "recovery-revoked", "link-failed"]
+        let shareStates = ["destination-prompt", "decide-later", "confirming", "sending"]
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change", "recovery-revoked", "link-failed"] + shareStates
         let setupStates = ["setup", "consent", "agree-checking", "agree-on", "agree-off", "agree-unknown", "password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
@@ -97,33 +98,43 @@ struct RenderMacReviewAcceptance {
                                          "expiresInSeconds": 300, "handoffId": handoffID])
                             try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
                                          "intentId": intentID, "email": "synthetic@example.invalid", "course": "Synthetic review"])
-                            try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
-                                         "intentId": intentID])
-                            try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
-                            guard model.handoffID == handoffID, model.destinationApproved, model.browserReceived,
-                                  !model.canEditWorkspace, !model.handoffAcknowledged else {
-                                throw FixtureError.unexpectedState("\(state): synthetic handoff did not lock the review")
-                            }
-                            if state == "save-receipt" {
-                                try receive(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
-                                guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged,
-                                      !model.canRequestSelectionChange else {
-                                    throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
+                            if state == "confirming", let request = model.pendingDestinationApproval {
+                                model.decideAccountDestination(true, request: request)
+                                guard model.destinationDecisionPending, model.pendingDestinationApproval == nil else {
+                                    throw FixtureError.unexpectedState("confirming: decision must wait for the helper")
                                 }
                             }
-                            if state == "recovery-revoked" {
-                                model.requestSelectionChange()
-                                try receive(["kind": "state", "state": "pairing_revoked"])
-                                guard model.handoffID.isEmpty, model.handoffNotice.contains("Continue to account"),
-                                      model.selectedIDs == Set(selected) else {
-                                    throw FixtureError.unexpectedState("recovery-revoked: review must survive a revoked link")
-                                }
+                            if !["destination-prompt", "decide-later", "confirming"].contains(state) {
+                                try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
+                                             "intentId": intentID])
                             }
-                            if state == "selection-change" {
-                                model.requestSelectionChange()
-                                guard model.selectionChangePending, !model.canEditWorkspace,
-                                      model.handoffID == handoffID, model.selectedIDs == Set(selected) else {
-                                    throw FixtureError.unexpectedState("Selection change must await helper revocation")
+                            if !shareStates.contains(state) {
+                                try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
+                                guard model.handoffID == handoffID, model.destinationApproved, model.browserReceived,
+                                      !model.canEditWorkspace, !model.handoffAcknowledged else {
+                                    throw FixtureError.unexpectedState("\(state): synthetic handoff did not lock the review")
+                                }
+                                if state == "save-receipt" {
+                                    try receive(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
+                                    guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged,
+                                          !model.canRequestSelectionChange else {
+                                        throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
+                                    }
+                                }
+                                if state == "recovery-revoked" {
+                                    model.requestSelectionChange()
+                                    try receive(["kind": "state", "state": "pairing_revoked"])
+                                    guard model.handoffID.isEmpty, model.handoffNotice.contains("Continue to account"),
+                                          model.selectedIDs == Set(selected) else {
+                                        throw FixtureError.unexpectedState("recovery-revoked: review must survive a revoked link")
+                                    }
+                                }
+                                if state == "selection-change" {
+                                    model.requestSelectionChange()
+                                    guard model.selectionChangePending, !model.canEditWorkspace,
+                                          model.handoffID == handoffID, model.selectedIDs == Set(selected) else {
+                                        throw FixtureError.unexpectedState("Selection change must await helper revocation")
+                                    }
                                 }
                             }
                         }
@@ -160,7 +171,8 @@ struct RenderMacReviewAcceptance {
                     model.receive(try AgentEvent.decode(Data(reading.utf8)))
                 }
                 try render(ContentView(model: model, updater: updater,
-                           initialCollectionAgreement: ["consent", "agree-on"].contains(state)), width: width, height: height,
+                           initialCollectionAgreement: ["consent", "agree-on"].contains(state),
+                           initialDestinationPromptVisible: state == "destination-prompt"), width: width, height: height,
                            path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
                     try render(ContactReviewView(model: model, workspace: workspace, wellHeight: 322,

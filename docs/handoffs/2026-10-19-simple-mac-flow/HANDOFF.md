@@ -29,7 +29,7 @@ It also adds a clickable FAKE DATA demo so the flow can be tried in seconds with
 | Finder call-history setup | A step on the setup screen | Optional link, shown only when encryption is Off |
 | Collect | Progress panel; stages Connect / Receive / Read / Review & save | Same panel; stages Connect iPhone / Receive backup / Read locally / Clean up |
 | Choose | "Choose contacts"; Include all; All/Main/Review; Select all N / Deselect all; "Mark for group move" uses the same checkbox as inclusion; "Next · N selected" → share dialog | "Choose contacts to share"; scoped buttons name their scope ("Select all 5,129 in Main", "Deselect all in Main"), hidden for All with no search, where they would duplicate Include all; move marks are a flag tag, not a checkbox; footer **Continue to account** ("You will confirm the account before sharing. Save is approved separately in your account.") |
-| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; "Review destination approval"; stale "Save and continue" recovery text | **Share with your account** comes first with one next action: Continue to account / Open AMPLIFai account in browser / **Confirm account and course…**. The local review counts are unchanged. Change selected contacts and Discard review stay visible. One-time link, code and expiry go under a closed **Having trouble connecting?**. The locked grid is behind a disclosure. After a confirmed save, a link to the account page holds the saved report. |
+| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; a green "Review destination approval" button competed with the auto-opened destination sheet; after the save the window closed itself with no explanation; stale "Save and continue" recovery text | **Share with your account** comes first with one next action: Continue to account, or Open AMPLIFai account in browser. The auto-opened sheet is the **only** destination decision: behind it the page shows passive text, and a quiet "Review account…" appears only after Decide later. Then the page reads, in order: "Confirming your sharing choice…" (or "Declining this account…"), "Sending the preview to your browser…", "Preview received — finish Save in your browser", "Saving — waiting for your browser to confirm". The window now **stays open** on **Saved in your account**, with "Open your account to view the saved report" and **Done**. The local review counts are unchanged. Change selected contacts and Discard review stay visible. Link, code and expiry details are under a closed **Having trouble connecting?**. |
 | Journey | — | "Agree · Collect · Choose · Share & report" bar. Finished steps show a check-circle, never a checkbox, so verified progress is never confused with a choice. |
 
 Gates kept exactly: Apple's Trust prompt and the existing backup password; the per-run local approval (bound to
@@ -43,12 +43,12 @@ only prepared the local review and opened the browser, and nothing is transmitte
 | File | Change |
 |---|---|
 | `Sources/Views/ContentView.swift` | One-screen Agree, share panel layout, footer, journey bar, account navigation through SwiftUI `openURL` (same default browser open; lets a host intercept it) |
-| `Sources/Services/CollectorModel.swift` | `agreeAndStartCollection`, `settingCallHistoryPreparation`, `journeyStep`, `accountLinkPending`; disclosure `native-local-collection-v5`; recovery text names current actions (no "Save and continue") |
+| `Sources/Services/CollectorModel.swift` | `agreeAndStartCollection`, `settingCallHistoryPreparation`, `journeyStep`, `accountLinkPending`. `submittedDestinationDecision` blocks a second Share or Not-this-account for the same request until the helper answers; it clears on that answer, on a link reset and on `handoff_unconfirmed`. The owner's Share is also recorded for that exact handoff and intent, so a later matching receipt reconciles a lost approval (never counted as a save), and the page says "Sharing has not been confirmed" meanwhile. Disclosure `native-local-collection-v5`; recovery text names current actions (no "Save and continue") |
 | `Sources/Views/BrandControls.swift` | `JourneySteps`, `VerifiedStatusRow`, `MoveMarkToggle` |
 | `Sources/Views/ContactReviewView.swift` | Scoped bulk labels; redundant All actions hidden; flag-style move marks |
 | `Sources/Views/CollectionStatusPanel.swift` | Stage names, recovery text, Discard review…, saved-report link |
-| `Sources/Support/ActiveCompanionWindow.swift` | Destination sheet: "Share your reviewed contacts with this account?" · **Share with this account** / Not this account / Decide later |
-| `Tests/CollectorFlowChecks.swift` | Start gates, journey steps, all/subset/none selection, share → confirm → save receipt → completion, cancellation, revoked-link and failed-link recovery |
+| `Sources/Support/ActiveCompanionWindow.swift` | Destination sheet: "Share your reviewed contacts with this account?" · **Share with this account** / Not this account / Decide later. Reports when it is on screen so the page never offers a competing decision. **Behavior change for review:** the window no longer closes itself after a confirmed save; it shows Saved in your account until Done or the close button |
+| `Tests/CollectorFlowChecks.swift` | Start gates, journey steps, all/subset/none selection, share → confirm → save receipt → completion, cancellation, revoked-link and failed-link recovery. Destination-decision cases: no double decision (Share or decline), `handoff_unconfirmed`, a lost approval reconciled by a matching receipt (including after `handoff_unconfirmed`), and no approval from a receipt without the owner's Share or for another handoff |
 | `Tests/CollectorModelChecks.swift` + new `Tests/check_model.sh` | Cancelling the pre-agreement iPhone check stays on Agree; one Start launches exactly the agreed run and consumes it |
 | `Tests/Fixtures/RenderMacReviewAcceptance.swift` | New states; every image stamped "SYNTHETIC FIXTURE" |
 | `Tests/Fixtures/FakeDataDemo/*`, `Tests/check_fake_demo.sh`, `source/script/build_fake_data_demo.py`, `source/script/run_fake_data_demo.sh` | Clickable FAKE DATA demo and its checks (not part of the shipped app) |
@@ -90,9 +90,10 @@ The script builds a fresh bundle under `/private/tmp/amplifai-fake-demo.<timesta
 2. Tick the agreement, then Start collection (about 6 seconds of fake progress).
 3. Choose contacts: Include all, Main or Review, search, single checkboxes, or none.
 4. Continue to account. The browser open is intercepted and shown in the banner.
-5. Answer the real Mac sheet: Share with this account.
-6. A simulated browser receipt and Save follow.
-7. A **SAMPLE REPORT · FAKE DATA** window opens. The main window closes itself, as the real app does after a confirmed save.
+5. After a few seconds of simulated browser Connect, answer the real Mac sheet: Share with this account.
+6. The page shows Confirming, then Sending, then Preview received — finish Save in your browser.
+7. Click the yellow banner's **Simulate Save in browser (fake)**. It stands in for the real per-source Save; nothing is saved automatically.
+8. The Mac shows **Saved in your account**, and a **SAMPLE REPORT · FAKE DATA** window opens. "Open SAMPLE REPORT" in the banner reopens it.
 
 What is real: the production `ContentView`, `CollectorModel`, start/check/cancel/recovery code and the
 destination sheet. The model launches its helper the normal way; the demo bundle simply carries a fake helper
@@ -120,7 +121,7 @@ upload or saved report was involved. The website report contract is unchanged an
 
 ## Steps for Jeff
 
-1. Review and merge the PR into `release/native`. CI's `release-control-checks` should pass, since release control is unchanged.
+1. Review, in particular the behavior change that the window stays open after a confirmed save, and merge the PR into `release/native`. CI's `release-control-checks` should pass, since release control is unchanged.
 2. Run the five Mac checks above on a Mac, or add `check_model.sh` and `check_fake_demo.sh` to `producer.py`.
 3. Choose the next identity, for example `2026.10.xx-rc29` with a build above `26101628` (Intel above `261016281`), in `Info.plist` and the Intel baseline as you did for RC28.
 4. Website first (it auto-deploys from `main`): accept the new build numbers in companion diagnostics and telemetry, as was done for RC28 (`dfa039f`). The disclosure version string is local to the Mac app; the website does not read it.

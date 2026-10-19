@@ -313,6 +313,8 @@ struct CollectionStatusPanel: View {
                 // The report itself needs the account's course scope, so open the signed-in account page.
                 Link("Open your account to view the saved report", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
                     .buttonStyle(LimeButton())
+                Button("Done") { NSApp.keyWindow?.performClose(nil) }
+                    .buttonStyle(SecondaryButton())
             }
         } else if model.phase == .selecting || model.phase == .reviewing {
             Button("Discard review…") { confirmingDiscard = true }.buttonStyle(SecondaryButton())

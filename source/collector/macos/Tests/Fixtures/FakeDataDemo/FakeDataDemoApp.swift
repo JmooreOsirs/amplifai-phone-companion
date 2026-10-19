@@ -81,18 +81,32 @@ final class DemoSession: ObservableObject {
     let model = CollectorModel(bundleInformation: ["CFBundleVersion": "fake-demo"])
     let updater = CompanionUpdater(enablePublishedUpdates: false, bundleInformation: [:])
     @Published private(set) var intercepted: [String] = []
+    @Published private(set) var saveRequested = false
+    @Published private(set) var reportReady = false
     private(set) var reviewedIDs: Set<Int> = []
-    var onSaved: ((FakeDataSet.SampleReport?) -> Void)?
+    var presentReport: ((FakeDataSet.SampleReport?) -> Void)?
 
     func intercept(_ url: URL) {
         intercepted.append(url.absoluteString)
     }
 
+    /// Stands in for the per-source Save in the browser: the fake helper waits for this per-link file.
+    func simulateBrowserSave() {
+        let control = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("demo-control")
+        try? FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
+        if FileManager.default.createFile(atPath: control.appendingPathComponent("save-\(model.handoffID)").path, contents: Data()) {
+            saveRequested = true
+        }
+    }
+
+    func openReport() { presentReport?(FakeDataSet.sampleReport(selected: reviewedIDs)) }
+
     func observe() {
         if model.phase == .reviewing && !model.selectionNeedsReview { reviewedIDs = model.selectedIDs }
-        if model.handoffAcknowledged, let onSaved {
-            self.onSaved = nil
-            onSaved(FakeDataSet.sampleReport(selected: reviewedIDs))
+        if !model.browserReceived && saveRequested && !model.handoffAcknowledged { saveRequested = false }
+        if model.handoffAcknowledged && !reportReady {
+            reportReady = true
+            openReport()
         }
     }
 }
@@ -122,7 +136,15 @@ struct DemoBanner: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("FAKE DATA DEMO · fictional contacts · simulated iPhone and simulated browser · no device, account, upload or network")
                 .font(.system(size: 13, weight: .heavy))
-            Text(narration).font(.system(size: 13, weight: .semibold))
+            HStack(spacing: 12) {
+                Text(narration).font(.system(size: 13, weight: .semibold))
+                if model.browserReceived && !model.accountSaveAwaitingBrowserReceipt && !session.saveRequested && !model.handoffAcknowledged {
+                    Button("Simulate Save in browser (fake)") { session.simulateBrowserSave() }
+                }
+                if session.reportReady {
+                    Button("Open SAMPLE REPORT") { session.openReport() }
+                }
+            }
             if let last = session.intercepted.last {
                 Text("Browser open intercepted, nothing opened: \(last)")
                     .font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
@@ -148,17 +170,25 @@ struct DemoBanner: View {
         case .selecting:
             return "Choose contacts: try Include all, Main or Review, a search, single checkboxes, or none. Then Continue to account."
         case .reviewing:
-            if model.accountSaveAwaitingBrowserReceipt || model.browserReceived {
-                return "Simulated browser received the preview and is simulating Save. No account is saved."
+            if model.accountSaveAwaitingBrowserReceipt || session.saveRequested {
+                return "Simulated browser: saving (fake). The Mac waits for the final receipt; no account is saved."
             }
-            if model.destinationApproved { return "Account confirmed on the Mac. Simulated browser receiving the preview…" }
+            if model.browserReceived {
+                return "Simulated browser: preview received. In the real flow you now Save each source in your browser →"
+            }
+            if model.destinationApproved { return "Simulated browser: receiving the preview…" }
+            if model.destinationDecisionPending { return "The Mac is confirming your sharing choice with the simulated helper…" }
             if model.pendingDestinationApproval != nil {
-                return "The simulated account asks to connect. Confirm it in the Mac dialog with Share with this account."
+                return "The real Mac dialog asks you to confirm the account. It is the only place to decide."
             }
-            if !model.pairCode.isEmpty { return "Simulated browser connecting in about two seconds…" }
+            if !model.pairCode.isEmpty {
+                return "Simulated browser: in the real flow you choose Connect your reviewed phone now. Simulating it in a few seconds…"
+            }
             return "Preparing a simulated one-time link…"
-        case .completing, .completed:
-            return "Simulated Save confirmed. The SAMPLE REPORT opens in its own window."
+        case .completing:
+            return "Simulated Save confirmed. The Mac is finishing local cleanup…"
+        case .completed:
+            return "Done. The Mac shows Saved in your account; the SAMPLE REPORT window shows the simulated outcome."
         case .cancelling: return "Stopping the simulated helper…"
         case .error: return "Simulated stop. Use the recovery shown below."
         }
@@ -228,7 +258,7 @@ final class DemoDelegate: NSObject, NSApplicationDelegate {
 
     private func openSession() {
         let session = DemoSession()
-        session.onSaved = { [weak self] report in self?.showReport(report) }
+        session.presentReport = { [weak self] report in self?.showReport(report) }
         sessions.append(session)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 860),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)

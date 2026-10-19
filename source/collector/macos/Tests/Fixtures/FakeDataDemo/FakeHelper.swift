@@ -8,6 +8,15 @@ struct FakeHelper {
     private static let fast = FileManager.default.fileExists(atPath: URL(fileURLWithPath: CommandLine.arguments[0])
         .deletingLastPathComponent().appendingPathComponent("FAST_DEMO_TIMING").path)
 
+    /// The demo bundle's folder; the demo app writes a per-link file there when Brian clicks the simulated Save.
+    private static let demoControl = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("demo-control")
+
+    private static func saveClicked(_ handoffID: String) -> Bool {
+        fast || FileManager.default.fileExists(atPath: demoControl.appendingPathComponent("save-\(handoffID)").path)
+    }
+
     private static func emit(_ object: [String: Any]) {
         guard var data = try? JSONSerialization.data(withJSONObject: object) else { return }
         data.append(10)
@@ -65,7 +74,7 @@ struct FakeHelper {
     }
 
     /// Simulated browser stages advance one per handoff-status poll (the app polls every two seconds).
-    private enum Browser { case idle, linked, asked, approved, received, savePending, denied }
+    private enum Browser { case idle, linked, connecting, asked, approved, received, savePending, denied }
 
     private static func commands() {
         let all = FakeDataSet.contacts
@@ -123,7 +132,10 @@ struct FakeHelper {
             case "handoff-status":
                 guard command["handoffId"] as? String == handoffID else { continue }
                 switch browser {
-                case .linked:
+                case .linked where !fast:
+                    // One visible beat for "you would choose Connect in your browser now".
+                    browser = .connecting
+                case .linked, .connecting:
                     browser = .asked
                     emit(["kind": "destination", "state": "pending", "handoffId": handoffID, "intentId": intentID,
                           "email": FakeDataSet.email, "course": FakeDataSet.course])
@@ -131,6 +143,8 @@ struct FakeHelper {
                     browser = .received
                     emit(["kind": "handoff", "state": "received", "handoffId": handoffID])
                 case .received:
+                    // The real flow needs a per-source Save in the browser; the demo waits for its labelled click.
+                    guard saveClicked(handoffID) else { continue }
                     browser = .savePending
                     emit(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
                 case .savePending:

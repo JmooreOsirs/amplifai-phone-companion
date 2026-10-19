@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var confirmingCleanup = false
     @State private var showingConnectionHelp = false
     @State private var showingReviewedContacts = false
+    @State private var destinationPromptVisible = false
     @State private var destinationReviewRequestID: UUID?
     @State private var localCollectionChecked = false
     @State private var showingCollectionDetails = false
@@ -20,11 +21,13 @@ struct ContentView: View {
     @State private var confirmingBulkMove = false
     @State private var showingGroupTools = false
 
-    @MainActor init(model: CollectorModel, updater: CompanionUpdater, initialCollectionAgreement: Bool = false) {
+    @MainActor init(model: CollectorModel, updater: CompanionUpdater, initialCollectionAgreement: Bool = false,
+                    initialDestinationPromptVisible: Bool = false) {
         self.model = model
         self.updater = updater
         _search = State(initialValue: model.workspace?.query ?? "")
         _localCollectionChecked = State(initialValue: initialCollectionAgreement)
+        _destinationPromptVisible = State(initialValue: initialDestinationPromptVisible)
     }
 
     var body: some View {
@@ -44,8 +47,9 @@ struct ContentView: View {
                 }
                 if !model.sourceDiagnosticHistory.isEmpty { previousSourceDetails }
                 if model.phase == .error || model.phase == .completed || (model.phase == .idle && model.needsStorageReview) { statusPanel }
+                // A confirmed save ends on its own summary; starting again means closing and reopening.
                 if (!model.helperRunning || model.backupSettingCheckInProgress) &&
-                    (model.phase == .idle || model.phase == .error || model.phase == .completed) {
+                    (model.phase == .idle || model.phase == .error) {
                     if model.hasUnsavedReview { retainedReviewRecovery }
                     else { collectionApprovalPanel.id("collection-setup") }
                 }
@@ -81,7 +85,8 @@ struct ContentView: View {
         .font(Brand.bodyFont(16))
         .tint(Brand.lime)
         .foregroundStyle(Brand.body)
-        .background(ActiveCompanionWindow(model: model, destinationReviewRequestID: destinationReviewRequestID)
+        .background(ActiveCompanionWindow(model: model, destinationReviewRequestID: destinationReviewRequestID,
+                                          onDestinationPromptChange: { destinationPromptVisible = $0 })
             .frame(width: 0, height: 0))
         .onChange(of: model.collectionApprovalRunID) { _, _ in
             localCollectionChecked = false
@@ -880,24 +885,36 @@ struct ContentView: View {
     @ViewBuilder private var shareNextStep: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.accountSaveAwaitingBrowserReceipt {
-                Text("The Mac received the first bound account-save receipt. Keep this review open until the browser confirms the final receipt.")
+                progressLine("Saving — waiting for your browser to confirm")
+                Text("Your account received the first save receipt. Keep this window open until the browser confirms the final receipt.")
                     .foregroundStyle(Brand.body)
             } else if !model.destinationIntentID.isEmpty {
                 Text("Account: \(model.destinationEmail) · Course: \(model.destinationCourse)")
                     .foregroundStyle(Brand.heading)
                 if model.destinationApproved {
-                    Text(model.browserReceived
-                         ? "The browser received the reviewed preview. Verify source choices and approve Save there; the final account-save receipt has not arrived here."
-                         : "Account confirmed. Check the account browser for the reviewed preview. Approval alone does not prove the preview arrived or saved any source.")
-                        .foregroundStyle(Brand.body)
+                    if model.browserReceived {
+                        Text("Preview received — finish Save in your browser")
+                            .font(Brand.headingFont(18)).foregroundStyle(Brand.heading)
+                        Text("Save each source in your AMPLIFai account. Nothing is saved until you do. This Mac keeps its review until your account confirms the save.")
+                            .foregroundStyle(Brand.body)
+                    } else {
+                        progressLine("Sending the preview to your browser…")
+                    }
+                } else if let choice = model.submittedDestinationDecision {
+                    progressLine(choice ? "Confirming your sharing choice…" : "Declining this account…")
+                } else if destinationPromptVisible {
+                    // The sheet is the only place to decide; nothing here competes with it.
+                    Text("Answer the dialog on this Mac: Share with this account, or Not this account.")
+                        .foregroundStyle(Brand.muted)
                 } else {
-                    Button("Confirm account and course…") {
+                    Text(model.destinationShareUnconfirmed
+                         ? "Sharing has not been confirmed. Review the account to try again."
+                         : "Nothing has been shared yet. Review the account when you are ready.")
+                        .foregroundStyle(Brand.body)
+                    Button("Review account…") {
                         if model.pendingDestinationApproval != nil { destinationReviewRequestID = UUID() }
                     }
-                    .buttonStyle(LimeButton())
-                    Text("Nothing is sent until you choose Share with this account.")
-                        .font(Brand.bodyFont(13))
-                        .foregroundStyle(Brand.muted)
+                    .buttonStyle(QuietAction())
                 }
             } else if !model.pairCode.isEmpty {
                 Text("In your browser, under Connect your reviewed phone, choose Connect. This Mac then asks you to confirm the account and course before anything is sent.")
@@ -916,6 +933,13 @@ struct ContentView: View {
             }
         }
         .brandControls()
+    }
+
+    private func progressLine(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(text).font(Brand.headingFont(18)).foregroundStyle(Brand.heading)
+        }
     }
 
     private var canCreateLink: Bool {

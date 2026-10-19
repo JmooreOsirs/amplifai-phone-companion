@@ -90,6 +90,10 @@ enum FakeDemoChecks {
         guard let request = model.pendingDestinationApproval else { throw Failure.check("destination") }
         try require(request.email == FakeDataSet.email && request.course == FakeDataSet.course, "Only the fictional account is shown")
         model.decideAccountDestination(true, request: request)
+        try require(model.destinationDecisionPending && model.pendingDestinationApproval == nil,
+                    "One decision: Confirming shows until the helper acknowledges")
+        try await wait(6, "helper acknowledges the sharing choice") { model.destinationApproved }
+        try require(!model.destinationDecisionPending, "Acknowledged choice moves to Sending")
         try await wait(12, "simulated browser receipt and Save") { model.handoffAcknowledged }
         try await wait(6, "fake helper exit after Save") { model.phase == .completed && !model.helperRunning }
         try require(model.selectedIDs.isEmpty && model.journeyStep == 4, "Completion clears the private review")

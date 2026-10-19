@@ -43,6 +43,7 @@ struct CollectorFlowChecks {
         try reviewedAccountContinuation()
         try singleAgreementStartGates()
         try simplifiedJourneyEndToEnd()
+        try destinationDecisionRecovery()
         try staleDestinationEventsCannotClearApprovedRequest()
         try firstReceiptDuringReconnectKeepsOldBinding()
         try selectionChangeWaitsForSafeHelperRevocation()
@@ -754,6 +755,82 @@ struct CollectorFlowChecks {
         }
     }
 
+    /// One sheet decision at a time, for Share and Not this account, with lost or rejected helper answers.
+    private static func destinationDecisionRecovery() throws {
+        final class Sent { var commands: [Data] = [] }
+        let handoff = "00000000-0000-4000-8000-0000000000aa"
+        let intent = "00000000-0000-4000-8000-0000000000bb"
+        func awaitingDecision() throws -> (CollectorModel, Sent, CollectorModel.DestinationApprovalRequest) {
+            let sent = Sent()
+            let model = CollectorModel(commandWriter: { sent.commands.append($0) })
+            model.receive(try event(#"{"kind":"capture","contacts":[{"id":3,"name":"Synthetic Person","phoneCount":1,"phoneEnds":["0000"]}]}"#))
+            model.selectedIDs = [3]
+            model.review()
+            model.receive(try reviewEvent(try emittedReviewID(sent.commands), ids: [3]))
+            model.receive(try event(#"{"kind":"pairing","pairCode":"1234567890","port":48751,"handoffId":"\#(handoff)"}"#))
+            model.receive(try event(#"{"kind":"destination","state":"pending","handoffId":"\#(handoff)","intentId":"\#(intent)","email":"synthetic@example.invalid","course":"Synthetic course"}"#))
+            guard let request = model.pendingDestinationApproval else { throw Failure.check("A destination must await the owner") }
+            return (model, sent, request)
+        }
+        func received(_ state: String, _ id: String = handoff) throws -> AgentEvent {
+            try event(#"{"kind":"handoff","state":"\#(state)","handoffId":"\#(id)"}"#)
+        }
+
+        // Not this account cannot be sent twice, and its acknowledgement closes the request.
+        let (declined, declinedSent, declinedRequest) = try awaitingDecision()
+        declined.decideAccountDestination(false, request: declinedRequest)
+        let afterDecline = declinedSent.commands.count
+        try require(declined.submittedDestinationDecision == false && declined.pendingDestinationApproval == nil,
+                    "A submitted Not this account shows Declining and offers no second decision")
+        declined.decideAccountDestination(false, request: declinedRequest)
+        declined.decideAccountDestination(true, request: declinedRequest)
+        try require(declinedSent.commands.count == afterDecline, "Neither choice can be sent again while one is pending")
+        declined.receive(try received("received"))
+        try require(!declined.destinationApproved, "A receipt cannot turn a submitted decline into approval")
+        declined.receive(try event(#"{"kind":"destination","state":"denied","handoffId":"\#(handoff)","intentId":"\#(intent)"}"#))
+        try require(declined.submittedDestinationDecision == nil && declined.destinationIntentID.isEmpty && !declined.destinationApproved,
+                    "The denied acknowledgement clears the pending choice and closes the request")
+
+        // A rejected or lost confirmation must not strand Confirming; the owner can decide once more.
+        let (unconfirmed, _, unconfirmedRequest) = try awaitingDecision()
+        unconfirmed.decideAccountDestination(true, request: unconfirmedRequest)
+        unconfirmed.receive(try event(#"{"kind":"error","code":"handoff_unconfirmed"}"#))
+        try require(unconfirmed.submittedDestinationDecision == nil && unconfirmed.phase == .reviewing &&
+                    unconfirmed.selectedIDs == [3] && unconfirmed.pendingDestinationApproval == unconfirmedRequest,
+                    "handoff_unconfirmed clears Confirming, keeps the review and allows one fresh decision")
+
+        // Share, approval answer lost, handoff_unconfirmed, then a matching receipt: the recorded Share still reconciles.
+        let (late, _, lateRequest) = try awaitingDecision()
+        late.decideAccountDestination(true, request: lateRequest)
+        late.receive(try event(#"{"kind":"error","code":"handoff_unconfirmed"}"#))
+        try require(late.submittedDestinationDecision == nil && late.destinationShareUnconfirmed && !late.destinationApproved,
+                    "After handoff_unconfirmed the page says sharing has not been confirmed, not that nothing was shared")
+        late.receive(try received("received"))
+        try require(late.destinationApproved && late.browserReceived && late.pendingDestinationApproval == nil &&
+                    !late.destinationShareUnconfirmed && !late.handoffAcknowledged,
+                    "A later matching receipt reconciles the recorded Share without offering it again or counting a save")
+
+        // A lost approved acknowledgement is reconciled only by a matching receipt after the owner's Share.
+        let (lost, _, lostRequest) = try awaitingDecision()
+        lost.decideAccountDestination(true, request: lostRequest)
+        lost.receive(try received("received", "00000000-0000-4000-8000-0000000000ff"))
+        try require(!lost.destinationApproved && lost.submittedDestinationDecision == true,
+                    "A receipt for another handoff changes nothing")
+        lost.receive(try received("received"))
+        try require(lost.destinationApproved && lost.submittedDestinationDecision == nil && lost.browserReceived &&
+                    !lost.handoffAcknowledged && !lost.accountSaveAwaitingBrowserReceipt,
+                    "A matching receipt confirms the Share choice but is not a save")
+        let (lostSave, _, lostSaveRequest) = try awaitingDecision()
+        lostSave.decideAccountDestination(true, request: lostSaveRequest)
+        lostSave.receive(try received("saved_pending_browser_receipt"))
+        try require(lostSave.destinationApproved && lostSave.accountSaveAwaitingBrowserReceipt && !lostSave.handoffAcknowledged,
+                    "A first save receipt reconciles the Share choice and still waits for the final receipt")
+        let (undecided, _, _) = try awaitingDecision()
+        undecided.receive(try received("received"))
+        try require(!undecided.destinationApproved && undecided.pendingDestinationApproval != nil,
+                    "Without the owner's Share, a receipt never approves the destination")
+    }
+
     /// Synthetic Choose → Share → saved-report path, plus cancellation and recovery, with no helper or browser.
     private static func simplifiedJourneyEndToEnd() throws {
         let total = 450
@@ -826,7 +903,14 @@ struct CollectorFlowChecks {
         let decision = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
         try require(decision["action"] as? String == "destination-decision" && decision["approved"] as? Bool == true,
                     "Only the owner's confirmation approves the destination")
+        let afterDecision = commands.count
+        try require(model.destinationDecisionPending && model.pendingDestinationApproval == nil && !model.destinationApproved,
+                    "After Share, the page shows Confirming and no second decision is offered")
+        model.decideAccountDestination(true, request: destination)
+        try require(commands.count == afterDecision, "A second decision for the same request is never sent")
         model.receive(try event(#"{"kind":"destination","state":"approved","handoffId":"\#(handoff)","intentId":"\#(intent)"}"#))
+        try require(model.destinationApproved && !model.destinationDecisionPending,
+                    "The helper's acknowledgement ends Confirming and starts Sending")
         model.receive(try event(#"{"kind":"handoff","state":"saved_pending_browser_receipt","handoffId":"\#(handoff)"}"#))
         try require(model.accountSaveAwaitingBrowserReceipt && !model.handoffAcknowledged && model.phase == .reviewing,
                     "A first save receipt still waits for the browser's final receipt")

@@ -4,6 +4,8 @@ import SwiftUI
 struct ActiveCompanionWindow: NSViewRepresentable {
     @ObservedObject var model: CollectorModel
     let destinationReviewRequestID: UUID?
+    /// Tells the page whether the destination sheet is on screen, so only the sheet offers the decision.
+    var onDestinationPromptChange: (Bool) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeNSView(context: Context) -> NSView {
@@ -13,6 +15,7 @@ struct ActiveCompanionWindow: NSViewRepresentable {
     }
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.model = model
+        context.coordinator.onDestinationPromptChange = onDestinationPromptChange
         context.coordinator.attach(view.window)
         context.coordinator.update()
         context.coordinator.presentDestinationIfNeeded(manualRequestID: destinationReviewRequestID)
@@ -35,6 +38,12 @@ struct ActiveCompanionWindow: NSViewRepresentable {
         private var lastManualReviewRequestID: UUID?
         private var manualReviewRequestID: UUID?
         private var presentationGeneration = 0
+        var onDestinationPromptChange: (Bool) -> Void = { _ in }
+
+        private func announcePrompt(_ visible: Bool) {
+            let notify = onDestinationPromptChange
+            DispatchQueue.main.async { notify(visible) }
+        }
 
         init(model: CollectorModel) {
             self.model = model
@@ -67,7 +76,8 @@ struct ActiveCompanionWindow: NSViewRepresentable {
         }
         func update() {
             guard let window, let model else { return }
-            if model.canSafelyClose || (closeRequested && !model.helperRunning) {
+            // A confirmed save stays on screen as "Saved in your account" until the owner closes it.
+            if closeRequested && !model.helperRunning {
                 window.level = originalLevel
                 window.close()
                 return
@@ -96,7 +106,7 @@ struct ActiveCompanionWindow: NSViewRepresentable {
                   window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
             let alert = NSAlert()
             alert.messageText = "Share your reviewed contacts with this account?"
-            alert.informativeText = "Account: \(current.email). Course: \(current.course). These details came from AMPLIFai's authenticated server. Sharing sends only the reviewed contacts and their call and message metadata to this browser. Nothing is saved until you approve Save for each source in the account."
+            alert.informativeText = "Account: \(current.email). Course: \(current.course). These details came from AMPLIFai's authenticated server. Sharing sends only the reviewed contacts and their call and message metadata to this browser. Nothing is saved until you finish Save for each source in your browser."
             alert.addButton(withTitle: "Share with this account")
             alert.addButton(withTitle: "Not this account")
             alert.addButton(withTitle: "Decide later")
@@ -108,8 +118,10 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             window.deminiaturize(nil)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            announcePrompt(true)
             alert.beginSheetModal(for: window) { [weak self] response in
                 guard let self, self.presentationGeneration == generation else { return }
+                self.announcePrompt(false)
                 self.activeDestinationAlert = nil
                 self.activeDestinationRequest = nil
                 self.endingDestinationAlert = false
@@ -158,7 +170,10 @@ struct ActiveCompanionWindow: NSViewRepresentable {
         }
         func restore() {
             presentationGeneration += 1
-            if let window, let activeDestinationAlert { window.endSheet(activeDestinationAlert.window) }
+            if let window, let activeDestinationAlert {
+                window.endSheet(activeDestinationAlert.window)
+                announcePrompt(false)
+            }
             activeDestinationAlert = nil
             activeDestinationRequest = nil
             endingDestinationAlert = false

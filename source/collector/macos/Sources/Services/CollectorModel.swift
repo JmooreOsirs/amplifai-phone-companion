@@ -66,6 +66,18 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var destinationEmail = ""
     @Published private(set) var destinationCourse = ""
     @Published private(set) var destinationApproved = false
+    /// The owner's submitted sheet choice (true = Share, false = Not this account) awaiting the helper's answer.
+    /// While set, the same request cannot be decided again.
+    @Published private(set) var submittedDestinationDecision: Bool?
+    var destinationDecisionPending: Bool { submittedDestinationDecision != nil }
+    /// The destination request the owner chose Share for, kept after an in-flight answer is lost so a
+    /// matching receipt for this handoff can still confirm it. Cleared with the handoff.
+    private var affirmedDestinationIntentID = ""
+    /// The owner chose Share for this request, but no acknowledgement or receipt has confirmed it.
+    var destinationShareUnconfirmed: Bool {
+        !destinationIntentID.isEmpty && affirmedDestinationIntentID == destinationIntentID &&
+            !destinationApproved && submittedDestinationDecision == nil
+    }
     @Published private(set) var browserReceived = false
     @Published private(set) var accountSaveAwaitingBrowserReceipt = false
     private var closedDestinationIntentIDs: Set<String> = []
@@ -283,7 +295,7 @@ final class CollectorModel: ObservableObject {
     var pendingDestinationApproval: DestinationApprovalRequest? {
         guard phase == .reviewing, !handoffID.isEmpty, !destinationIntentID.isEmpty,
               !destinationEmail.isEmpty, !destinationCourse.isEmpty,
-              !destinationApproved, !selectionNeedsReview,
+              !destinationApproved, !destinationDecisionPending, !selectionNeedsReview,
               reviewedSelectionIDs == selectedIDs else { return nil }
         return DestinationApprovalRequest(handoffID: handoffID, intentID: destinationIntentID,
                                           email: destinationEmail, course: destinationCourse)
@@ -1166,6 +1178,8 @@ final class CollectorModel: ObservableObject {
 
     func decideAccountDestination(_ approved: Bool, request: DestinationApprovalRequest) {
         guard pendingDestinationApproval == request else { return }
+        submittedDestinationDecision = approved
+        affirmedDestinationIntentID = approved ? request.intentID : ""
         send(["action": "destination-decision", "handoffId": request.handoffID,
               "intentId": request.intentID, "approved": approved])
     }
@@ -1240,6 +1254,8 @@ final class CollectorModel: ObservableObject {
         destinationEmail = ""
         destinationCourse = ""
         destinationApproved = false
+        submittedDestinationDecision = nil
+        affirmedDestinationIntentID = ""
         closedDestinationIntentIDs = []
         pairCode = ""
         pairPort = 0
@@ -1786,9 +1802,12 @@ final class CollectorModel: ObservableObject {
             } else if event.state == "approved", event.intentId?.lowercased() == destinationIntentID,
                       !destinationIntentID.isEmpty {
                 destinationApproved = true
+                submittedDestinationDecision = nil
             } else if event.state == "denied", event.intentId?.lowercased() == destinationIntentID,
                       !destinationApproved {
                 closedDestinationIntentIDs.insert(destinationIntentID)
+                submittedDestinationDecision = nil
+                affirmedDestinationIntentID = ""
                 destinationIntentID = ""
                 destinationEmail = ""
                 destinationCourse = ""
@@ -1798,6 +1817,13 @@ final class CollectorModel: ObservableObject {
             guard !handoffID.isEmpty, event.handoffId?.lowercased() == handoffID,
                   phase == .reviewing, !reviewPending, !selectionNeedsReview,
                   reviewedSelectionIDs == selectedIDs else { return }
+            // A matching receipt can only follow an approved destination: it reconciles a lost
+            // acknowledgement, but only for the owner's own Share choice on this handoff.
+            if ["received", "saved_pending_browser_receipt", "saved"].contains(event.state ?? ""),
+               !destinationIntentID.isEmpty, affirmedDestinationIntentID == destinationIntentID {
+                destinationApproved = true
+                submittedDestinationDecision = nil
+            }
             if event.state == "received" { browserReceived = true }
             if event.state == "saved_pending_browser_receipt" {
                 pairingRequested = false
@@ -1881,6 +1907,7 @@ final class CollectorModel: ObservableObject {
                 errorMessage = "Local browser pairing could not start. Keep the review here or try again. The previous one-use link may no longer work."
             } else if event.code == "handoff_unconfirmed" {
                 handoffAcknowledged = false
+                submittedDestinationDecision = nil
                 phase = .reviewing
                 errorMessage = "The browser has not confirmed this account save. Your local review remains available."
             } else {
@@ -2026,7 +2053,7 @@ final class CollectorModel: ObservableObject {
         case .completing:
             return "The matching browser run acknowledged its account save. This window stays open until the owned helper finishes safely."
         case .completed:
-            return "Your account confirmed the matching save, the local helper finished, and this Mac's private review copy was cleared. Your saved phone report is in your AMPLIFai account."
+            return "Your account confirmed the matching save, the local helper finished, and this Mac's private review copy was cleared. Your saved phone report is in your AMPLIFai account. Choose Done to close this window."
         case .cancelling:
             return "Wait for the owned helper to stop. If temporary phone data remains, inspect it here before reconnecting; cleanup never targets other backups."
         }
