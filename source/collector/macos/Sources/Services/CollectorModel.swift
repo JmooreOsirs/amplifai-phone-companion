@@ -10,6 +10,11 @@ final class CollectorModel: ObservableObject {
     private let maxContactQueryLength = 120
     private static let maxHelperCommandBytes = 600_000
     static let collectionDisclosureVersion = "native-local-collection-v5"
+    /// Link and navigation problems that a matching browser receipt for the same handoff makes obsolete.
+    static let navigationFailedMessage = "The account page did not open automatically. Your local review and one-time link remain available. Choose Open AMPLIFai account in browser, or copy the one-time code under Having trouble connecting?"
+    static let bridgeUnavailableMessage = "Local browser pairing could not start. Keep the review here or try again. The previous one-use link may no longer work."
+    static let handoffUnconfirmedMessage = "The browser has not confirmed this account save. Your local review remains available."
+    private static let handoffScopedMessages: Set<String> = [navigationFailedMessage, bridgeUnavailableMessage, handoffUnconfirmedMessage]
     private static let localCollectionScopes = ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"]
     enum CallHistoryPreparation: Equatable {
         case confirmedEncryptedBackup
@@ -1179,7 +1184,7 @@ final class CollectorModel: ObservableObject {
 
     func accountNavigationFailed() {
         guard phase == .reviewing, !pairCode.isEmpty, !handoffID.isEmpty else { return }
-        errorMessage = "The account page did not open automatically. Your local review and one-time link remain available. Choose Open AMPLIFai account in browser, or copy the one-time code under Having trouble connecting?"
+        errorMessage = Self.navigationFailedMessage
     }
 
     func decideAccountDestination(_ approved: Bool, request: DestinationApprovalRequest) {
@@ -1830,6 +1835,11 @@ final class CollectorModel: ObservableObject {
                 destinationApproved = true
                 submittedDestinationDecision = nil
             }
+            if ["received", "saved_pending_browser_receipt", "saved"].contains(event.state ?? ""),
+               Self.handoffScopedMessages.contains(errorMessage) {
+                // The browser demonstrably has this handoff, so only these link problems are obsolete.
+                errorMessage = ""
+            }
             if event.state == "received" { browserReceived = true }
             if event.state == "saved_pending_browser_receipt" {
                 pairingRequested = false
@@ -1910,12 +1920,12 @@ final class CollectorModel: ObservableObject {
                 errorMessage = "Choose supported contacts from this phone."
             } else if event.code == "bridge_unavailable" {
                 if pairingRequested { resetHandoff() }
-                errorMessage = "Local browser pairing could not start. Keep the review here or try again. The previous one-use link may no longer work."
+                errorMessage = Self.bridgeUnavailableMessage
             } else if event.code == "handoff_unconfirmed" {
                 handoffAcknowledged = false
                 submittedDestinationDecision = nil
                 phase = .reviewing
-                errorMessage = "The browser has not confirmed this account save. Your local review remains available."
+                errorMessage = Self.handoffUnconfirmedMessage
             } else {
                 if event.cleanupRequired == true {
                     needsStorageReview = true

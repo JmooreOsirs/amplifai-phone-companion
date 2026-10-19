@@ -311,7 +311,8 @@ final class DemoDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The simulated website sits above the floating companion window, as a browser would.
+    /// The simulated website appears at the Mac's handoff at a normal level, like a browser window, so a
+    /// restored Mac recovery window is never hidden behind it.
     private func showWebsite(for session: DemoSession) {
         if website == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
@@ -325,7 +326,6 @@ final class DemoDelegate: NSObject, NSApplicationDelegate {
             website = window
             windows.append(window)
         }
-        website?.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         website?.makeKeyAndOrderFront(nil)
     }
 }

@@ -809,6 +809,14 @@ struct CollectorFlowChecks {
         try require(late.destinationApproved && late.browserReceived && late.pendingDestinationApproval == nil &&
                     !late.destinationShareUnconfirmed && !late.handoffAcknowledged,
                     "A later matching receipt reconciles the recorded Share without offering it again or counting a save")
+        try require(late.errorMessage.isEmpty && late.browserHandoffReady,
+                    "The receipt clears only the obsolete link error, so the Mac still hands over to the website")
+        let (genuine, _, genuineRequest) = try awaitingDecision()
+        genuine.decideAccountDestination(true, request: genuineRequest)
+        genuine.errorMessage = "Synthetic collection problem"
+        genuine.receive(try received("received"))
+        try require(genuine.errorMessage == "Synthetic collection problem" && !genuine.browserHandoffReady,
+                    "Any other error stays visible and keeps the Mac on screen")
 
         // A lost approved acknowledgement is reconciled only by a matching receipt after the owner's Share.
         let (lost, _, lostRequest) = try awaitingDecision()
