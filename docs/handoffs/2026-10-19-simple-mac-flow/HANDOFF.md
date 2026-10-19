@@ -29,7 +29,7 @@ It also adds a clickable FAKE DATA demo so the flow can be tried in seconds with
 | Finder call-history setup | A step on the setup screen | Optional link, shown only when encryption is Off |
 | Collect | Progress panel; stages Connect / Receive / Read / Review & save | Same panel; stages Connect iPhone / Receive backup / Read locally / Clean up |
 | Choose | "Choose contacts"; Include all; All/Main/Review; Select all N / Deselect all; "Mark for group move" uses the same checkbox as inclusion; "Next · N selected" → share dialog | "Choose contacts to share"; scoped buttons name their scope ("Select all 5,129 in Main", "Deselect all in Main"), hidden for All with no search, where they would duplicate Include all; move marks are a flag tag, not a checkbox; footer **Continue to account** ("You will confirm the account before sharing. Save is approved separately in your account.") |
-| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; a green "Review destination approval" button competed with the auto-opened destination sheet; after the save the window closed itself with no explanation; stale "Save and continue" recovery text | **Share with your account** comes first with one next action: Continue to account, or Open AMPLIFai account in browser. The auto-opened sheet is the **only** destination decision: behind it the page shows passive text, and a quiet "Review account…" appears only after Decide later. Then the page reads, in order: "Confirming your sharing choice…" (or "Declining this account…"), "Sending the preview to your browser…", "Preview received — finish Save in your browser", "Saving — waiting for your browser to confirm". The window now **stays open** on **Saved in your account**, with "Open your account to view the saved report" and **Done**. The local review counts are unchanged. Change selected contacts and Discard review stay visible. Link, code and expiry details are under a closed **Having trouble connecting?**. |
+| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; a green "Review destination approval" competed with the auto-opened destination sheet; after the save the window closed itself unexplained; stale "Save and continue" recovery text | **Share with your account**, then a one-line summary (contacts, calls, messages) and **one next action per state**: Continue to account → the auto-opened sheet is the **only** destination decision (passive text behind it; a quiet "Review account…" only after Decide later) → "Confirming your sharing choice…" → "Sending to your browser…" → **Finish in your browser** with **Continue in browser** (brings the browser forward, no new tab, so the preview tab is kept; it cannot pick the tab) → "Saving in your account…" → **Saved in your account** with primary **Done** (the window no longer closes itself). Counts, dates, caveats, what is shared, Change selected contacts, Discard review and link/code help sit under one **Details and options** disclosure. |
 | Journey | — | "Agree · Collect · Choose · Share & report" bar. Finished steps show a check-circle, never a checkbox, so verified progress is never confused with a choice. |
 
 Gates kept exactly: Apple's Trust prompt and the existing backup password; the per-run local approval (bound to
@@ -86,14 +86,20 @@ source/script/run_fake_data_demo.sh
 
 The script builds a fresh bundle under `/private/tmp/amplifai-fake-demo.<timestamp>/`, checks isolation, writes
 `fake-demo-isolation.json` and opens **AMPLIFai FAKE DATA DEMO.app**. Click through:
-1. Check iPhone (simulated).
-2. Tick the agreement, then Start collection (about 6 seconds of fake progress).
-3. Choose contacts: Include all, Main or Review, search, single checkboxes, or none.
-4. Continue to account. The browser open is intercepted and shown in the banner.
-5. After a few seconds of simulated browser Connect, answer the real Mac sheet: Share with this account.
-6. The page shows Confirming, then Sending, then Preview received — finish Save in your browser.
-7. Click the yellow banner's **Simulate Save in browser (fake)**. It stands in for the real per-source Save; nothing is saved automatically.
-8. The Mac shows **Saved in your account**, and a **SAMPLE REPORT · FAKE DATA** window opens. "Open SAMPLE REPORT" in the banner reopens it.
+1. Check iPhone (simulated), tick the one-run agreement, Start collection (about 6 seconds).
+2. Choose contacts: Include all, Main or Review, search, single checkboxes, or none. Continue to account.
+3. A **SIMULATED AMPLIFai WEBSITE** window (local fixture, labelled) opens where the real browser would and connects.
+4. Answer the real Mac sheet: Share with this account.
+5. On the Mac, Continue in browser brings the simulated website forward: **Save and view report**.
+6. The simulated website shows the sample report with **Done**; the Mac shows Saved in your account.
+
+**Live click-through (2026-10-19, Codex reviewer, `/private/tmp/amplifai-fake-demo.055137`, `cc404a3` plus the report Done change):**
+- Check iPhone → one-run checkbox → Start collection.
+- Include all 312 → unchecked one contact → 311 selected → Continue to account.
+- Share with this account (fictional `demo.owner@example.invalid`, "FAKE DATA DEMO course") → Continue in browser.
+- Save and view report → sample report (311 of 312, 1,498 calls, 4,476 messages, 1 not included) → Done.
+
+The reviewer does not claim exact process-quit behavior after Done. No real device, network or account was involved. The simulated website is a native SwiftUI fixture standing in for the website change below, not the React website or its backend.
 
 What is real: the production `ContentView`, `CollectorModel`, start/check/cancel/recovery code and the
 destination sheet. The model launches its helper the normal way; the demo bundle simply carries a fake helper
@@ -108,30 +114,45 @@ Isolation, in independent layers:
 
 **Sample report limitation:** the real report ("Your saved phone report") is produced only by the website after
 an account Save. The sample is computed on the Mac from the fictional selection. It shows selection-driven counts
-(shared, calls, messages, no activity, not included, most active) and says plainly that no website, account,
-upload or saved report was involved. The website report contract is unchanged and was not exercised.
+and says plainly that no website, account, upload or saved report was involved.
+
+## Linked website change (private repository)
+
+The browser side lives in the private website repository, so this public PR links it and copies none of its code:
+**JmooreOsirs/amplifai-database-engine#5** (`codex/brian-native-save-and-report-oct19`, base `main` `7dd7917`). It
+lists every source with its own unchecked approval and one **Save and view report**, which saves and then runs the
+existing Finalize checks. It then opens the full report, adds **Done — I reviewed these results** there (existing
+`results_reviewed` step, with before/after report checks), asks for a course when a native return is ambiguous,
+and scopes sign-in recovery. It is client-only, with no API or migration change. Its tests pass except 5
+`companion-update-status-ui` cases that fail identically on `main`.
+
+**Real-device boundary:** the Mac bridge accepts only `https://amplifai.satoris.ai` and
+`https://amplifai-database-engine.vercel.app`, and account intents are bound to Production. A real iPhone run can
+therefore use today's Production website now, but the revised website ending can only be validated on a real
+device after that PR is reviewed and released to an approved official origin. No origin check was relaxed.
 
 ## Coverage labels
 
 | Covered | How |
 |---|---|
 | Consent gates, journey steps, selection (all/subset/none), share, confirmation, save receipt, completion, cancellation, recovery | Synthetic model checks + fake-helper end-to-end through the real launch path |
-| Views | Offscreen synthetic renders; FAKE DATA demo clicked locally |
-| Real iPhone, real backup, real browser/website, real account Save and report | **Not tested.** Needs the signed build on a real device after your release |
+| Views and the clickable journey | Offscreen synthetic renders; FAKE DATA demo clicked end to end by the reviewer (above) |
+| Website one-step Save, report navigation, report Done | Synthetic actual-component tests in the private website PR |
+| Real iPhone, real backup, real browser/website, real account Save and report | **Not tested.** Needs consent, a signed or locally staged build, and (for the new website ending) the reviewed website release |
 
 ## Steps for Jeff
 
-1. Review, in particular the behavior change that the window stays open after a confirmed save, and merge the PR into `release/native`. CI's `release-control-checks` should pass, since release control is unchanged.
+1. Review this PR and the linked website PR together. Note the behavior change: the window stays open after a confirmed save. Merge this PR into `release/native`. CI's `release-control-checks` should pass, since release control is unchanged.
 2. Run the five Mac checks above on a Mac, or add `check_model.sh` and `check_fake_demo.sh` to `producer.py`.
 3. Choose the next identity, for example `2026.10.xx-rc29` with a build above `26101628` (Intel above `261016281`), in `Info.plist` and the Intel baseline as you did for RC28.
-4. Website first (it auto-deploys from `main`): accept the new build numbers in companion diagnostics and telemetry, as was done for RC28 (`dfa039f`). The disclosure version string is local to the Mac app; the website does not read it.
+4. Website first (it auto-deploys from `main`): merge the reviewed website PR and accept the new build numbers in companion diagnostics and telemetry, as was done for RC28. The disclosure version string is local to the Mac app; the website does not read it.
 5. Build ARM and Intel with the protected source workflows. Then add the merged commit to `approvedSources` in `release_control/policy.json` (Brian must approve that PR), sign, notarize and publish with your existing process. Finally update `public/phone/macos/appcast.xml`, `intel-appcast.xml`, `releases.json` and the pinned tests on the website.
 6. Real-device acceptance on the signed build:
    - Check iPhone with USB/Trust, with encryption On and Off; enter the password when On.
    - Cancel during the check and during the transfer.
    - Choose all, a subset and none; check Change selected contacts and Discard review.
-   - Continue to account, Connect in the browser, then the Mac sheet "Share with this account", then Save per source.
-   - Confirm the saved report opens from the account page, and that RC26 and RC28 users still update.
+   - Continue to account → (auto) connect → Mac sheet "Share with this account" → Continue in browser → Save and view report → report → Done.
+   - Confirm that RC26 and RC28 users still update.
 7. Windows is unaffected (no Windows file changed).
 
 Nothing was signed, published, deployed or merged. The installed RC28 app was never modified or stopped.
