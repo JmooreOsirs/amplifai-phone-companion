@@ -102,7 +102,7 @@ enum SourceDiagnosticChecks {
         try require(!model.currentSourceDiagnostics.isEmpty, "Reset fixture must contain current failure evidence")
         try require(model.admitRunLink(PhoneRunFlowChecks.link(server, server.createRun())), "A new run link is admitted when idle")
         try require(model.startCollection(), "New collection setup must be available in fixture")
-        model.receive(try event(["kind": "backup-encryption-status", "backupEncrypted": false]))
+        model.receive(try event(["kind": "backup-encryption-status", "backupEncrypted": true]))
         model.finished(mode: "backup-encryption-status", code: 0)
         // The simulated helper wire records the launch; no process can start in this fixture.
         try require(!model.helperRunning && model.phase == .connecting && model.currentSourceDiagnostics.isEmpty &&

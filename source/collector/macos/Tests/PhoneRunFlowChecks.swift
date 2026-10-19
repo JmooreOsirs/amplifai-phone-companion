@@ -42,13 +42,13 @@ enum PhoneRunFlowChecks {
         let model = CollectorModel(commandWriter: { wire.commands.append($0) }, runAuthority: client(server))
         let run = server.createRun(email: email, course: course, categories: categories)
         try require(model.admitRunLink(link(server, run)), "An idle app admits a valid run link")
-        try require(model.runApproval == .approved && model.phoneRun?.runID == run.runID,
-                    "A verified claim approves exactly this run")
+        try require(model.runApproval == .approved && model.phoneRun?.runID == run.runID && model.journeyStep == 1,
+                    "A verified claim approves exactly this run and completes the Approve step")
         return (model, run)
     }
 
     /// Start collection: the read-only check (simulated helper wire), then the exact claim replay, then connect.
-    static func start(_ model: CollectorModel, encrypted: Bool = false) throws {
+    static func start(_ model: CollectorModel, encrypted: Bool = true) throws {
         try require(model.startCollection(), "Start collection runs the iPhone check")
         model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":\#(encrypted)}"#))
         model.finished(mode: "backup-encryption-status", code: 0)
@@ -120,6 +120,9 @@ enum PhoneRunFlowChecks {
         try startRevalidatesTheExactClaim()
         try duplicateAndCandidateLinks()
         try candidateClaimExactRetry()
+        try replacementAfterUncertainStart()
+        try candidateClaimBlocksOldStart()
+        try availableDataRequiresExplicitAction()
         try startWindowIsTenMinutes()
         try longCollectionStillBinds()
         try bindOnceIdenticalRetryDifferentRefused()
@@ -128,9 +131,12 @@ enum PhoneRunFlowChecks {
         try verifiedIntentApprovesAutomatically()
         try intentMismatchesDeny()
         try uncertainVerifyLeavesUndecided()
+        try verifyRetryBudgetAndRecovery()
+        try lateVerifyAfterDiscardIsIgnored()
         try staleDestinationEventsKeepTheDecision()
         try longReleasedTransferCompletesWithoutFocus()
         try handoffAfterBindWithoutReceived()
+        try finalAcknowledgementRetryKeepsHandoff()
         try noFocusBounceAfterHandoff()
         try lateBrowserOpenAnswersChangeNothing()
         try expiryBeforeAndAfterReleaseSpendsTheRun()
@@ -353,7 +359,7 @@ enum PhoneRunFlowChecks {
         let (model, run) = try approvedModel(server, wire)
         server.revoke(run.runID)
         try require(model.startCollection(), "The iPhone check runs")
-        model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#))
+        model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
         model.finished(mode: "backup-encryption-status", code: 0)
         try require(server.claimCount == 2 && server.requests[0].body == server.requests[1].body,
                     "Start resends the exact original claim")
@@ -381,7 +387,7 @@ enum PhoneRunFlowChecks {
         slowClock = slowClock.addingTimeInterval(9 * 60)
         try require(slowModel.startCollection(), "Start inside the window runs the check")
         slowClock = slowClock.addingTimeInterval(2 * 60)
-        slowModel.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#))
+        slowModel.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
         slowModel.finished(mode: "backup-encryption-status", code: 0)
         try require(slowModel.operationID == nil && slowModel.runApproval == .refused && slow.claimCount == 1,
                     "A check that ends after the window launches nothing and asks to approve again")
@@ -460,8 +466,8 @@ enum PhoneRunFlowChecks {
             let newer = server.createRun(email: email, course: "Newer course")
             server.faults = [fault, fault, fault]
             model.admitRunLink(link(server, newer))
-            try require(model.candidateUncertain && model.phoneRun == grant && model.hasStartableRun,
-                        "An unconfirmed candidate keeps the current grant startable and the candidate request (\(fault))")
+            try require(model.candidateUncertain && model.phoneRun == grant && model.hasStartableRun && !model.startCollection(),
+                        "An unconfirmed candidate retains both grants but blocks Start until settlement (\(fault))")
             let candidateBodies = server.requests.suffix(3).map(\.body)
             model.retryCandidateClaim()
             try require(Set(candidateBodies + [server.requests.last!.body]).count == 1,
@@ -477,6 +483,62 @@ enum PhoneRunFlowChecks {
         model.admitRunLink(link(server, refused))
         try require(!model.candidateUncertain && model.phoneRun == grant && model.admitsRunLink,
                     "A refused candidate is discarded and the grant is intact")
+    }
+
+    static func replacementAfterUncertainStart() throws {
+        for expired in [false, true] {
+            let server = SimulatedPhoneRunServer()
+            var clock = Date()
+            server.now = { clock }
+            let wire = Wire()
+            let (model, _) = try approvedModel(server, wire)
+            model.now = { clock }
+            server.faults = [.dropRequest, .dropRequest, .dropRequest]
+            try start(model)
+            try require(model.startConfirmation == .uncertain && model.operationID == nil,
+                        "Start uncertainty never launches the helper")
+            if expired { clock = clock.addingTimeInterval(11 * 60) }
+            let newer = server.createRun(email: email, course: "Replacement course")
+            try require(model.admitRunLink(link(server, newer)), "An idle uncertain Start admits a fresh approval")
+            try require(model.phoneRun?.runID == newer.runID && model.startConfirmation == .none &&
+                        model.hasStartableRun && model.operationID == nil,
+                        "A verified replacement settles atomically before or after the old Start deadline")
+            try start(model)
+            try require(model.phoneRun?.runID == newer.runID && model.phoneRun?.collectionStarted == true,
+                        "Only the replacement can start")
+        }
+    }
+
+    static func candidateClaimBlocksOldStart() throws {
+        let server = SimulatedPhoneRunServer()
+        let (model, old) = try approvedModel(server, Wire())
+        let newer = server.createRun(email: email, course: "Replacement course")
+        server.holdReplies = true
+        model.admitRunLink(link(server, newer))
+        try require(model.phoneRun?.runID == old.runID && !model.startCollection() && model.operationID == nil,
+                    "An outstanding replacement claim cannot race an old Start")
+        server.releaseHeldReplies()
+        try require(model.phoneRun?.runID == newer.runID && model.hasStartableRun,
+                    "The consumed candidate is retained through settlement")
+    }
+
+    static func availableDataRequiresExplicitAction() throws {
+        let server = SimulatedPhoneRunServer()
+        let wire = Wire()
+        let (model, _) = try approvedModel(server, wire)
+        try start(model, encrypted: false)
+        try require(model.backupEncryptionStatus == .unencrypted && model.phoneRun?.collectionStarted == false &&
+                    model.operationID == nil && server.claimCount == 1,
+                    "Unencrypted preflight stops before collection for Finder guidance")
+        try require(model.startCollectionWithAvailableData() && model.phoneRun?.collectionStarted == true &&
+                    server.claimCount == 2, "Explicit available-data action revalidates and starts this same run")
+
+        let (checkOnly, _) = try approvedModel(SimulatedPhoneRunServer(), Wire())
+        checkOnly.checkBackupEncryptionStatus()
+        checkOnly.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
+        checkOnly.finished(mode: "backup-encryption-status", code: 0)
+        try require(checkOnly.backupEncryptionStatus == .encrypted && checkOnly.phoneRun?.collectionStarted == false &&
+                    checkOnly.operationID == nil, "Finder recheck remains read-only even after encryption is enabled")
     }
 
     static func startWindowIsTenMinutes() throws {
@@ -714,8 +776,83 @@ enum PhoneRunFlowChecks {
             try require(wire.decisions.isEmpty && model.destinationVerificationUncertain && !model.destinationApproved &&
                         server.verifyCount == 3, "An uncertain verify neither approves nor denies")
             try pending(model)
-            try require(wire.decisions.isEmpty && server.verifyCount == 3, "It is not retried on later polls")
+            try require(wire.decisions.isEmpty && server.verifyCount == 3, "Immediate duplicate polls respect the retry backoff")
         }
+    }
+
+    static func verifyRetryBudgetAndRecovery() throws {
+        for fault in [SimulatedPhoneRunServer.Fault.dropRequest, .loseReply, .malformed] {
+            let (model, server, wire, _) = try boundModel()
+            var clock = Date()
+            model.now = { clock }
+            server.now = { clock }
+            server.faults = Array(repeating: fault, count: 9)
+            try pending(model)
+            for _ in 0..<2 {
+                clock = clock.addingTimeInterval(15)
+                try pending(model)
+            }
+            try require(server.verifyCount == 9 && wire.decisions.isEmpty && model.canRetryDestinationVerification,
+                        "Three bounded rounds remain undecided after repeated uncertainty")
+            clock = clock.addingTimeInterval(15)
+            try pending(model)
+            try require(server.verifyCount == 9, "Repeated polling cannot exceed the automatic budget")
+            model.retryDestinationVerification()
+            let bodies = server.requests.filter { $0.path == PhoneRunContract.verifyIntentPath }.map(\.body)
+            try require(server.verifyCount == 10 && Set(bodies).count == 1 &&
+                        wire.decisions.count == 1 && wire.decisions[0]["approved"] as? Bool == true,
+                        "Recovery replays the exact intent, handoff, digest and capability once")
+        }
+        let (expired, server, wire, _) = try boundModel()
+        var clock = Date()
+        expired.now = { clock }
+        server.faults = [.dropRequest, .dropRequest, .dropRequest]
+        try pending(expired)
+        clock = clock.addingTimeInterval(301)
+        expired.retryDestinationVerification()
+        try pending(expired)
+        try require(server.verifyCount == 3 && wire.decisions.isEmpty && !expired.canRetryDestinationVerification,
+                    "A local retry never extends intent lifetime or authorizes an expired intent")
+    }
+
+    static func lateVerifyAfterDiscardIsIgnored() throws {
+        let (model, server, wire, _) = try boundModel()
+        server.holdReplies = true
+        try pending(model)
+        model.disconnect()
+        server.releaseHeldReplies()
+        try require(wire.decisions.isEmpty && model.phoneRun == nil && model.handoffID.isEmpty,
+                    "A late successful verification after owner discard cannot release the old handoff")
+    }
+
+    static func finalAcknowledgementRetryKeepsHandoff() throws {
+        let (model, server, wire, _) = try boundModel()
+        try pending(model)
+        let bound = model.phoneRun
+        for attempt in 1...3 {
+            model.receive(try handoffEvent("saved"))
+            try require(model.phase == .completing && wire.count("finish") == attempt,
+                        "The verified same-handoff receipt retries native finish within budget")
+            model.receive(try event(#"{"kind":"error","code":"handoff_unconfirmed"}"#))
+            try require(model.phase == .reviewing && !model.handoffAcknowledged && model.phoneRun == bound,
+                        "An uncertain finish retains the exact run and handoff for reconciliation")
+        }
+        model.receive(try handoffEvent("saved"))
+        try require(wire.count("finish") == 3 && model.canRetryAccountCompletion,
+                    "Repeated receipts cannot loop finish indefinitely")
+        model.retryAccountCompletion()
+        try require(wire.last?["action"] as? String == "handoff-status" &&
+                    wire.last?["handoffId"] as? String == handoff,
+                    "Explicit retry checks only this transfer's existing receipt")
+        model.receive(try handoffEvent("saved", otherHandoff))
+        try require(wire.count("finish") == 3, "A stale other-handoff receipt cannot finish")
+        model.receive(try handoffEvent("saved"))
+        try require(wire.count("finish") == 4 && model.handoffAcknowledged && wire.count("pair") == 1 &&
+                    server.bindCount == 1 && server.verifyCount == 1,
+                    "Finalization recovery neither pairs, binds nor approves another transfer")
+        model.finished(mode: "connect", code: 0)
+        try require(model.phase == .completed && model.phoneRun == nil,
+                    "Only the successful helper exit completes native cleanup")
     }
 
     static func staleDestinationEventsKeepTheDecision() throws {

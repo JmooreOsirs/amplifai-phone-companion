@@ -128,6 +128,9 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var errorElapsedSeconds = 0
     @Published private(set) var handoffID = ""
     @Published private(set) var handoffAcknowledged = false
+    private var finishAttemptCount = 0
+    @Published private(set) var completionNeedsRetry = false
+    private static let maximumFinishAttempts = 3
     @Published private(set) var destinationIntentID = ""
     @Published private(set) var destinationEmail = ""
     @Published private(set) var destinationCourse = ""
@@ -138,10 +141,15 @@ final class CollectorModel: ObservableObject {
     var destinationDecisionPending: Bool { submittedDestinationDecision != nil }
     /// The intent this app approved after verification, kept so a matching receipt can reconcile a lost answer.
     private var approvedDestinationIntentID = ""
-    /// Intents already sent to verify-intent: each is verified at most once, whatever the polling repeats.
+    /// Only definitive outcomes close an intent. Transport uncertainty retains the exact prepared request.
     private var verifiedDestinationIntentIDs: Set<String> = []
+    private var pendingVerify: PhoneRunVerifyRequest?
+    private var verifyAttemptCount = 0
+    private var verifyRetryAfter = Date.distantPast
+    private var verifyDeadline = Date.distantPast
+    private static let maximumVerifyRounds = 3
     @Published private(set) var destinationVerificationPending = false
-    /// Verification stayed uncertain after exact retries: the intent is left undecided until the pairing expires.
+    /// Verification stayed uncertain after exact retries. It remains undecided and can be reconciled safely.
     @Published private(set) var destinationVerificationUncertain = false
     @Published private(set) var browserReceived = false
     @Published private(set) var accountSaveAwaitingBrowserReceipt = false
@@ -329,7 +337,8 @@ final class CollectorModel: ObservableObject {
     /// The Start window passed without Start: show the approve-again state instead of a Start that would fail.
     func refreshRunStartWindow() {
         guard runApproval == .approved, let run = phoneRun, !run.collectionStarted, !helperRunning,
-              startConfirmation == .none, !startAfterSettingCheck, !hasStartableRun else { return }
+              startConfirmation != .confirming, candidateClaim == nil,
+              !startAfterSettingCheck, !hasStartableRun else { return }
         declineLocalCollection()
         refuseRun(Self.runRefusedMessage)
     }
@@ -349,7 +358,7 @@ final class CollectorModel: ObservableObject {
     /// consumed at launch, so it never authorizes a later collection.
     @discardableResult
     func composeRunCollectionApproval(callHistoryPreparation: CallHistoryPreparation) -> Bool {
-        guard canPrepareCollection, hasStartableRun, let run = phoneRun,
+        guard canPrepareCollection, hasStartableRun, candidateClaim == nil, let run = phoneRun,
               run.claim.disclosureVersion == PhoneRunContract.disclosureVersion,
               backupEncryptionStatus != .notChecked, backupEncryptionStatus != .checking else { return false }
         if callHistoryPreparation == .confirmedEncryptedBackup && backupEncryptionStatus != .encrypted { return false }
@@ -471,13 +480,18 @@ final class CollectorModel: ObservableObject {
         guard candidateClaim == request else { return }
         // Replace only an approved run that is still idle; once the current grant started, the candidate is moot.
         guard runApproval == .approved, let current = phoneRun, !current.collectionStarted, !helperRunning,
-              process == nil, !startAfterSettingCheck, startConfirmation == .none,
+              process == nil, !startAfterSettingCheck, startConfirmation != .confirming,
               localCollectionApproval == nil else {
             discardCandidate()
             return
         }
         switch outcome {
         case .accepted(let claim) where claimIsCurrent(claim):
+            // The previous Start may have exhausted its replies. It did not launch a collection, so this
+            // independently verified approval replaces it atomically and makes every old callback obsolete.
+            startConfirmationToken = nil
+            startConfirmation = .none
+            startPreparation = nil
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
                                 returnBrowserBundleID: candidateClaimBrowser, course: claim.course,
                                 categories: claim.categories, claimedAt: candidateClaimStartedAt)
@@ -555,33 +569,41 @@ final class CollectorModel: ObservableObject {
     }
 
     /// Start collection is an action, not consent: it runs the read-only iPhone setting check and then starts.
-    /// An unconfirmed setting stops here so the owner can check again or start without confirmed call history.
+    /// An unencrypted or unconfirmed setting stops here for Finder guidance or an explicit available-data choice.
     @discardableResult
     func startCollection() -> Bool {
         refreshRunStartWindow()
         guard hasStartableRun, canPrepareCollection, localCollectionApproval == nil,
-              startConfirmation == .none else { return false }
+              candidateClaim == nil, startConfirmation == .none else { return false }
         guard beginBackupEncryptionStatusCheck() else { return false }
         startAfterSettingCheck = true
         launch(mode: "backup-encryption-status")
         return true
     }
 
-    /// The secondary path when the iPhone's backup setting could not be confirmed.
+    /// The owner chose to continue with available data after seeing Finder guidance. This is not new consent:
+    /// the same verified account run still provides authority, and Start revalidates it immediately below.
     @discardableResult
-    func startWithoutConfirmedCallHistory() -> Bool {
+    func startCollectionWithAvailableData() -> Bool {
         refreshRunStartWindow()
-        guard backupEncryptionStatus == .unknown, !helperRunning, process == nil, hasStartableRun,
-              canPrepareCollection, startConfirmation == .none else { return false }
+        guard backupEncryptionStatus == .unencrypted || backupEncryptionStatus == .unknown,
+              !helperRunning, process == nil, hasStartableRun,
+              canPrepareCollection, candidateClaim == nil, startConfirmation == .none else { return false }
         confirmRunThenStart(.continueWithoutConfirmedCoverage)
         return true
+    }
+
+    @discardableResult
+    func startWithoutConfirmedCallHistory() -> Bool {
+        guard backupEncryptionStatus == .unknown else { return false }
+        return startCollectionWithAvailableData()
     }
 
     private func startAfterCheckIfReady() {
         guard startAfterSettingCheck else { return }
         startAfterSettingCheck = false
         guard !needsStorageReview, process == nil, let preparation = settingCallHistoryPreparation,
-              backupEncryptionStatus == .encrypted || backupEncryptionStatus == .unencrypted else { return }
+              backupEncryptionStatus == .encrypted else { return }
         guard hasStartableRun, canPrepareCollection else { refreshRunStartWindow(); return }
         confirmRunThenStart(preparation)
     }
@@ -605,7 +627,7 @@ final class CollectorModel: ObservableObject {
     /// Not confirmed: resend the identical claim bytes.
     func retryStartConfirmation() {
         guard startConfirmation == .uncertain, let preparation = startPreparation, hasStartableRun,
-              canPrepareCollection, !helperRunning, process == nil else { return }
+              candidateClaim == nil, canPrepareCollection, !helperRunning, process == nil else { return }
         confirmRunThenStart(preparation)
     }
 
@@ -638,7 +660,7 @@ final class CollectorModel: ObservableObject {
         }
     }
 
-    /// The read-only setting check decides call-history coverage, so the owner is not asked a second question.
+    /// The read-only setting check reports the preparation facts; it cannot guarantee source availability.
     var settingCallHistoryPreparation: CallHistoryPreparation? {
         switch backupEncryptionStatus {
         case .encrypted: return .confirmedEncryptedBackup
@@ -656,7 +678,8 @@ final class CollectorModel: ObservableObject {
 
     @discardableResult
     func beginBackupEncryptionStatusCheck() -> Bool {
-        guard canPrepareCollection, localCollectionApproval == nil else { return false }
+        guard canPrepareCollection, localCollectionApproval == nil, startConfirmation == .none,
+              candidateClaim == nil else { return false }
         if phase == .error { settingCheckAfterCollectionFailure = true }
         backupEncryptionStatus = .checking
         backupEncryptionCheckCode = nil
@@ -666,6 +689,7 @@ final class CollectorModel: ObservableObject {
 
     func checkBackupEncryptionStatus() {
         guard beginBackupEncryptionStatusCheck() else { return }
+        startAfterSettingCheck = false
         launch(mode: "backup-encryption-status")
     }
 
@@ -795,11 +819,11 @@ final class CollectorModel: ObservableObject {
         phase == .reviewing && handoffBound && !handoffAcknowledged && errorMessage.isEmpty
     }
     /// Approve · Collect · Choose · Save & report: 0...3 is the current step, 4 means every step finished.
-    /// Cancelling the read-only iPhone check happens before any agreement, so it stays on Agree.
+    /// A verified account agreement completes Approve even while the local setting check is idle or cancelled.
     var journeyStep: Int {
         switch phase {
-        case .idle, .error: return hasUnsavedReview ? 2 : 0
-        case .cancelling: return backupSettingCheckInProgress ? 0 : 1
+        case .idle, .error: return hasUnsavedReview ? 2 : (runApproval == .approved && phoneRun != nil ? 1 : 0)
+        case .cancelling: return backupSettingCheckInProgress && phoneRun == nil ? 0 : 1
         case .connecting, .transferring, .passwordRequired, .processing: return 1
         case .selecting: return 2
         case .reviewing, .completing: return 3
@@ -1643,14 +1667,27 @@ final class CollectorModel: ObservableObject {
     }
 
     /// The helper reported a pending connect intent: check it against the run before answering automatically.
+    /// Polls can reconcile an uncertain response, with a bounded backoff and the identical request/capability.
     private func verifyDestination() {
         guard handoffBound, let run = phoneRun, let handoff = run.boundHandoffID, let digest = run.boundPayloadSha256,
               !destinationIntentID.isEmpty, !destinationApproved, submittedDestinationDecision == nil,
-              !verifiedDestinationIntentIDs.contains(destinationIntentID), let authority = runAuthority,
-              let request = PhoneRunVerifyRequest(runID: run.runID, capability: run.capability,
-                                                  intentID: destinationIntentID, handoffID: handoff,
-                                                  payloadSha256: digest) else { return }
-        verifiedDestinationIntentIDs.insert(request.intentID)
+              !destinationVerificationPending, !verifiedDestinationIntentIDs.contains(destinationIntentID),
+              let authority = runAuthority else { return }
+        if pendingVerify == nil {
+            guard let request = PhoneRunVerifyRequest(runID: run.runID, capability: run.capability,
+                                                      intentID: destinationIntentID, handoffID: handoff,
+                                                      payloadSha256: digest) else { return }
+            pendingVerify = request
+            verifyAttemptCount = 0
+            verifyRetryAfter = .distantPast
+            // The server enforces the actual intent expiry. This local ceiling cannot extend it.
+            verifyDeadline = min(now().addingTimeInterval(5 * 60), run.claim.expiresAt)
+        }
+        guard let request = pendingVerify, request.runID == run.runID, request.intentID == destinationIntentID,
+              request.handoffID == handoff, request.payloadSha256 == digest,
+              verifyAttemptCount < Self.maximumVerifyRounds, now() >= verifyRetryAfter,
+              now() < verifyDeadline else { return }
+        verifyAttemptCount += 1
         destinationVerificationPending = true
         destinationVerificationUncertain = false
         let pendingEmail = destinationEmail
@@ -1660,16 +1697,42 @@ final class CollectorModel: ObservableObject {
         }
     }
 
+    /// An owner/browser-directed retry after automatic retries were exhausted. It keeps the immutable request;
+    /// no fresh approval, handoff, capability or selection is created from an uncertain answer.
+    var canRetryDestinationVerification: Bool {
+        destinationVerificationUncertain && !destinationVerificationPending && !destinationApproved &&
+            submittedDestinationDecision == nil && pendingVerify?.intentID == destinationIntentID &&
+            !destinationIntentID.isEmpty && now() < verifyDeadline && handoffBound
+    }
+
+    func retryDestinationVerification() {
+        guard canRetryDestinationVerification else { return }
+        verifyAttemptCount = 0
+        verifyRetryAfter = .distantPast
+        verifyDestination()
+    }
+
+    private func clearDestinationVerification() {
+        pendingVerify = nil
+        verifyAttemptCount = 0
+        verifyRetryAfter = .distantPast
+        verifyDeadline = .distantPast
+        destinationVerificationPending = false
+        destinationVerificationUncertain = false
+    }
+
     private func verifyFinished(_ request: PhoneRunVerifyRequest, pendingEmail: String, pendingCourse: String,
                                 _ outcome: PhoneRunOutcome<PhoneRunDestination>) {
-        guard handoffID == request.handoffID, destinationIntentID == request.intentID,
+        guard pendingVerify == request, destinationVerificationPending,
+              handoffID == request.handoffID, destinationIntentID == request.intentID,
               destinationEmail == pendingEmail, destinationCourse == pendingCourse,
               !destinationApproved, submittedDestinationDecision == nil, var run = phoneRun,
               run.runID == request.runID else { return }
         destinationVerificationPending = false
         switch outcome {
         case .accepted(let verified):
-            let exact = verified.email == pendingEmail && verified.course == pendingCourse &&
+            verifiedDestinationIntentIDs.insert(request.intentID)
+            let exact = now() < verifyDeadline && verified.email == pendingEmail && verified.course == pendingCourse &&
                 verified.enrollmentID == run.enrollmentID && verified.email == run.email &&
                 run.boundHandoffID == request.handoffID && run.boundPayloadSha256 == request.payloadSha256 &&
                 pairingPayloadSha256 == request.payloadSha256
@@ -1682,11 +1745,13 @@ final class CollectorModel: ObservableObject {
                 decideDestination(false, request)
             }
         case .refused:
+            verifiedDestinationIntentIDs.insert(request.intentID)
             // The website shows its one replacement approval; nothing native asks the owner.
             decideDestination(false, request)
         case .uncertain, .malformed:
-            // Never approve or deny on an unconfirmed answer: leave it undecided and let the pairing expire.
+            // Unknown is never a grant or denial. Repeated polling is bounded and never changes the body.
             destinationVerificationUncertain = true
+            verifyRetryAfter = now().addingTimeInterval(Double(verifyAttemptCount * 4))
         }
     }
 
@@ -1759,6 +1824,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func resetHandoff() {
+        finishAttemptCount = 0
+        completionNeedsRetry = false
         handoffPollTask?.cancel()
         handoffPollTask = nil
         pairingRequested = false
@@ -1775,8 +1842,7 @@ final class CollectorModel: ObservableObject {
         submittedDestinationDecision = nil
         approvedDestinationIntentID = ""
         verifiedDestinationIntentIDs = []
-        destinationVerificationPending = false
-        destinationVerificationUncertain = false
+        clearDestinationVerification()
         closedDestinationIntentIDs = []
         pairCode = ""
         pairPort = 0
@@ -1784,6 +1850,22 @@ final class CollectorModel: ObservableObject {
         navigateOnPairing = false
         accountNavigation = nil
         if runBinding == .binding { runBinding = .uncertain }
+    }
+
+    /// Retrying finalization only asks for the same handoff's receipt. It never pairs again or re-saves sources.
+    var canRetryAccountCompletion: Bool {
+        completionNeedsRetry && phase == .reviewing && commandReady && handoffBound &&
+            finishAttemptCount >= Self.maximumFinishAttempts
+    }
+
+    func retryAccountCompletion() {
+        guard canRetryAccountCompletion else { return }
+        finishAttemptCount = 0
+        completionNeedsRetry = false
+        handoffNotice = "Checking this account save's final receipt."
+        errorMessage = ""
+        send(["action": "handoff-status", "handoffId": handoffID])
+        pollHandoff()
     }
 
     private func pollHandoff() {
@@ -2357,7 +2439,7 @@ final class CollectorModel: ObservableObject {
                 closedDestinationIntentIDs.insert(destinationIntentID)
                 submittedDestinationDecision = nil
                 approvedDestinationIntentID = ""
-                destinationVerificationPending = false
+                clearDestinationVerification()
                 destinationIntentID = ""
                 destinationEmail = ""
                 destinationCourse = ""
@@ -2402,6 +2484,15 @@ final class CollectorModel: ObservableObject {
                 return
             }
             if event.state == "saved" {
+                // A lost/uncertain finish response can return us to review while the same receipt is still
+                // available. Bound automatic retries; explicit retry resumes this same handoff afterwards.
+                guard finishAttemptCount < Self.maximumFinishAttempts else {
+                    completionNeedsRetry = true
+                    handoffNotice = "Your account save is confirmed. Retry finishing on this Mac."
+                    return
+                }
+                finishAttemptCount += 1
+                completionNeedsRetry = false
                 pairingRequested = false
                 navigateOnPairing = false
                 selectionChangePending = false
@@ -2470,7 +2561,11 @@ final class CollectorModel: ObservableObject {
                 handoffAcknowledged = false
                 submittedDestinationDecision = nil
                 phase = .reviewing
+                completionNeedsRetry = finishAttemptCount > 0
                 errorMessage = Self.handoffUnconfirmedMessage
+                // Finish had stopped polling. Restore receipt reconciliation without changing selection,
+                // handoff, approval or save authority; the helper still validates the final ACK.
+                pollHandoff()
             } else {
                 if event.cleanupRequired == true {
                     needsStorageReview = true
