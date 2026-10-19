@@ -30,7 +30,7 @@ import AppKit
     }
     func miniaturize() { window?.miniaturize(nil) }
     func deminiaturize() { window?.deminiaturize(nil) }
-    func activateApp() { NSApp.activate() }
+    func activateApp() { if window != nil { NSApp.activate() } }
     func makeKeyAndOrderFront() { window?.makeKeyAndOrderFront(nil) }
     func orderFront() { window?.orderFront(nil) }
 
@@ -42,17 +42,26 @@ import AppKit
         alert.informativeText = detail
         alert.addButton(withTitle: "Keep window open")
         alert.addButton(withTitle: "Cancel and close")
-        alert.beginSheetModal(for: window) { response in
-            MainActor.assumeIsolated { completion(response == .alertSecondButtonReturn) }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            MainActor.assumeIsolated {
+                guard self?.window != nil else { return }
+                completion(response == .alertSecondButtonReturn)
+            }
         }
     }
 
     func openInBrowser(_ url: URL, preferredBrowserBundleID: String?, completion: @escaping @MainActor (Bool) -> Void) {
-        returnToBrowser(url, preferredBrowserBundleID: preferredBrowserBundleID, completion: completion)
+        guard window != nil else { return }
+        returnToBrowser(url, preferredBrowserBundleID: preferredBrowserBundleID) { [weak self] opened in
+            guard self?.window != nil else { return }
+            completion(opened)
+        }
     }
 
-    func restore() {
+    func invalidate() {
         guard let window else { return }
+        self.window = nil
+        if let sheet = window.attachedSheet { window.endSheet(sheet, returnCode: .abort) }
         window.level = originalLevel
         window.hidesOnDeactivate = originalHides
     }

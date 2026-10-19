@@ -39,14 +39,20 @@ enum CompanionWindowLifecycleChecks {
     }
 
     static func ownerCloseInvalidatesBeforeCallbacks() throws {
-        let model = CollectorModel(commandWriter: { _ in })
-        model.phase = .completed
+        let (model, _, wire, _) = try PhoneRunFlowChecks.boundModel()
         let coordinator = ActiveCompanionWindow.Coordinator(model: model)
+        coordinator.returnToBrowser = ReturnToBrowserAction { _, _, _ in }
         let previous = PreviousDelegate()
         let host = window()
         host.delegate = previous
         host.contentView = probe(coordinator)
         try require(host.delegate === coordinator, "Real window attachment installs the coordinator")
+        model.receive(try PhoneRunFlowChecks.handoffEvent("saved"))
+        try require(wire.last?["action"] as? String == "finish", "The synthetic receipt reaches production finish handling")
+        model.finished(mode: "connect", code: 0)
+        coordinator.update()
+        try require(model.canSafelyClose && coordinator.window === host,
+                    "Confirmed completion stays attached until the owner's close")
         host.close()
         try require(coordinator.window == nil, "Owner close must invalidate the adapter before later model updates")
         try require(host.delegate === previous && previous.closeCount == 1,
@@ -89,7 +95,13 @@ enum CompanionWindowLifecycleChecks {
         // Exercise the actual offscreen AppKit confirmation and choose its Cancel and close response.
         try require(!coordinator.windowShouldClose(host), "An unsaved review requires an owner close decision")
         guard let sheet = host.attachedSheet else { throw Failure.check("The real close confirmation is attached") }
-        host.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+        host.endSheet(sheet, returnCode: .alertFirstButtonReturn)
+        drain()
+        try require(coordinator.window === host && model.hasUnsavedReview,
+                    "Keep window open preserves the unsaved review and live adapter")
+        try require(!coordinator.windowShouldClose(host), "The owner can subsequently request cancel and close")
+        guard let cancelSheet = host.attachedSheet else { throw Failure.check("The second close confirmation is attached") }
+        host.endSheet(cancelSheet, returnCode: .alertSecondButtonReturn)
         drain()
         try require(coordinator.window == nil && model.phase == .idle && !model.hasUnsavedReview,
                     "Confirmed cancel discards the synthetic review and closes after the helper is stopped")
@@ -123,6 +135,22 @@ enum CompanionWindowLifecycleChecks {
         try require(model.errorMessage.isEmpty, "Dismantling also invalidates pending browser replies")
         first.close()
         second.close()
+    }
+
+    static func dismantledConfirmationCannotDiscard() throws {
+        let model = CollectorModel(commandWriter: { _ in })
+        try PhoneRunFlowChecks.capture(model)
+        let coordinator = ActiveCompanionWindow.Coordinator(model: model)
+        let host = window()
+        let view = probe(coordinator)
+        host.contentView = view
+        try require(!coordinator.windowShouldClose(host) && host.attachedSheet != nil,
+                    "An actual confirmation can be pending when SwiftUI dismantles its view")
+        ActiveCompanionWindow.dismantleNSView(view, coordinator: coordinator)
+        drain()
+        try require(host.attachedSheet == nil && coordinator.window == nil && model.hasUnsavedReview,
+                    "Dismantling ends the sheet and invalidates its answer without discarding the review")
+        host.close()
     }
 
     static func repeatedRepresentableDestruction() throws {
@@ -159,6 +187,7 @@ enum CompanionWindowLifecycleChecks {
             try detachReattachAndDismantle()
             try cancelThenCloseAndQueuedUpdates()
             try lateBrowserReplyAfterDetach()
+            try dismantledConfirmationCannotDiscard()
             try repeatedRepresentableDestruction()
             try require(!application.isActive, "The harness must not activate the application")
             print("PASS: real offscreen AppKit lifecycle checks; 40 SwiftUI close/reopen cycles; no helper/device/account/browser")

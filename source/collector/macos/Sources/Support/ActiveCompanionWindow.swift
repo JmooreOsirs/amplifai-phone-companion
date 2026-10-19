@@ -18,18 +18,23 @@ struct ActiveCompanionWindow: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.model = model
         context.coordinator.returnToBrowser = returnToBrowser
-        context.coordinator.attach(view.window)
         context.coordinator.update()
     }
-    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) { coordinator.restore() }
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        (view as? WindowProbeView)?.onWindow = nil
+        coordinator.invalidate()
+    }
 
     @MainActor final class Coordinator: NSObject, NSWindowDelegate {
         weak var model: CollectorModel?
         weak var window: NSWindow?
         weak var previousDelegate: NSWindowDelegate?
+        private weak var closingWindow: NSWindow?
         private var surface: AppKitCompanionSurface?
         private let director = CompanionWindowDirector()
         private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+        private var attachmentID = UUID()
+        private var dismantled = false
         private var confirmingClose = false
         private var closeRequested = false
         var returnToBrowser: ReturnToBrowserAction = .system {
@@ -39,8 +44,13 @@ struct ActiveCompanionWindow: NSViewRepresentable {
         init(model: CollectorModel) {
             self.model = model
         }
+        deinit {
+            for (center, observer) in observers { center.removeObserver(observer) }
+        }
         func attach(_ candidate: NSWindow?) {
-            guard let candidate, window !== candidate else { return }
+            guard !dismantled else { return }
+            guard let candidate else { restore(); return }
+            guard candidate !== closingWindow, window !== candidate else { return }
             restore()
             window = candidate
             surface = AppKitCompanionSurface(window: candidate, returnToBrowser: returnToBrowser)
@@ -56,25 +66,26 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             guard let window, let model, let surface else { return }
             // A confirmed save stays on screen as "Saved" until the owner closes it.
             if closeRequested && !model.helperRunning {
-                surface.restore()
                 window.close()
                 return
             }
             director.update(model: model, surface: surface)
         }
         func windowShouldClose(_ sender: NSWindow) -> Bool {
+            guard !dismantled, sender === window else { return true }
             guard let model else { return previousDelegate?.windowShouldClose?(sender) ?? true }
             guard !model.canSafelyClose && (model.hasUnsavedReview || model.helperRunning) else {
                 return previousDelegate?.windowShouldClose?(sender) ?? true
             }
             guard !confirmingClose, sender.attachedSheet == nil, let surface else { return false }
             confirmingClose = true
+            let attachment = attachmentID
             // Only the owner's own close click shows this sheet.
             surface.presentCloseConfirmation(
                 title: model.hasUnsavedReview ? "Keep the unsaved local review?" : "Cancel this collection and close?",
                 detail: "Until your account confirms the save, this Mac keeps a private recovery copy. Closing discards it after the helper stops. App-created temporary data may need inspection on the next launch; other backups are never removed."
             ) { [weak self] cancelAndClose in
-                guard let self else { return }
+                guard let self, self.attachmentID == attachment, self.window != nil, !self.dismantled else { return }
                 self.confirmingClose = false
                 if cancelAndClose {
                     self.closeRequested = true
@@ -85,8 +96,15 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             return false
         }
         func windowWillClose(_ notification: Notification) {
+            guard let closing = notification.object as? NSWindow, closing === window else { return }
+            let delegate = previousDelegate
+            let model = model
+            closingWindow = closing
+            // Disconnect publishes SwiftUI updates synchronously. Invalidate first so those updates cannot
+            // register a new weak reference to this NSWindow while AppKit is tearing it down.
+            restore()
             model?.disconnect()
-            previousDelegate?.windowWillClose?(notification)
+            delegate?.windowWillClose?(notification)
         }
         override func responds(to selector: Selector!) -> Bool {
             super.responds(to: selector) || previousDelegate?.responds(to: selector) == true
@@ -95,21 +113,43 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             if previousDelegate?.responds(to: selector) == true { return previousDelegate }
             return super.forwardingTarget(for: selector)
         }
+        func invalidate() {
+            dismantled = true
+            restore()
+        }
         func restore() {
-            for (center, observer) in observers { center.removeObserver(observer) }
-            observers = []
-            surface?.restore()
-            if let window, window.delegate === self { window.delegate = previousDelegate }
+            attachmentID = UUID()
+            director.detachSurface()
+            let oldWindow = window
+            let oldSurface = surface
+            let delegate = previousDelegate
             surface = nil
             window = nil
             previousDelegate = nil
+            confirmingClose = false
+            closeRequested = false
+            let oldObservers = observers
+            observers = []
+            for (center, observer) in oldObservers { center.removeObserver(observer) }
+            oldSurface?.invalidate()
+            if let oldWindow, oldWindow.delegate === self { oldWindow.delegate = delegate }
         }
     }
 
     final class WindowProbeView: NSView {
         var onWindow: ((NSWindow?) -> Void)?
+        private var awaitingAttachment = false
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            awaitingAttachment = newWindow != nil
+            if newWindow == nil { onWindow?(nil) }
+            super.viewWillMove(toWindow: newWindow)
+        }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            // Only an actual move into a window admits attachment. SwiftUI updates and destruction-time
+            // callbacks may still expose the old view.window; neither is an attachment authority.
+            guard awaitingAttachment else { return }
+            awaitingAttachment = false
             onWindow?(window)
         }
     }

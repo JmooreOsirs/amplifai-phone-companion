@@ -30,12 +30,15 @@ import Foundation
 
     var handedOff: Bool { !handedOffHandoffID.isEmpty }
 
+    func detachSurface() { openedNavigationID = nil }
+
     func update(model: CollectorModel, surface: CompanionWindowSurface) {
         // Floating only while the owner is working in this app before the handoff; never over the browser.
         surface.setFloating(model.activeFlow && !model.browserOwnsFlow && !handedOff &&
                             surface.isNativeAppFrontmost && !surface.hasAttachedSheet)
         surface.setKeepsVisibleWhenInactive(model.activeFlow)
         guard let navigation = model.accountNavigation, navigation.id != openedNavigationID,
+              navigation.handoffID != handedOffHandoffID,
               model.browserHandoffReady, navigation.handoffID == model.handoffID else { return }
         openedNavigationID = navigation.id
         surface.openInBrowser(navigation.url, preferredBrowserBundleID: model.returnBrowserBundleID) {
