@@ -257,19 +257,27 @@ struct ContentView: View {
     }
 
     private var showsRunStatusNotice: Bool {
-        runNeedsAccountAction || (model.startConfirmation == .none &&
+        model.approvalAdoptionPending || model.canRetryApprovalAdoption || runNeedsAccountAction || (model.startConfirmation == .none &&
             (model.runStatus == .uncertain || (model.runStatus == .checking && !model.runStatusMessage.isEmpty)))
     }
 
     private var runStatusNotice: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
-            if model.runStatus == .checking {
+            if model.approvalAdoptionPending {
+                progressLine("Checking your updated approval…")
+            } else if model.runStatus == .checking {
                 progressLine("Rechecking this approval…")
             } else {
                 Text(runStatusTitle).font(Brand.headingFont(20)).foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
-                Text(model.runStatusMessage).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
-                if model.runStatus == .uncertain {
+                Text(model.canRetryApprovalAdoption
+                     ? "Your updated approval wasn't confirmed. Your collection and selected contacts are still on this Mac."
+                     : model.runStatusMessage)
+                    .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+                if model.canRetryApprovalAdoption {
+                    Button("Retry approval check") { model.retryApprovalAdoption() }
+                        .buttonStyle(SecondaryButton())
+                } else if model.runStatus == .uncertain {
                     Button("Recheck approval") { model.refreshRunStatus() }
                         .buttonStyle(SecondaryButton()).disabled(!model.canRefreshRunStatus)
                 } else {

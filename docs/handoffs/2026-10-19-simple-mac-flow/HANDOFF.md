@@ -46,11 +46,11 @@ Native parses v1 and v2 separately and opens the policy snapshot associated with
 
 ## UI and fixture follow-up
 
-The v2 status notice derives from existing `PanelStyle`, heading/body fonts, progress row and Secondary/Lime buttons. It appears for uncertain, expired, revoked or changed approval; successful periodic checks remain visually quiet. Retry acts on the current run. No repeated checkbox or destination dialog is added for an unchanged approved run.
+The v2 status notice derives from existing `PanelStyle`, heading/body fonts, progress row and Secondary/Lime buttons. It appears for uncertain, expired, revoked or changed approval; successful periodic checks remain visually quiet. Retry acts on the current run. The explicit replacement retry calls the model's existing captured-collection check and never asks the owner to approve in native UI. No repeated checkbox or destination dialog is added for an unchanged approved run.
 
 The visible local Stop and account Stop navigation use existing button primitives. The account link only opens the account's run controls. It does not issue the authenticated Stop mutation. Completion continues to distinguish selected local totals, receipt-confirmed source Saves, the final browser receipt and local cleanup.
 
-Focused verification: release Swift build and `Tests/check_fake_demo.sh` passed with the status/version core. Changed status/Stop renders are saved under `native-ui-renders/run-status-v2/`; its evidence receipt explicitly excludes the pre-adoption replacement-state image pending the final model contract.
+Focused verification: release Swift build and `Tests/check_fake_demo.sh` passed with the status/version core. Changed status/Stop renders are saved under `native-ui-renders/run-status-v2/`. Final replacement recovery is separately verified under `native-ui-renders/approval-recovery/`, superseding the earlier excluded replacement image. With model commit `bd8c61e`, the release build and fake-helper suite passed; focused renders cover a retained collection, exact approval retry, an in-progress check, and recovery with the newly approved narrower source categories.
 
 The isolated FAKE DATA helper accepts the same paused/current authority control for its fictional handoff. Its checks explicitly choose available data after the encryption-off result; no real helper, phone, network or account is used. The offscreen renderer remains separate from this simulated helper test.
 

@@ -12,7 +12,7 @@ struct RenderMacReviewAcceptance {
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
         let shareStates = ["bind-uncertain", "bind-refused", "expired"]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry"] + shareStates
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry", "adoption-retry", "adoption-checking", "adoption-recovered"] + shareStates
         let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
         let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
         let setupStates = ["setup"] + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
@@ -147,6 +147,26 @@ struct RenderMacReviewAcceptance {
                                 guard model.canRetryAccountCompletion else { throw FixtureError.unexpectedState("finish-retry: exact receipt retry unavailable") }
                             }
                             if state == "expired" { try receive(["kind": "handoff", "state": "expired", "handoffId": handoffID]) }
+                            if state.hasPrefix("adoption-") {
+                                guard let original = model.phoneRun else { throw FixtureError.unexpectedState("adoption: missing run") }
+                                server.replace(original.runID, course: "SYNTHETIC updated course", categories: ["contacts"])
+                                server.faultsByPath[PhoneRunContract.bindPath] = [.loseReply, .malformed, .dropRequest]
+                                model.refreshRunStatus()
+                                guard model.canRetryApprovalAdoption, model.phoneRun?.claim == original.claim else {
+                                    throw FixtureError.unexpectedState("adoption: retained exact approval before retry")
+                                }
+                                if state == "adoption-checking" {
+                                    server.holdReplies = true
+                                    model.retryApprovalAdoption()
+                                    guard model.approvalAdoptionPending else { throw FixtureError.unexpectedState("adoption: checking") }
+                                } else if state == "adoption-recovered" {
+                                    model.retryApprovalAdoption()
+                                    guard model.runStatus == .current, model.phoneRun?.categories == ["contacts"],
+                                          model.handoffID == handoffID, model.selectedIDs == Set(selected) else {
+                                        throw FixtureError.unexpectedState("adoption: same-handoff recovery")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -218,6 +238,8 @@ struct RenderMacReviewAcceptance {
                 "handoffPresent": !model.handoffID.isEmpty, "browserReceived": model.browserReceived,
                 "runApproval": String(describing: model.runApproval), "runBinding": String(describing: model.runBinding),
                 "runStatus": String(describing: model.runStatus),
+                "approvalAdoptionPending": model.approvalAdoptionPending,
+                "canRetryApprovalAdoption": model.canRetryApprovalAdoption,
                 "approvedToSave": model.phoneRun.map { CollectorModel.approvedToSaveLabel($0.categories) } ?? "",
                 "saveReceiptPending": model.accountSaveAwaitingBrowserReceipt,
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
