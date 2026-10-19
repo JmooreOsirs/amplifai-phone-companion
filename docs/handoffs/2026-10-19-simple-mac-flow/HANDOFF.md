@@ -1,158 +1,155 @@
-# Simpler Mac phone flow — handoff for Jeff (2026-10-19)
+# One approval at the start: AMPLIFai Phone Mac handoff for Jeff (2026-10-19)
 
-Brian asked for a much simpler AMPLIFai Phone Mac flow: agree → collect with clear progress → choose all or
-some contacts → get the existing report. This branch does that with minimal changes to the RC28 native source.
-It also adds a clickable FAKE DATA demo so the flow can be tried in seconds without an iPhone or an account.
+Brian's correction after his real test:
+
+> "I only wanted to do it at the beginning … it switched back to my app in the middle of this process … If I have to have permissions it shouldn't switch back to the app."
+
+This branch makes the Mac half of that flow: **one informed approval in the signed-in account at the start**, then collect, choose contacts, and the website saves, reports and finishes on its own. The Mac shows no destination sheet and no consent checkbox, and never pulls focus back after the handoff.
 
 | Item | Value |
 |---|---|
-| Base | `release/native` at `8f7ec4d` (the RC28 source; both RC28 release tags point here) |
-| Branch | `codex/brian-simple-mac-flow-oct19` on `Osirs-io/amplifai-phone-companion` (fork of `JmooreOsirs/amplifai-phone-companion`) |
-| PR target | `JmooreOsirs/amplifai-phone-companion` `release/native` |
-| Scope | Mac app views and model text, Mac tests, fake-data demo and scripts. No helper (Python), Windows, website, release-control, version or signing change. |
+| Base | `release/native` at `8f7ec4d` (RC28 source) |
+| Branch | `codex/brian-simple-mac-flow-oct19` on `Osirs-io/amplifai-phone-companion`. PR #10 targets `JmooreOsirs/amplifai-phone-companion` `release/native` |
+| Linked website change (private) | `JmooreOsirs/amplifai-database-engine#5`, head `c34a420`. It defines the server contract (migration `0058`, written and not applied) |
+| Helper (Python) | **Unchanged.** One new test file only (`source/collector/tests/test_bridge_run_timing.py`) |
 
-## Verified baseline (read-only, 2026-10-19)
+## The flow
 
-- GitHub Latest is `macos-2026.10.16-rc28-release` (Intel test: `macos-2026.10.16-rc28-intel1-test`), both at `8f7ec4d`.
-  The release receipt names source `8f7ec4d`, build `26101628`, Developer ID `WSBR54954W`, app and DMG notarization Accepted.
-- The installed `/Applications/AMPLIFai Phone.app` is `2026.10.16-rc28` / `26101628`, arm64, notarized. All 5,733 files
-  match the release's `final-signed-app-inventory.json`.
-- Production website feed (both hosts) is byte-identical to the release `appcast.xml` (`22c677a1…`).
-- No later commit on any branch changes the Mac app source.
+| Step | What happens |
+|---|---|
+| Agree (website) | **Agree and collect** records one run approval: account, course, contacts, call history and message metadata, and automatic saving of the contacts chosen later. **Open AMPLIFai Phone** sends `amplifai-phone://start?run=…&bootstrap=…` |
+| Mac opens | The app redeems the one-use start key over its fixed TLS authority, using a run key it generates itself. It shows the verified account and course, **Approved to save: chosen contacts, their call metadata, their message metadata**, and one **Start collection**. Start is an action, not consent, and must happen within 10 minutes of the claim. |
+| Start | The app resends its exact original claim right before collection starts. That revalidates revocation, session, course, receipts, retention and reset on the server. iPhone Trust and the backup password are unchanged. |
+| Collect, choose | Unchanged progress and contact selection. |
+| Continue | The helper pairs. The app binds that one handoff and digest to the run, opens the account page in the browser that sent the link, and minimizes once. From here the website owns the screen. |
+| Website connects | The helper reports a pending account check. The app asks the server whether that intent is exactly this run's (account, course, enrollment, handoff, digest). Only an exact match is approved automatically. A mismatch or refusal is declined, and the website then asks once for a replacement approval. An unclear answer is left undecided. |
+| Save, report, Done | Website only. The Mac waits for `saved`, sends `finish`, and stays minimized. |
 
-## Flow: before and after
-
-| Step | RC28 (`8f7ec4d`) | This branch |
-|---|---|---|
-| Agree | Three screens: "Prepare this iPhone" (Check iPhone setting, then a call-history button) → "Approve collection" (checkbox, Agree to collection) → "Ready to connect" (Connect iPhone) | One screen, **Collect phone data on this Mac**. A plain summary comes first (what arrives on the Mac, what stays local, exactly what is shared and when, failure diagnostics). Then **Check iPhone**. After the read-only check: one checkbox, "I agree to this one-time collection and the safe failure diagnostic", and **Start collection**, which records the one-run agreement and starts collecting. |
-| Call-history choice | Separate button ("I have the backup password · continue" / "Continue with available data") | Derived from the check: On → encrypted call coverage (password asked later, as before); Off or unreadable → available data. Unreadable keeps **Check iPhone again** as the main action; "Start without confirmed call history" is secondary. |
-| Finder call-history setup | A step on the setup screen | Optional link, shown only when encryption is Off |
-| Collect | Progress panel; stages Connect / Receive / Read / Review & save | Same panel; stages Connect iPhone / Receive backup / Read locally / Clean up |
-| Choose | "Choose contacts"; Include all; All/Main/Review; Select all N / Deselect all; "Mark for group move" uses the same checkbox as inclusion; "Next · N selected" → share dialog | "Choose contacts to share"; scoped buttons name their scope ("Select all 5,129 in Main", "Deselect all in Main"), hidden for All with no search, where they would duplicate Include all; move marks are a flag tag, not a checkbox; footer **Continue to account** ("You will confirm the account before sharing. Save is approved separately in your account.") |
-| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; a green "Review destination approval" competed with the auto-opened destination sheet; after the save the window closed itself unexplained; stale "Save and continue" recovery text | **Share with your account**, then a one-line summary (contacts, calls, messages) and **one next action per state**: Continue to account → the auto-opened sheet is the **only** destination decision (passive text behind it; a quiet "Review account…" only after Decide later) → "Confirming your sharing choice…" → "Sending to your browser…" → **one active surface**: once the account is confirmed and the browser has the preview, the Mac minimizes its window and brings the browser forward by itself (no new tab, so the preview tab is kept; it cannot pick the tab). The website then owns Save, progress, the report and Done, while the helper keeps running for the receipts. A problem after the hand-off restores the Mac window once, without taking focus; a later matching browser receipt clears only the obsolete link error, so the hand-off still happens. Completion never brings the Mac window back. If the owner reopens the window, it shows **Finish in your browser** with **Continue in browser** as recovery, and after the save **Saved in your account** with **Done** (the window no longer closes itself). Counts, dates, caveats, what is shared, Change selected contacts, Discard review and link/code help sit under one **Details and options** disclosure. |
-| Journey | — | "Agree · Collect · Choose · Share & report" bar. Finished steps show a check-circle, never a checkbox, so verified progress is never confused with a choice. |
-
-Gates kept exactly: Apple's Trust prompt and the existing backup password; the per-run local approval (bound to
-the run ID, disclosure and scopes, consumed at launch; nothing authorizes a later collection); the Mac
-**Share with this account** destination confirmation (account email and course from the authenticated server);
-browser Connect; per-source Save in the account. The only approval removed is the preparatory share dialog: it
-only prepared the local review and opened the browser, and nothing is transmitted before the destination confirmation.
+**Never after the handoff:** no app activation, no restore, no raise, no sheet, whether for status, `received`, `saved_pending_browser_receipt`, `saved`, helper exit, completion or errors. The owner can reopen the window from the Dock. It then shows passive status and an explicit **Continue in browser**.
 
 ## Changed files
 
 | File | Change |
 |---|---|
-| `Sources/Views/ContentView.swift` | One-screen Agree, share panel layout, footer, journey bar, account navigation through SwiftUI `openURL` (same default browser open; lets a host intercept it) |
-| `Sources/Services/CollectorModel.swift` | `agreeAndStartCollection`, `settingCallHistoryPreparation`, `journeyStep`, `accountLinkPending`. `submittedDestinationDecision` blocks a second Share or Not-this-account for the same request until the helper answers; it clears on that answer, on a link reset and on `handoff_unconfirmed`. The owner's Share is also recorded for that exact handoff and intent, so a later matching receipt reconciles a lost approval (never counted as a save), and the page says "Sharing has not been confirmed" meanwhile. Disclosure `native-local-collection-v5`; recovery text names current actions (no "Save and continue") |
-| `Sources/Views/BrandControls.swift` | `JourneySteps`, `VerifiedStatusRow`, `MoveMarkToggle` |
-| `Sources/Views/ContactReviewView.swift` | Scoped bulk labels; redundant All actions hidden; flag-style move marks |
-| `Sources/Views/CollectionStatusPanel.swift` | Stage names, recovery text, Discard review…, saved-report link |
-| `Sources/Support/ActiveCompanionWindow.swift` | Destination sheet: "Share your reviewed contacts with this account?" · **Share with this account** / Not this account / Decide later. Reports when it is on screen so the page never offers a competing decision. **Behavior change for review:** the window no longer closes itself after a confirmed save; it shows Saved in your account until Done or the close button |
-| `Tests/CollectorFlowChecks.swift` | Start gates, journey steps, all/subset/none selection, share → confirm → save receipt → completion, cancellation, revoked-link and failed-link recovery. Destination-decision cases: no double decision (Share or decline), `handoff_unconfirmed`, a lost approval reconciled by a matching receipt (including after `handoff_unconfirmed`), and no approval from a receipt without the owner's Share or for another handoff |
-| `Tests/CollectorModelChecks.swift` + new `Tests/check_model.sh` | Cancelling the pre-agreement iPhone check stays on Agree; one Start launches exactly the agreed run and consumes it |
-| `Tests/Fixtures/RenderMacReviewAcceptance.swift` | New states; every image stamped "SYNTHETIC FIXTURE" |
-| `Tests/Fixtures/FakeDataDemo/*`, `Tests/check_fake_demo.sh`, `source/script/build_fake_data_demo.py`, `source/script/run_fake_data_demo.sh` | Clickable FAKE DATA demo and its checks (not part of the shipped app) |
+| `Sources/Services/PhoneRunAuthority.swift` (new) | Fixed-host HTTPS client: ephemeral session, no redirects, 2 KB strict replies. Each request is prepared once and resent byte for byte on an unclear outcome. Includes the injectable protocol. |
+| `Sources/Support/PhoneRunLink.swift` (new) | Strict link parser, return-browser choice, and a one-slot inbox that holds a link from cold start until start-up checks finish. |
+| `Sources/App/AmplifaiPhoneApp.swift` | Apple Event `kAEGetURL` handler, registered before launch finishes. It records the sending browser and keeps SwiftUI from opening a second window. |
+| `Info.plist` | `CFBundleURLTypes` for `amplifai-phone` (production app only; the demo declares none). |
+| `Sources/Services/CollectorModel.swift` | Run claim and exact retry; Start window and revalidation; a different-link candidate kept on unclear outcomes; bind-once; automatic destination decision after verification; handoff without waiting for `received`; expiry fails closed; local collection approval composed from the verified run (disclosure `native-run-v1`, carrying server run, approval and `phone-run-v1`). |
+| `Sources/Support/CompanionWindowDirector.swift`, `AppKitCompanionSurface.swift` (new) | Every focus change goes through one surface. The director only minimizes after the browser actually opened the current navigation. A flow check enforces that only the surface file may call AppKit activation. |
+| `Sources/Support/ActiveCompanionWindow.swift` | Destination `NSAlert`, `NSApp.activate`, `makeKeyAndOrderFront` and deminiaturize-on-error removed. The close confirmation stays, for the owner's own click only. |
+| `Sources/Support/BrowserReturn.swift` | Opens `https://amplifai.satoris.ai` pages in the sending browser, or the default one. |
+| `Sources/Views/ContentView.swift`, `BrandControls.swift` | Start in your AMPLIFai account / approved run card / Start collection; Continue; passive post-handoff status. |
+| Tests: `PhoneRunFlowChecks.swift` (new), `CollectorFlowChecks.swift`, `CollectorModelChecks.swift`, `SourceDiagnosticChecks.swift`, runners | See Evidence. |
+| Fixtures: `SimulatedPhoneRunServer.swift`, `FakeDataDemo/FakeBridgeTimeline.swift` (new), `FakeHelper.swift`, `FakeDataDemoApp.swift`, `FakeDemoChecks.swift` | The fake helper follows the real `bridge.py` timing: `received` only after `/v1/complete`, a 5-minute window from `pair`, and a 2-hour transfer window refreshed per page. The demo starts with a simulated Agree and collect. |
+| `source/script/build_fake_data_demo.py`, `run_fake_data_demo.sh`, `render_macos_review_acceptance.py` | New fixture sources; isolation now also requires `noUrlScheme`. |
+| `source/script/stage_local_device_test.sh` | New versioned output `amplifai-real-test.run-approval-v1.<time>`; adds `CFBundleURLTypes` to the staged copy only; still never launches or registers. |
 
-## Test evidence (macOS 26.6.2 arm64, Swift 6.3.3, 2026-10-19)
+## Timing (each clock is separate)
 
-Run from `source/collector/macos`:
+| Clock | Starts | Length | Defined in |
+|---|---|---|---|
+| Approval window | Agree and collect | 1 hour to redeem | website migration `0058` |
+| Start key | Each issue | 10 min, one use | website migration `0058` |
+| Start window (claim replay) | The claim | 10 min | website migration `0058` |
+| Run | The claim | 12 hours | website migration `0058` |
+| Initial bridge | Helper `pair` after review and **Continue** | 5 min to connect, approve and release | `bridge.py` `PAIR_SECONDS` |
+| Connect intent | Website creates it | 5 min to consume | website migration `0025` |
+| Active paged transfer | Release | 2 hours of inactivity, refreshed by each page, decline and keepalive (the website sends one every 5 min) | `bridge.py` `TRANSFER_SECONDS` |
+
+## Known limits
+
+- **An expired connection can't be resumed.** The helper reports `expired` before release (no browser connection within 5 minutes of Continue) and after release (2 hours without activity; some sources may already be saved). A new `pair` always creates a new handoff, and the run binds one handoff and digest once, so the run is spent. The app says: "This connection expired. Nothing more can be sent from this collection. Check your account for any sources already saved. Starting again needs a new collection." It never re-pairs, rebinds or marks anything received.
+- **Start within 10 minutes of the claim.** After that, the app shows "approve again" in place of Start. Once collection starts, the run lasts 12 hours, so a normal 35-minute collection still binds.
+- **Browser profile and tab.** Account pages reopen in the browser that sent the link, which is read from the Apple Event sender, or else the default browser. macOS can't choose that browser's profile, window or tab. This is untested on a real browser, and the fake website fixture doesn't prove it.
+- **Requires the website.** This build needs a website with `0058` installed and the run flag on. Without them it offers only **Start in your AMPLIFai account**.
+- **Older apps.** RC28 and earlier don't handle the `amplifai-phone` link. See the release order.
+
+## Release order (with website PR #5)
+
+1. Qualify `0058` on an isolated database. This is required, and its PostgreSQL fixture has never run. Then apply it.
+2. Deploy the website with `NEXT_PUBLIC_PHONE_RUN_APPROVAL_RELEASE` **off**.
+3. Publish this Mac build: next identity, protected ARM and Intel builds, `approvedSources` approval, signing, notarization and feeds. Confirm existing installs update.
+4. Enable the flag only after a version-compatibility check: a test Mac on this build opens the link and redeems the run.
+
+**Owners still on an older app:** once the flag is on, an owner who hasn't updated sees nothing open.
+- **Recovery:** update AMPLIFai Phone, then select **Open AMPLIFai Phone** again within the 1-hour window.
+- **Fallback:** turn the flag off to stop new links.
+
+**Rollback:** the flag off stops new runs. Existing runs keep their server-side fences. Reverting to RC28 uses the legacy flow, and run-bound handoffs fail closed.
+
+## Evidence
+
+**Mac checks** (macOS 26.6.2 arm64, Swift 6.3.3), run from `source/collector/macos`. All exit 0:
 
 ```text
-sh Tests/check_flow.sh                → macOS flow and byte-progress checks passed
-sh Tests/check_model.sh               → 20 macOS recovery, progress, approval and update-deferral checks passed
-sh Tests/check_contact_provenance.sh  → macOS contact provenance and 672-contact workspace checks passed
-sh Tests/check_updater.sh             → all four updater/status lines passed
-sh Tests/check_fake_demo.sh           → fake helper links no network, device or process-spawning API;
-                                        FAKE DATA demo isolation, selection-driven sample report, journey,
-                                        cancellation and recovery checks passed
 swift build --configuration release   → Build complete
+sh Tests/check_flow.sh                → Mac source diagnostic … checks passed
+                                        macOS flow and byte-progress checks passed
+sh Tests/check_model.sh               → 20 macOS recovery, progress, run-approval and update-deferral checks passed
+sh Tests/check_contact_provenance.sh  → macOS contact provenance and 672-contact workspace checks passed
+sh Tests/check_updater.sh             → Sparkle, updater deferral and status-process lines passed
+sh Tests/check_fake_demo.sh           → fake helper links no network, device or process-spawning API;
+                                        FAKE DATA demo isolation, real bridge order and clock, selection-driven
+                                        sample report, one-approval journey, cancellation and recovery checks passed
 ```
 
-- The same four existing suites passed on unmodified `8f7ec4d` before any edit.
-- A mutation check reverted the cancel-check rule: `check_model.sh` failed with "Cancelling the pre-agreement iPhone check must stay on Agree". The fix was then restored.
-- **Pre-existing, not caused here:** `source/script/render_macos_update_acceptance.py` already fails on `8f7ec4d`. It requires `Brand.swift` and the end of `ContentView.swift` to equal `cdfc1b9` (RC24), and RC28 changed both. CI does not run it.
-- `CollectorModelChecks.swift` had no runner on `8f7ec4d`. The new `check_model.sh` runs it. `release_control/producer.py` on `main` still runs only `check_flow`, `check_updater` and `check_contact_provenance`; add `check_model.sh` and `check_fake_demo.sh` there if you want them in CI.
+**What the new `PhoneRunFlowChecks.swift` (inside `check_flow.sh`) covers:**
+- link parsing and return-browser choice;
+- the one-slot cold-start buffer and idle admission;
+- claim success and refusals (forged, replayed, changed, revoked, stale, 404);
+- lost-reply and malformed-success exact retry;
+- no collection or pairing before a verified claim, and old local approvals never counting;
+- Start revalidation: revoked, changed, uncertain or stale answers, and the 10 min 01 s window;
+- a duplicate link, and a different link that is refused, uncertain or retried;
+- Start at 9 minutes, then a 35-minute collection that still binds;
+- bind once, identical retry, different handoff refused, malformed bind retry, replacement approval;
+- verify: automatic approval on an exact match; a decline on each mismatch; an uncertain answer left undecided; stale and late destination events ignored;
+- handoff after bind without waiting for `received`;
+- zero activate, restore, raise or sheet calls across pending, approved, received, saved_pending, saved, helper exit, completion and errors;
+- a late browser-open answer;
+- a 15-minute released transfer;
+- expiry before and after release;
+- the "Approved to save" label and the production request shape;
+- a source scan that allows AppKit activation calls only in `AppKitCompanionSurface.swift`.
 
-Synthetic screenshots: `python3 -I source/script/render_macos_review_acceptance.py --output /private/tmp/amplifai-mac-visual.<name> --states setup agree-on agree-off agree-unknown connecting transferring-progress main all-selected all-exceptions no-selection review local-review handoff save-receipt recovery-revoked link-failed completed error cancelling`
+**Mutation checks:** putting back the restore-on-error, or making the handoff wait for `received` again, each makes `check_flow.sh` fail. Both edits were reverted, and the files are byte-identical.
 
-The renderer draws offscreen bitmaps of the production views. No window, app activation, helper or account is
-involved.
+**Real helper timing.** Run from `source/collector` with the existing `/Users/briancurtis/.local/bin/python3.13` (3.13.12; nothing installed) and `PYTHONPATH=.:tests`:
+- `-m unittest test_bridge_run_timing` (new): `Ran 3 tests … OK`. It drives the unchanged `bridge.py` with an injected clock, a synthetic paged capture and port 0. Release at the edge of the 5-minute window works, and a later one is refused. Pages read over 15 minutes after release still succeed, then complete and acknowledge. Two hours of inactivity expires.
+- `-m unittest test_bridge test_bridge_ack` (existing): `Ran 25 tests … OK`.
 
-## FAKE DATA demo (clickable, seconds, no phone)
+**Independent clock evidence** (parent workspace, read-only, inert I/O): `verify_paged_expiry_clock.py` and `paged-expiry-clock-results.json` run the real `bridge.py` methods. Observed:
+- after a 35-minute capture, `pair` starts a fresh 300 s window;
+- release at 299 s sets a 7,200 s transfer deadline;
+- release at 301 s returns 410, with no proof call and no token;
+- 3,074 page-handler calls over 35 synthetic minutes reach `received`, with zero further proof or approval calls (counts stand for 5,134 contacts and 302,190 messages; no real rows were loaded);
+- keepalive renews, and exactly 2 hours of inactivity returns 410.
 
-```bash
-source/script/run_fake_data_demo.sh
-```
+**Release control**, with the same Python 3.13.12:
+- `python3.13 -W error -m unittest discover -s release_control -p 'test_*.py'` → `Ran 32 tests … OK`
+- `PYTHONPATH=source/script python3.13 -W error -m unittest test_release_source_offer` → `Ran 9 tests … OK`
 
-The script builds a fresh bundle under `/private/tmp/amplifai-fake-demo.<timestamp>/`, checks isolation, writes
-`fake-demo-isolation.json` and opens **AMPLIFai FAKE DATA DEMO.app**. Click through:
-1. Check iPhone (simulated), tick the one-run agreement, Start collection (about 6 seconds).
-2. Choose contacts: Include all, Main or Review, search, single checkboxes, or none. Continue to account.
-3. Only the real Mac sheet is in front: Share with this account. The simulated website connects out of sight.
-4. The Mac minimizes itself and the **SIMULATED AMPLIFai WEBSITE** window (local fixture, labelled) appears once: **Save and view report**.
-5. The simulated website shows the sample report with **Done**.
+The system Python 3.9.6 can't run them (`hashlib.file_digest` needs 3.11+).
 
-**Earlier live click-through (2026-10-19, Codex reviewer, `/private/tmp/amplifai-fake-demo.055137`, `cc404a3` plus the report Done change; before the automatic hand-off, so it used Continue in browser):**
-- Check iPhone → one-run checkbox → Start collection.
-- Include all 312 → unchecked one contact → 311 selected → Continue to account.
-- Share with this account (fictional `demo.owner@example.invalid`, "FAKE DATA DEMO course") → Continue in browser.
-- Save and view report → sample report (311 of 312, 1,498 calls, 4,476 messages, 1 not included) → Done.
-
-The reviewer does not claim exact process-quit behavior after Done. No real device, network or account was involved. The simulated website is a native SwiftUI fixture standing in for the website change below, not the React website or its backend.
-
-What is real: the production `ContentView`, `CollectorModel`, start/check/cancel/recovery code and the
-destination sheet. The model launches its helper the normal way; the demo bundle simply carries a fake helper
-that speaks the same JSON protocol with 312 fictional contacts.
-
-Isolation, in independent layers:
-- Separate identity `ai.satoris.amplifai.fake-data-demo.<random>`, outside `/Applications`, with a yellow FAKE DATA banner and window title.
-- Only the fake helper is bundled: no `uvx`, no collector runtime, no update feed, and a non-numeric build, so a diagnostic upload can never be formed.
-- Updater disabled; status service not started; every `openURL` (Links and account navigation) intercepted and listed, never opened.
-- The fake helper imports no socket, URL, IOKit, MobileDevice, spawn or fork API (`nm -u` / `otool -L`).
-- The app re-executes itself under a deny-network sandbox profile, however it is opened, and refuses to run unless the OS reports outbound network denied (`sandbox_check`). The build verifies this from an unsandboxed start.
-
-**Sample report limitation:** the real report ("Your saved phone report") is produced only by the website after
-an account Save. The sample is computed on the Mac from the fictional selection. It shows selection-driven counts
-and says plainly that no website, account, upload or saved report was involved.
-
-## Linked website change (private repository)
-
-The browser side lives in the private website repository, so this public PR links it and copies none of its code:
-**JmooreOsirs/amplifai-database-engine#5** (`codex/brian-native-save-and-report-oct19`, base `main` `7dd7917`). It
-lists every source with its own unchecked approval and one **Save and view report**, which saves and then runs the
-existing Finalize checks. It then opens the full report, adds **Done — I reviewed these results** there (existing
-`results_reviewed` step, with before/after report checks), asks for a course when a native return is ambiguous,
-and scopes sign-in recovery. While the app shows its account confirmation, the setup page only waits ("Confirm on
-your Mac", live status, a quiet Cancel connection), so the Mac sheet is the one active surface. It is client-only, with no API or migration change. Its tests pass except 5
-`companion-update-status-ui` cases that fail identically on `main`.
-
-**Real-device boundary:** the Mac bridge accepts only `https://amplifai.satoris.ai` and
-`https://amplifai-database-engine.vercel.app`, and account intents are bound to Production. A real iPhone run can
-therefore use today's Production website now, but the revised website ending can only be validated on a real
-device after that PR is reviewed and released to an approved official origin. No origin check was relaxed.
-
-## Coverage labels
-
-| Covered | How |
-|---|---|
-| Consent gates, journey steps, selection (all/subset/none), share, confirmation, save receipt, completion, cancellation, recovery | Synthetic model checks + fake-helper end-to-end through the real launch path |
-| Views and the clickable journey | Offscreen synthetic renders; FAKE DATA demo clicked end to end by the reviewer (above) |
-| Website one-step Save, report navigation, report Done | Synthetic actual-component tests in the private website PR |
-| Real iPhone, real backup, real browser/website, real account Save and report | **Not tested.** Needs consent, a signed or locally staged build, and (for the new website ending) the reviewed website release |
+**Not run or not proven:**
+- The FAKE DATA demo bundle, the render fixture and the staging script were typechecked or edited only. No bundle was built, and nothing was launched.
+- `release_control/producer.py` doesn't run `check_model.sh`, `check_fake_demo.sh` or the new Python test; add them if you want them in CI.
+- **Rollout blockers:**
+  - the website's `0058` SQL is UNEXECUTED, so the database needs qualifying;
+  - a real end-to-end run at Brian's scale (5,134 contacts, 302,190 messages) has never been done, so real serialization, throughput and database reliability are unproven;
+  - real URLSession against the server, the real website, and on-screen focus behavior are unverified.
+- Timing is qualified only by the synthetic checks above.
 
 ## Steps for Jeff
 
-1. Review this PR and the linked website PR together. Note the behavior change: the window stays open after a confirmed save. Merge this PR into `release/native`. CI's `release-control-checks` should pass, since release control is unchanged.
-2. Run the five Mac checks above on a Mac, or add `check_model.sh` and `check_fake_demo.sh` to `producer.py`.
-3. Choose the next identity, for example `2026.10.xx-rc29` with a build above `26101628` (Intel above `261016281`), in `Info.plist` and the Intel baseline as you did for RC28.
-4. Website first (it auto-deploys from `main`): merge the reviewed website PR and accept the new build numbers in companion diagnostics and telemetry, as was done for RC28. The disclosure version string is local to the Mac app; the website does not read it.
-5. Build ARM and Intel with the protected source workflows. Then add the merged commit to `approvedSources` in `release_control/policy.json` (Brian must approve that PR), sign, notarize and publish with your existing process. Finally update `public/phone/macos/appcast.xml`, `intel-appcast.xml`, `releases.json` and the pinned tests on the website.
-6. Real-device acceptance on the signed build:
-   - Check iPhone with USB/Trust, with encryption On and Off; enter the password when On.
-   - Cancel during the check and during the transfer.
-   - Choose all, a subset and none; check Change selected contacts and Discard review.
-   - Continue to account → (auto) connect → Mac sheet "Share with this account" → the Mac minimizes and the browser comes forward → Save and view report → report → Done.
-   - Confirm that RC26 and RC28 users still update.
-7. Windows is unaffected (no Windows file changed).
+1. Review this PR together with website PR #5. Note that the destination sheet and the local consent checkbox are gone by design.
+2. Qualify `0058` and roll it out in the order above.
+3. Choose the next identity (build above `26101628`), build ARM and Intel with the protected workflows, approve `approvedSources`, then sign, notarize and publish. Update the feeds, `releases.json` and the website's pinned build numbers as for RC28.
+4. Real-device acceptance on the signed build, with the website flag on in a test environment:
+   - Agree and collect → Open AMPLIFai Phone → Start → Trust and password → a 35-minute collection is fine → choose → Continue → the browser comes forward → automatic save of a large selection → report → Done and Print.
+   - Confirm the Mac never comes forward.
+   - Exercise the expired, revoked and replacement paths.
+5. Windows is unaffected.
 
-Nothing was signed, published, deployed or merged. The installed RC28 app was never modified or stopped.
+Nothing was signed, published, deployed, merged or migrated. No URL scheme was registered and no staged build was launched. The installed RC28 app was never modified or stopped.
