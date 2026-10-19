@@ -11,8 +11,8 @@ source/script/stage_local_device_test.sh
 
 The script builds this branch's Mac app and stages
 `/private/tmp/amplifai-real-test.<timestamp>/AMPLIFai Phone LOCAL TEST.app`, with a
-`local-device-test-receipt.json`. The latest 2026-10-19 staging is `/private/tmp/amplifai-real-test.20261019-055958/`,
-from commit `9d010df` with a clean tree. That commit has the same app source as the branch tip; later commits change only docs.
+`local-device-test-receipt.json`. The latest 2026-10-19 staging is `/private/tmp/amplifai-real-test.20261019-061303/`,
+from commit `4d3146d` with a clean tree. That commit has the same app source as the branch tip; later commits change only docs.
 
 | Part | Source |
 |---|---|
@@ -48,7 +48,7 @@ build.
 ## Launch and verification (only after the prerequisites)
 
 ```bash
-open -n "/private/tmp/amplifai-real-test.20261019-055958/AMPLIFai Phone LOCAL TEST.app"
+open -n "/private/tmp/amplifai-real-test.20261019-061303/AMPLIFai Phone LOCAL TEST.app"
 ```
 
 ```bash
