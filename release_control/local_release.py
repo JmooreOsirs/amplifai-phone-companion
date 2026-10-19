@@ -173,45 +173,8 @@ def verify_control_checkout(github: GitHubClient) -> str:
 
 
 def _require_reviewed_main(github: GitHubClient, policy: dict, head: str) -> None:
-    pulls = github.request_json(f"repos/{REPOSITORY}/commits/{head}/pulls?per_page=100")
-    if not isinstance(pulls, list) or len(pulls) >= 100:
-        raise ValueError("bounded exact-main pull request review unavailable")
-    matched = [pr for pr in pulls if pr.get("merged_at") and pr.get("merge_commit_sha") == head
-               and pr.get("base", {}).get("ref") == "main"]
-    if len(matched) != 1:
-        raise ValueError("current main lacks one exact reviewed merge")
-    pr = matched[0]
-    head_sha = pr.get("head", {}).get("sha")
-    if not isinstance(head_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", head_sha):
-        raise ValueError("reviewed pull request head unavailable")
-    number = pr.get("number")
-    if type(number) is not int or number <= 0:
-        raise ValueError("reviewed pull request number unavailable")
-    reviews = github.request_json(f"repos/{REPOSITORY}/pulls/{number}/reviews?per_page=100")
-    if not isinstance(reviews, list) or len(reviews) >= 100:
-        raise ValueError("bounded exact-head review history unavailable")
-    latest = {}
-    for review in reviews:
-        login = review.get("user", {}).get("login")
-        if login:
-            latest[login.casefold()] = review
-    owners = {login.casefold() for login in re.findall(r"@([A-Za-z0-9-]+)", policy["codeOwners"])}
-    author = pr.get("user", {}).get("login")
-    if not isinstance(author, str):
-        raise ValueError("reviewed pull request author unavailable")
-    author = author.casefold()
-    approvals = [review for login, review in latest.items()
-                 if login in owners and login != author and review.get("state") == "APPROVED"
-                 and review.get("commit_id") == head_sha and review.get("submitted_at")
-                 and review["submitted_at"] <= pr["merged_at"]]
-    if not approvals:
-        raise ValueError("current main lacks independent approval of exact PR head")
-    checks = github.request_json(f"repos/{REPOSITORY}/commits/{head_sha}/check-runs?per_page=100")
-    rows = checks.get("check_runs", []) if isinstance(checks, dict) else []
-    if (not isinstance(checks, dict) or checks.get("total_count", 101) > 100 or len(rows) > 100
-            or not set(policy["requiredChecks"]).issubset({row.get("name") for row in rows
-                                                           if row.get("conclusion") == "success"})):
-        raise ValueError("reviewed control head lacks successful required checks")
+    from authority import require_approved_merge
+    require_approved_merge(github.request_json, policy, head, "main")
 
 
 def _protected_refs(github: GitHubClient, policy: dict, release_module) -> None:
@@ -274,10 +237,10 @@ def validate_request(request: dict, release_module) -> None:
 def authorize_local(github: GitHubClient, policy: dict, request: dict, control_commit: str,
                     release_module, *, publishing: bool = False) -> tuple[dict, dict]:
     validate_request(request, release_module)
+    release_module.validate_release_authority(policy)
     local = policy.get("localRelease")
     if (policy.get("repository") != REPOSITORY or policy.get("controlRef") != "refs/heads/main"
             or policy.get("sourceRef") != "refs/heads/release/native"
-            or policy.get("releaseAuthority") != "reviewed-source-independent-release"
             or policy.get("activationApproved") is not True or not isinstance(local, dict)
             or local.get("enabled") is not True or local.get("operators") != ["JmooreOsirs"]
             or local.get("notaryProfile") != NOTARY_PROFILE or local.get("sparkleAccount") != SPARKLE_ACCOUNT
@@ -295,6 +258,8 @@ def authorize_local(github: GitHubClient, policy: dict, request: dict, control_c
         f"repos/{REPOSITORY}/compare/{policy['qualifiedAncestor']}...{request['sourceCommit']}")
     release_module.validate_provenance(policy, request, run, artifact, comparison)
     source = release_module.validate_approved_source(policy, request, run)
+    from authority import require_approved_merge
+    require_approved_merge(github.request_json, policy, request["sourceCommit"], "release/native")
     runner = _qualified_runner(github, request)
     host, candidate = _host_architecture(policy, request, runner, release_module)
     return source, {"operator": operator, "controlCommit": control_commit,

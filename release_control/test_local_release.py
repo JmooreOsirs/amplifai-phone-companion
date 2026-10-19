@@ -26,7 +26,12 @@ class Client:
 class LocalReleaseTests(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((Path(__file__).parent / "policy.json").read_text())
-        self.source = next(row for row in self.policy["approvedSources"] if row["channel"] == "macos-arm64")
+        # Historical artifact fixtures have their own candidate and prior published floor.
+        self.source = {"sourceCommit": SOURCE, "channel": "macos-arm64", "version": "2026.10.16-rc28",
+                       "build": "26101628", "buildWorkflow": ".github/workflows/macos-arm64-check.yml",
+                       "releaseAuthorized": True}
+        self.policy["approvedSources"] = [self.source]
+        self.policy["releasedBuilds"] = {"macos-arm64": "26101526", "macos-intel-test": "261015261"}
         self.request = {"sourceCommit": SOURCE, "runId": 39046812410, "artifactId": 12106277218,
                         "artifactSha256": "97dcc3423ff27a50f4e558f7c35ad065cad8a5ea3a8ca1670af0b2e1ad74d05b",
                         "channel": "macos-arm64"}
@@ -55,6 +60,7 @@ class LocalReleaseTests(unittest.TestCase):
 
     def authorize(self):
         with patch.object(local, "_require_reviewed_main"), patch.object(local, "_protected_refs"), \
+                patch("authority.require_approved_merge"), \
                 patch.object(local.platform, "machine", return_value="arm64"), \
                 patch.object(local.platform, "system", return_value="Darwin"):
             return local.authorize_local(Client(self.responses), self.policy, self.request, CONTROL, release)
@@ -81,6 +87,14 @@ class LocalReleaseTests(unittest.TestCase):
         self.assertEqual(source, self.source)
         self.assertEqual(context["qualificationRunner"], "macos-15")
         self.assertEqual(context["artifactBytes"], 378752848)
+
+    def test_local_authorization_requires_source_merge_authority(self):
+        github = Client(self.responses)
+        with patch.object(local, "_require_reviewed_main"), patch.object(local, "_protected_refs"), \
+                patch("authority.require_approved_merge", side_effect=ValueError("source merge rejected")) as check:
+            with self.assertRaisesRegex(ValueError, "source merge rejected"):
+                local.authorize_local(github, self.policy, self.request, CONTROL, release)
+            check.assert_called_once_with(github.request_json, self.policy, SOURCE, "release/native")
 
     def test_local_policy_operator_and_immutable_build_failure_closed(self):
         for mutation in (lambda: self.policy["localRelease"].update(enabled=False),
@@ -112,20 +126,125 @@ class LocalReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Darwin"):
                 local._host_architecture(self.policy, intel, "macos-15-intel", release)
 
-    def test_protected_main_requires_exact_head_approval_and_green_check(self):
-        pr = {"merged_at": "2026-10-17T15:50:05Z", "merge_commit_sha": CONTROL, "base": {"ref": "main"},
-              "head": {"sha": "a" * 40}, "number": 6, "user": {"login": "JmooreOsirs"}}
-        review = {"user": {"login": "bac1876"}, "state": "APPROVED", "commit_id": "a" * 40,
-                  "submitted_at": "2026-10-17T15:48:29Z"}
+    def merge_authority_fixture(self, *, branch="main", actor="JmooreOsirs"):
+        head = "a" * 40
         prefix = f"repos/{local.REPOSITORY}"
-        data = {f"{prefix}/commits/{CONTROL}/pulls?per_page=100": [pr],
-                f"{prefix}/pulls/6/reviews?per_page=100": [review],
-                f"{prefix}/commits/{'a' * 40}/check-runs?per_page=100":
-                {"total_count": 1, "check_runs": [{"name": "release-control-checks", "conclusion": "success"}]}}
-        local._require_reviewed_main(Client(data), self.policy, CONTROL)
-        data[f"{prefix}/pulls/6/reviews?per_page=100"][0]["commit_id"] = "b" * 40
-        with self.assertRaisesRegex(ValueError, "exact PR head"):
-            local._require_reviewed_main(Client(data), self.policy, CONTROL)
+        pr = {"merged": True, "state": "closed", "draft": False,
+              "merged_at": "2026-10-17T15:50:05Z", "merge_commit_sha": CONTROL,
+              "base": {"ref": branch, "sha": "e" * 40, "repo": {"full_name": local.REPOSITORY}},
+              "head": {"ref": "codex/release", "sha": head, "repo": {"full_name": local.REPOSITORY}},
+              "number": 6, "user": {"login": actor}, "merged_by": {"login": actor}}
+        check = {"id": 100, "name": "release-control-checks", "head_sha": head,
+                 "app": {"id": 15368}, "status": "completed", "conclusion": "success",
+                 "started_at": "2026-10-17T15:47:00Z", "completed_at": "2026-10-17T15:48:29Z"}
+        data = {f"{prefix}/commits/{CONTROL}/pulls?per_page=100": [copy.deepcopy(pr)],
+                f"{prefix}/pulls/6": pr,
+                f"{prefix}/commits/{head}/check-runs?filter=all&per_page=100":
+                {"total_count": 1, "check_runs": [check]}}
+        policy = dict(self.policy, releaseAuthority="owner-approved-source-release",
+                      operators=["JmooreOsirs", "bac1876"], requiredCheckAppId=15368)
+        return policy, data, pr, data[f"{prefix}/commits/{head}/check-runs?filter=all&per_page=100"]
+
+    def test_protected_main_accepts_either_owner_merging_own_changes_without_self_review(self):
+        for actor in ("JmooreOsirs", "bac1876"):
+            with self.subTest(actor=actor):
+                policy, data, _, _ = self.merge_authority_fixture(actor=actor)
+                local._require_reviewed_main(Client(data), policy, CONTROL)
+
+    def test_merge_authority_requires_authoritative_full_pr_metadata(self):
+        mutations = (
+            lambda pr: pr.update(merged=False),
+            lambda pr: pr.update(state="open"),
+            lambda pr: pr.update(draft=True),
+            lambda pr: pr.update(merged_at=None),
+            lambda pr: pr.update(merged_at="invalid"),
+            lambda pr: pr.update(merged_at="2026-10-17T15:50:05"),
+            lambda pr: pr.update(merge_commit_sha="b" * 40),
+            lambda pr: pr.update(number=7),
+            lambda pr: pr.update(merged_by={"login": "outsider"}),
+            lambda pr: pr.update(merged_by=None),
+            lambda pr: pr["base"].update(ref="release/native"),
+            lambda pr: pr["base"]["repo"].update(full_name="outsider/fork"),
+            lambda pr: pr["head"]["repo"].update(full_name="outsider/fork"),
+            lambda pr: pr["head"].update(sha="invalid"),
+            lambda pr: pr["head"].update(sha="b" * 40),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                policy, data, pr, _ = self.merge_authority_fixture()
+                mutate(pr)
+                with self.assertRaises(ValueError):
+                    local._require_reviewed_main(Client(data), policy, CONTROL)
+
+    def test_merge_authority_rejects_missing_ambiguous_or_unbounded_pr_association(self):
+        for associations in ([], [None], [{}], "not a list", [None] * 100):
+            with self.subTest(associations=associations):
+                policy, data, _, _ = self.merge_authority_fixture()
+                data[f"repos/{local.REPOSITORY}/commits/{CONTROL}/pulls?per_page=100"] = associations
+                with self.assertRaises(ValueError):
+                    local._require_reviewed_main(Client(data), policy, CONTROL)
+        policy, data, pr, _ = self.merge_authority_fixture()
+        data[f"repos/{local.REPOSITORY}/commits/{CONTROL}/pulls?per_page=100"].append(copy.deepcopy(pr))
+        with self.assertRaises(ValueError):
+            local._require_reviewed_main(Client(data), policy, CONTROL)
+
+    def test_merge_authority_rejects_newer_failed_pending_or_forged_check_over_old_success(self):
+        mutations = (
+            {"conclusion": "failure"},
+            {"status": "in_progress", "conclusion": None, "completed_at": None},
+            {"status": "queued", "conclusion": None, "completed_at": None},
+            {"app": {"id": 999}},
+            {"head_sha": "b" * 40},
+            {"completed_at": "2026-10-17T15:51:00Z"},
+        )
+        for changes in mutations:
+            with self.subTest(changes=changes):
+                policy, data, _, checks = self.merge_authority_fixture()
+                newer = dict(checks["check_runs"][0], id=101, **changes)
+                checks["check_runs"].insert(0, newer)
+                checks["total_count"] = 2
+                with self.assertRaises(ValueError):
+                    local._require_reviewed_main(Client(data), policy, CONTROL)
+
+    def test_merge_authority_accepts_latest_exact_head_success_after_older_failure(self):
+        policy, data, _, checks = self.merge_authority_fixture()
+        checks["check_runs"].append(dict(checks["check_runs"][0], id=99, conclusion="failure"))
+        checks["total_count"] = 2
+        local._require_reviewed_main(Client(data), policy, CONTROL)
+
+    def test_merge_authority_rejects_missing_red_wrong_head_and_unbounded_checks(self):
+        mutations = (
+            lambda checks: checks.update(check_runs=[], total_count=0),
+            lambda checks: checks.update(total_count=101),
+            lambda checks: checks.update(total_count=True),
+            lambda checks: checks.update(check_runs=[None]),
+            lambda checks: checks["check_runs"][0].update(name="not-required"),
+            lambda checks: checks["check_runs"][0].update(id=True),
+            lambda checks: checks["check_runs"][0].update(app=None),
+            lambda checks: checks["check_runs"][0].update(app={"id": "15368"}),
+            lambda checks: checks["check_runs"][0].update(head_sha="b" * 40),
+            lambda checks: checks["check_runs"][0].update(conclusion="failure"),
+            lambda checks: checks["check_runs"][0].update(conclusion="neutral"),
+            lambda checks: checks["check_runs"][0].update(completed_at=None),
+            lambda checks: checks["check_runs"][0].update(started_at="2026-10-17T15:49:00Z"),
+            lambda checks: checks["check_runs"].append(dict(checks["check_runs"][0])),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                policy, data, _, checks = self.merge_authority_fixture()
+                mutate(checks)
+                with self.assertRaises(ValueError):
+                    local._require_reviewed_main(Client(data), policy, CONTROL)
+
+    def test_shared_merge_authority_handles_native_branch_and_exact_merge_sha(self):
+        import authority
+        policy, data, _, _ = self.merge_authority_fixture(branch="release/native")
+        authority.require_approved_merge(Client(data).request_json, policy, CONTROL, "release/native")
+        with self.assertRaises(ValueError):
+            authority.require_approved_merge(Client(data).request_json, policy, CONTROL, "main")
+        for commit in ("invalid", "../main", None):
+            with self.subTest(commit=commit), self.assertRaises(ValueError):
+                authority.require_approved_merge(Client({}).request_json, policy, commit, "main")
 
     def test_clean_control_checkout_rejects_dirty_and_stale_main(self):
         branch = {"protected": True, "commit": {"sha": CONTROL}}
