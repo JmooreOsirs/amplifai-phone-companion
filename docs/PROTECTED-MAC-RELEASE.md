@@ -1,66 +1,85 @@
-# Protected Mac release runbook — October 17
+# Protected Mac release runbook — October 19
 
-**Reviewed control, native source and activation policy are merged; both RC28 release qualifications passed. RC28 is not yet signed or released.** The October 17 active control baseline on `main` is `9fb2fa913292a5737310c2a2fe2381724211709f`; protected `release/native` is frozen at `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`. PRs #4, #5 and #6 merged normally after independent review. PR #6 enabled signing/publication policy for the two exact RC28 source/channel records. Brian's existing write access to `JmooreOsirs/amplifai-phone-companion` was not expanded.
+## Current authority and release state
 
-Jeff's approved authority on October 16 is **“Brian releases reviewed commits independently (Recommended)”**. This supersedes the earlier per-run reviewer proposal. Source, workflow, policy/source authorization and CODEOWNERS changes require enforced protected PR review. Brian may then build, qualify, sign, notarize and publish that authorized immutable source without another human approving the run or its generated artifact hashes. The producer/source-closure/finalizer/feed/publisher helpers are installed through the reviewed merges. ARM and Intel release-mode deliveries at the final merged source SHA have verified immutable artifact digests and app/source payload hashes. Preview receipts retain their earlier identities. Signing/notarization, package publication and final signed-byte website promotion remain incomplete.
+Jeff authorizes **either `JmooreOsirs` or `bac1876` to approve source, control and release changes, including their own changes**. This supersedes the earlier independent-review requirement. Approval is recorded by an allowlisted actor's normal PR merge with successful required checks on the exact PR head. No fabricated self-review, second routine deployment approval or per-artifact human allowlist is needed.
 
-Jeff additionally authorized: **“Deploy when the required checks pass. No further routine deployment approval is needed.”** Qualified integration/publication may proceed under that standing authority; required independent review, exact source/byte custody, key handling and technical checks are still mandatory. No repeated deployment-consent request is needed.
+This control update uses `releaseAuthority: "owner-approved-source-release"` and `requiredCheckAppId: 15368`. Live protection was updated and read back at `2026-10-19T19:04:20Z`, with every non-review field unchanged. This control update still requires its normal PR merge before release execution.
 
-## Release modes and current boundary
+RC28 was signed through the local Keychain path, published and promoted on October 17 under control `067b2bc687e3af81d033923608679578814c535b`, source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`. The combined website receipt records deployment `dpl_ChSk6sFXE75hatGNYW5q9qtDgxWr` and `physicalAcceptance=false`. See [the retained RC28 receipt](RELEASE-DELIVERY-CONTRACT.md#historical-rc28-deliveries-and-publication).
 
-The installed hosted workflow is the credential-bearing path described below; it has not completed a live signed release. Jeff has also explicitly authorized a local Keychain mode using the existing identity, Sparkle key and `AMPLIFai-notary` profile. That mode is **under implementation and pending protected independent review**, not part of merged control `9fb2fa9`. Follow [LOCAL-MAC-RELEASE.md](LOCAL-MAC-RELEASE.md) for its implementation and custody contract. Local execution uses Jeff's Mac and its existing Keychain access controls; it does not inherit disposable hosted-runner containment, GitHub environment secret isolation or a separate key-free publication job. Those assurances require evidence for the chosen mode.
+RC29 native PR #12 merged normally by `JmooreOsirs` at `2026-10-19T19:04:36Z`, preserving head `45777eb7fa1ff965815cca6de6d042fb0895a679` in final native source `71dfabe3c3002e7a7787c649607607adafd29558`. The live merge actor and latest exact-head App15368 CI passed runtime validation. RC29 has no release-mode build, signed package or publication receipt yet. Its identities are ARM `2026.10.19-rc29` / `26101929` and Intel `2026.10.19-rc29-intel1` / `261019291`; current policy pins the final source and RC28 previous-feed floors.
 
-Both modes must consume the already-qualified frozen native delivery and preserve its authored/source payload bytes. Control/documentation changes do not authorize rebuilding or rewriting that delivery; any changed native payload requires a newly reviewed source and qualification.
+## Source, control and signing custody
 
-## Live nonsecret configuration readback
-
-October 17: strict protection was read back on both `main` and `release/native`: one independent PR approval, code-owner review, stale dismissal/latest-push approval, strict `release-control-checks` from GitHub Actions App `15368`, administrator enforcement, no recorded bypass grants, and force pushes/deletion disabled. GitHub's personal-repository API rejected an explicitly empty user/team bypass-allowance block as organization-only; it was omitted. The merged commits contain the exact CODEOWNERS rule `* @JmooreOsirs @bac1876`. Repository roles were not expanded.
-
-`amplifai-macos-signing` and `amplifai-release-publication` each allow only the exact `main` branch and have no reviewers/timers/custom run approval. Both secret inventories were empty at the October 17 15:35 UTC metadata readback. At 15:46 UTC the existing Sparkle key was provisioned only to `amplifai-macos-signing`: official pinned export, public-key continuity verification, direct stdin upload and temporary-file cleanup succeeded (`rc28-sparkle-provisioning-receipt.json`). This does not establish complete hosted credential custody or successful signing; Developer ID export and the scoped audit credential remain unresolved in the retained provisioning evidence. This is exact-main configuration evidence, not an exercised off-main secret-access denial. Actual normal pushes to both protected refs were rejected with GH006 and unchanged remote tips; an ordinary server merge attempt on green, unreviewed PR #7 was rejected HTTP 405 for missing code-owner review. PRs #4, #5 and #6 were independently approved at their exact heads and merged normally without bypass. Failing-check refusal, stale-review dismissal and off-main environment denial have not been independently exercised; the additional probe-only cycles described in the earlier plan are not prerequisites to the release. The protected workflow still validates live custody and fails closed. The existing website owner has supplied adapter/Preview work; final signed-byte promotion remains unqualified.
-
-## Source and control separation
-
-The retained qualified native ancestor is `02670fa2ea2c4fbb09b422e7b8cc183e45126e52`. Control `main` now installs the reviewed dispatch workflow; `release/native` contains the reviewed RC28 source and native build recipes. PR #5's merge commit has the same source tree `602e7358b0ccffe1c3eb26626553ed272309506e` as its approved head `d98a44c395e212f14692ad802c21401de960f8f0`, and both release-mode CI deliveries now bind their artifacts to that final merged SHA. GitHub requires the `workflow_dispatch` file on the [default branch](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
-
-The earlier Mac branch `cbd9e9c5a01f8ddc7260a4b3e9b4bfc317f1a6a4` and Windows branch `ac0164b9ca482605e6212dbc51084581201566e5` were not whole-merged. PR #5 integrated the reviewed RC27 product changes while preserving later Windows/Intel work and the qualified-delivery upload.
-
-Approved release model and merged refs:
-
-| Responsibility | Ref | Rule |
+| Responsibility | Ref or mode | Contract |
 | --- | --- | --- |
-| Reviewed workflow, policy and hosted signer code | `JmooreOsirs/...:main` at `9fb2fa9` | PRs #4/#6 merged with independent approval; exact-source signing/publication policy active |
-| Integrated native source | `JmooreOsirs/...:release/native` at `8f7ec4d3` | PR #5 merged with independent approval; final exact source for both RC28 channels |
-| Public package destination | Existing JmooreOsirs releases | Preserve current bundle/key/feed authority |
+| Release workflows, policy and signer/publisher code | Protected `main` | Current approved control; exact source/channel authorization; normal PR merge and exact-head CI |
+| Native source and build recipes | Protected `release/native` | Final authorized merge SHA; retained qualified ancestor `02670fa2ea2c4fbb09b422e7b8cc183e45126e52`; separate ARM/Intel build mechanisms |
+| Local signing | Jeff's Mac | Existing Developer ID, Sparkle Keychain account and `AMPLIFai-notary`; operator `JmooreOsirs` only |
+| Hosted signing | Exact-main signing environment | Existing isolated workflow; complete hosted credential custody/signing remains unproven |
+| Public packages and website | Existing GitHub releases and website owner | Exact signed bytes, previous-feed custody, combined deployment and public readback |
 
-There is no proposed repository migration. The organization copy has older public releases and Brian is an organization owner there; moving signing authority there would broaden the control boundary.
+Local signing is implemented and exercised for RC28. It has same-user Mac custody; disposable hosted-runner containment, environment secret isolation and a separate key-free publication job are hosted assurances. Either approval actor may authorize changes; this does not expand local Keychain access. Follow [LOCAL-MAC-RELEASE.md](LOCAL-MAC-RELEASE.md).
 
-## Installed hosted control path
-
-`macos-protected-release.yml` operates on an **existing qualified build artifact**. It does not build arbitrary source in the signing job. The native integration preserves the existing architecture-specific build mechanisms and adds source/Legal staging plus the qualified-delivery producer. Historical artifacts demonstrate that path for their recorded source only; they are not automatically eligible for RC28 signing.
-
-1. An allowed operator dispatches the control workflow from `main`, identifying the full source SHA, successful build run, immutable artifact ID/digest and CPU channel. PR/fork runs, wrong repositories/workflows/actors, reruns by a different actor and source predating the retained native lineage are rejected.
-2. `dry-run` downloads and SHA256-verifies the exact GitHub artifact ZIP and retains an inspection receipt. It uses no Apple/Sparkle credentials, changes no release and makes no claim about package qualification. An expired artifact cannot be silently replaced.
-3. `signed-candidate` requires enabled policy and an exact PR-reviewed `approvedSources` record: full source SHA, channel, fixed version/build, trusted build workflow path and `releaseAuthorized=true`. Run IDs, artifact IDs and generated hashes are not PR allowlist entries. A successful immutable artifact from that reviewed source's trusted CI contains a bounded `qualification.json`; its measured checks and app/source hashes determine eligibility without another policy edit. PR #4's installed baseline had no authorized sources and `activationApproved=false`; PR #6 merged two exact records for merged source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`.
-4. The signing job uses the exact-main-only protected environment **without required reviewers, wait timers or custom run-approval rules**. It checks out only the immutable control commit. Before Apple/Sparkle operations, it revalidates live control/source branch custody, exact build provenance and qualification payload hashes. It never runs candidate-source scripts, the collector, app, installer or source archive.
-5. The producer audits again after all executable qualification; the signer independently re-audits and matches actual pre-sign source-mapped native hashes immediately before codesign. It validates paths/links, metadata, exact main/helper CPU, dependency closure and five matching Legal files. It checks existing Sparkle key continuity, signs nested code inside-out in a temporary keychain, notarizes/staples/assesses app and DMG, and verifies the final package signature.
-6. `finalize.py` preserves all source payload bytes and appends only the predeclared signed-inventory/finalization evidence, with complete readback. `feeds.py` reuses the unchanged qualified feed generator and exact previous feed custody. Mode `signed-candidate` retains artifacts; mode `publish` additionally uses an isolated key-free publication job with same-run signer provenance, atomic exact-source tag creation, draft/public readback, live release ordering and previous-feed checks. PR #6 enabled both policy flags on `main`; that authorization does not supply working credentials or prove a signed release. These helpers have fixture evidence; no real signing or publication was run.
-
-The hosted credential-bearing signing/publication path has **not** been exercised. Local tests verify rejection boundaries, safe extraction and configuration behavior; the installed control path has not yet produced a qualified live signed release.
+Control-only changes preserve already-qualified native payloads. Changed native source, version or payload requires its own exact authorization and qualification. Execute producer code from the authorized native SHA and signer/publisher code from current protected main; do not substitute newer helpers into a frozen candidate. Keep the signing control SHA stable through publication.
 
 ## Enforced custody
 
-Maintain for credential setup and each release run. Both source and control branches have classic branch protection that the read-only Administration API can inspect:
+Both `main` and `release/native` retain classic branch protection with these exact review settings for this personal repository:
 
-- Required PR approval count at least one; required code-owner review; stale reviews dismissed; latest push approval by another person.
-- Enforce restrictions for administrators. No users, teams or apps allowed to bypass PR requirements. Force pushes and deletion disabled.
-- Strict required status check `release-control-checks` passes. The additive Ubuntu workflow runs the policy tests without secrets.
-- `.github/CODEOWNERS` is exactly `* @JmooreOsirs @bac1876` on both refs. This deliberately protects every file, including workflows, the policy and CODEOWNERS itself. Any future owner change requires the same reviewed policy update. Brian's exact-head PR #4/#5/#6 approvals and normal merges established the reviewed path. Local-mode implementation changes require the same protected review.
+- A PR is required; `required_approving_review_count=0`, `require_code_owner_reviews=false`, `require_last_push_approval=false`, and stale-review dismissal remains enabled.
+- Administrator enforcement stays enabled. No users, teams or apps have bypass allowances. Force pushes and deletion stay disabled.
+- Strict required `release-control-checks` is pinned to GitHub Actions App `15368`.
+- `.github/CODEOWNERS` remains exactly `* @JmooreOsirs @bac1876` for routing. Both effective files must match policy.
 
-At each signing/publication run, code reads both effective classic protections and CODEOWNERS; a weak `protected=true` marker is insufficient. GitHub's [branch-protection API](https://docs.github.com/en/rest/branches/branch-protection#get-branch-protection) requires **Administration:read** for this readback. Signing/inspection tokens retain only `contents:read` and `actions:read`; only the isolated publication job gets `contents:write`. The hosted path still needs the repository-scoped, expiring read-only audit credential; retained evidence does not establish its successful provisioning. Its authority must not include branch modification, Actions dispatch, releases, account administration, or secret values. This runbook grants no new token authority.
+Actor-specific branch-protection bypass lists are unsupported for this personal repository. Empty bypass lists are required; the zero-review setting lets either approved owner merge their own PR after CI. Runtime checks require the authoritative merged PR, exact repository/base/head/merge identities and allowlisted `merged_by` action. Required checks must be the latest completed successful attempts on that exact PR head from App `15368`; missing, forged-app, stale-success or newer failed/incomplete checks are rejected. This preserves explicit owner authority without asserting a GitHub self-review occurred.
 
-Keep environment `amplifai-macos-signing` restricted to exact branch `main` (branch rule, no tag/wildcard rule) with no required reviewers, wait timers or custom approval rules. Runtime checks reject additional run-approval rules as inconsistent with Jeff's selected model. The obsolete environment administrator-bypass attestation has been removed; effective branch PR/admin/bypass protection is still read live. Repository administrators remain trusted configuration owners and can change platform configuration; Brian's canonical-repository role remains write, not admin.
+The runtime reads effective protection and CODEOWNERS for both refs; a `protected=true` marker alone is insufficient. Unknown or denied custody readback fails closed. Current collaborators are Jeff (admin) and Brian (write); this update grants no repository role. Administrators remain trusted configuration owners and can change platform settings.
 
-Public repositories support these [environment controls](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) on current Free plans. The initial audit found zero environments/rulesets/protection; the exact nonsecret controls above have since been applied and read back. Actual direct-push rejection on both refs, missing-code-owner-review merge refusal and accepted independently reviewed PR #4/#5/#6 merges add runtime evidence. Required checks, stale-review behavior and exact-main environment branch rules are configured and read back; their separate negative probes have not run. Unknown/API-denied live custody still fails closed. A new probe-only PR or sentinel cycle is not an additional activation prerequisite when the recorded actor/ref/configuration and live runtime checks remain valid.
+`amplifai-macos-signing` and `amplifai-release-publication` allow only exact `main`, with no reviewers, wait timers or custom approval rules. Hosted inspection/signing use read-only contents/actions tokens; only the isolated publication job receives `contents:write`. Live branch-protection readback additionally requires the existing approved repository-scoped `Administration:read` audit credential. Its provisioning remains unproven for hosted execution; this runbook grants no new credential authority.
+
+## Artifact contract and channels
+
+Each approved source record binds `sourceCommit`, `channel`, `version`, `build`, `buildWorkflow`, `qualificationProfile` and `releaseAuthorized=true`. It authorizes an immutable source and recipe across build attempts. Generated run IDs, artifact IDs and hashes derive from trusted successful CI and need no new human policy edit.
+
+The immutable Actions artifact contains exactly `qualification.json`, `app.zip` and `source.zip`. New sources require schema 2 and `phone-run-recovery-v1`: the five base measured checks plus collector model, window lifecycle, bridge timing and bridge recovery. Only the two unchanged historical RC28 tuples retain schema-1 compatibility. The signer verifies the server ZIP digest, all payload hashes, identity/architecture/key and pre-sign source mapping. See [RELEASE-DELIVERY-CONTRACT.md](RELEASE-DELIVERY-CONTRACT.md#phone-run-and-recovery-qualification-profile).
+
+The app preserves executable modes and relative framework symlinks. The complete source offer includes authored/dependency source, notices and receipts; a bare git archive is insufficient. Finalization preserves source payload bytes and appends only declared evidence. No signing step executes candidate app/source code.
+
+| Channel | Bundle | CPU | Feed | Published RC28 floor |
+| --- | --- | --- | --- | --- |
+| `macos-arm64` | `ai.satoris.amplifai.phone.candidate` | `arm64` | `/phone/macos/appcast.xml` | `26101628` |
+| `macos-intel-test` | `ai.satoris.amplifai.phone.intel-candidate` | `x86_64` | `/phone/macos/intel-appcast.xml` | `261016281` |
+
+Revalidate live release ordering and previous feed bytes at execution. The RC26 dependency/source-closure baseline is separate from these publication floors and is unchanged. Feed host remains `https://amplifai-database-engine.vercel.app`; ARM retains its legacy default Sparkle channel and Intel its Test channel. Existing Windows contracts remain unchanged.
+
+## Hosted execution path
+
+1. An allowed operator dispatches the exact-main control workflow with the full source SHA, successful trusted build run, immutable artifact ID/digest and channel. Reject fork/PR builds, wrong repositories/workflows/actors, mismatched rerun actors and sources outside the retained lineage.
+2. `dry-run` verifies/downloads the qualified artifact and retains an inspection receipt without using Apple/Sparkle credentials or changing a release.
+3. `signed-candidate` requires enabled exact source authorization and qualifying payloads, revalidates live custody, then signs nested code inside-out in a temporary keychain, notarizes/staples/assesses app and DMG and verifies signatures. Existing public Developer ID and Sparkle identities must match.
+4. Finalization appends only declared inventory/evidence and verifies complete source readback; feed generation uses the existing qualified generator and exact retained previous feed bytes.
+5. `publish` uses the separate key-free publication job and exact same-run/attempt signer artifact. It verifies signatures and every asset, checks live channel ordering, atomically creates a new exact-source tag, uploads without clobbering and reads draft/public bytes back. Existing tags/releases are inspected rather than overwritten or deleted automatically.
+6. The website owner consumes the resulting `website-handoff.json`, verifies signed bytes and expected previous state, updates feeds/acquisition/admission together and proves production readback. Native publication alone does not establish website deployment.
+
+Same-channel concurrency serializes this publisher. GitHub has no atomic cross-release compare-and-swap across other publishing tools; live order/feed/tag checks detect observed changes, and administrators remain outside that mutex. Do not claim platform-enforced tag immutability without separate configuration evidence. Hosted credential-bearing signing/publication and forced-cancellation cleanup remain unexercised; successful local RC28 publication does not establish those hosted properties.
+
+## Remaining RC29 steps
+
+1. Complete the tested owner-approval policy and live protection readback, then normally merge the source/control PRs after required checks. Pin the final native merge SHA, intended channel identities, qualification profile and fresh RC28 feed floors in protected main.
+2. Dispatch both architecture-specific release builds from that authorized native SHA. Retain actual successful run IDs, immutable artifact IDs/server digests and schema-2 app/source payload receipts.
+3. Inspect, sign and notarize those exact qualified deliveries through the existing local path; preserve source bytes and the signing control SHA. Make the signed candidate available for Jeff's physical iPhone run; retain the actual installed-candidate and account results.
+4. Publish the sealed channel deliveries and hand both packets to the existing website owner for combined production promotion and both-origin byte readback. Preserve rollback bytes and inspect retained partial release state before a retry.
+5. Record Jeff's physical transfer on this Mac with his iPhone and his explicit review/Save of chosen sources. Do not perform consent or Save for him. Preserve those physical/account results separately from CI, signing and deployment; publication does not stand in for them.
+
+Standing deploy-after-checks authority applies throughout. Exact database migration approval and physical/account participation remain separate when needed; no extra routine release approval is introduced.
+
+### Runtime custody evidence and limits
+
+October 17 receipts are historical evidence for their recorded configuration: normal direct pushes to both refs received GH006 with unchanged tips; green unreviewed PR #7 was refused for missing code-owner review; PRs #4/#5/#6 merged after exact-head independent approvals. The prior required-review setting has been explicitly superseded by the October 19 owner-approval policy and is not a current release prerequisite.
+
+The October 19 protection snapshot and proposed changes are retained under `owner-either-approval` in the canonical phone/Google review evidence folder. Record the mutation/readback receipt there when applied. That readback, actual normal merges and runtime validation establish the new configuration; this document alone does not. Separate failing-check, stale-review, off-main secret-access and forced-cancellation probes have not been independently exercised. Do not introduce probe-only PRs or approval layers solely to refresh historical evidence. Repair an actual failed runtime check or changed risk and retain its bounded evidence.
 
 ## Hosted secret destinations — values never enter chat
 
@@ -80,62 +99,6 @@ The existing local `AMPLIFai-notary` profile is a Keychain record on Jeff's Mac,
 Current exact signing identity is `Developer ID Application: Jeff Moore (WSBR54954W)`, public leaf SHA1 fingerprint `59300C81CAA8FEDF07F60970E4621524243F83F4`, rederived from the installed signed rc26 certificate. Sparkle 2.10.0 tool archive and signer binary hashes are pinned to the already-qualified release tooling. Key continuity uses the public key `vtvaNfb6+dVMP4tz6PeLMXTeVQH7lK7o1zzy4WeqUGs=`; [Sparkle recommends retaining existing keys](https://sparkle-project.org/documentation/).
 
 Temporary credential files use a private directory under the disposable hosted runner's temp directory. The code deletes the keychain in `finally`; an `always()` workflow cleanup also removes surviving private directories. Forced cancellation cleanup has not been executed; hosted runner disposal is the final containment boundary. The hosted workflow does not permit a self-hosted or owner Mac runner. The separately authorized local mode runs directly on Jeff's Mac under its own [custody contract](LOCAL-MAC-RELEASE.md); hosted disposal and job-isolation claims do not apply to it.
-
-## Artifact contract and deterministic channels
-
-A PR-reviewed `policy.json.approvedSources` record contains `sourceCommit`, `channel`, `version`, `build`, `buildWorkflow` and `releaseAuthorized=true`. Approval is for the immutable source and trusted recipe; it is reusable across build attempts. Changing that source, recipe, control code or authorization requires protected review. A new CI run/artifact does not require a new human policy edit. No user-supplied URL, build script, signing tool, command or credential name is accepted.
-
-The upstream immutable Actions artifact ZIP contains exactly `qualification.json`, one app ZIP and one complete source ZIP at its root. The qualification record has schema 1, exact source/channel/version/build, `buildRunId`, `privateDataUsed=false`, and strictly boolean passing `functional`, `architecture`, `frozenHelper`, `sourceClosure` and `legal` checks. `appArchive` and `sourceArchive` records bind exact name, integer byte count and lowercase SHA256. It is generated by the reviewed trusted CI workflow after measured checks pass, not supplied as a human assertion. The server artifact digest authenticates the whole record/payload package; the signer separately rechecks all member hashes and app identity/CPU/key.
-
-The app ZIP contains one correctly named `.app` with preserved executable modes and relative framework symlinks, without `__MACOSX` resource-fork siblings. The source ZIP contains the complete authored/dependency source offer, notices and build/source receipts; a bare `git archive` is insufficient. Both RC28 channels now have verified three-member release deliveries at frozen source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`; exact run/artifact IDs and server digests are recorded in [RELEASE-DELIVERY-CONTRACT.md](RELEASE-DELIVERY-CONTRACT.md#qualified-rc28-deliveries). Historical qualification and policy tests do not qualify changed UI, font, source or version bytes.
-
-| Channel | Bundle | Exact CPU | Feed retained | New build floor |
-| --- | --- | --- | --- | --- |
-| `macos-arm64` | `ai.satoris.amplifai.phone.candidate` | `arm64` | `/phone/macos/appcast.xml` | Greater than `26101526` |
-| `macos-intel-test` | `ai.satoris.amplifai.phone.intel-candidate` | `x86_64` | `/phone/macos/intel-appcast.xml` | Greater than `261015261` |
-
-Feed host remains `https://amplifai-database-engine.vercel.app`; signed-feed enforcement/key flags remain fixed. ARM keeps its legacy default Sparkle channel; Intel retains its separate Test channel. Windows remains on the existing unsigned Test workflow and signed manifest process. No new signing job touches Windows or its key/feed contracts.
-
-## Hosted build, signing and publication design
-
-Brian uses his existing write role. Jeff's approved model authorizes independent runs after protected review of source and control code; **there is no second signing/release approval and no artifact-specific policy PR per build**. A new immutable source/version or changed recipe still needs normal protected review. For the hosted mode, the owner provisions existing credentials after the protections exist, not per run. Local Keychain mode is described separately and remains pending protected review. No extra reviewer or Apple account role is assumed.
-
-| Stage | Inputs and implementation contract | Authority and output |
-| --- | --- | --- |
-| Review source/control | PR #4 installed the control path and PR #5 integrated RC27 fixes and the new Mac design with retained later Windows/Intel work. Merged PR #6 binds the final source SHA/channel/version and trusted build recipe after independent protected review | Required code-owner/PR/status review; no per-run gate |
-| Build | Source checkout is the authorized full SHA from protected `release/native`; ARM `build_portable_candidate.sh --isolated` and Intel `build_macos_intel_candidate.py` remain separate reviewed build mechanisms. Keep locked dependency/source checksums and CPU-specific standard hosted runners | No product credentials, no publication token; native/collector/frozen-worker checks and full source/legal closure must pass |
-| Qualify delivery | Trusted producer measures the five checks, binds run/SHA/channel and exact app/source payloads in `qualification.json`, uploads the three-member artifact using pinned upload-artifact v4 | Immutable artifact ID/server digest and exact run provenance derive approval automatically; no human artifact allowlist |
-| Sign/notarize | Current trusted control code revalidates custody/metadata/CPU/key, signs/notarizes/staples and independently verifies package signature | Exact-main-only signing environment, no run reviewers; read-only job token plus existing product secrets; signed candidate and final app inventory |
-| Finalize source/feed | Trusted control adapter appends final signed inventory and nonsecret signing receipts to the complete source offer using the predeclared append-only evidence exclusions; verify full archive readback, source/native mapping and unchanged in-app Legal. Reuse existing `desktop_update_release.py.prepare` with the reviewed pins, official pinned Sparkle signer and retained prior feed bytes | Final package/source/feed hashes and byte records, signed feed, source-finalization receipt and exact rollback feed. Fail if any payload or closure changes |
-| Publish package/source | Separate publication job checks out the same control SHA, revalidates branch custody and downloads the exact signer artifact from the same successful run/attempt. Independently verify receipt, package/feed signatures, final source binding and all byte counts. Create a new draft GitHub release targeting the authorized source SHA, upload without `--clobber`, read back every asset, then publish. Existing tag/release/asset with differing bytes is a hard stop, never overwrite | Exact-main-only `amplifai-release-publication` environment with no run reviewer; only this job gets `contents:write`; no Apple/Sparkle secrets. ARM stable/latest and Intel prerelease/Test remain separate |
-| Promote website/feed | Existing website owner receives the exact signed feed/source/installer receipt; its reviewed promotion adapter verifies public GitHub bytes, writes only the canonical channel feed/download metadata, deploys the site through the existing project binding, then verifies both public feed origins and download bytes. Restore exact retained feed/deployment on failure | Existing website lane and scoped deployment authority; no private signing keys. Brian's approved source-release authority should carry through this adapter without another human run approval; cross-repository/app credential availability still needs proof |
-
-Current implementation status: PR #4 installed inspection, source-derived authorization, measured secret-free qualification producer, source finalizer, qualified feed-generator wrapper and isolated GitHub publisher on `main`. Its build workflow files register the manual entry points on the default branch; dispatch them on the reviewed native source ref, which owns the actual scripts. PR #5 installed the source-closure/map emitter, five-file Legal staging and raw-app producer hook for both Mac channels on `release/native`. PR #6 activated the exact reviewed source records. ARM run `39046812410` and Intel run `39046814619` passed release qualification at frozen merged SHA `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`; both immutable artifact digests and inner payload hashes were verified. Historical and Preview receipts retain their original source identities. The existing website owner has supplied adapter/Preview work. Hosted signing/notarization/publication and final signed-byte website promotion remain unqualified; authorized local-mode implementation is pending protected review. See [RELEASE-DELIVERY-CONTRACT.md](RELEASE-DELIVERY-CONTRACT.md) for the artifact and website packet.
-
-Qualified RC28 identities are ARM `2026.10.16-rc28` / `26101628` and Intel `2026.10.16-rc28-intel1` / `261016281`. Merged PR #6 binds these exact identities and frozen source SHA in `policy.json`, with `activationApproved=true` and `publicationEnabled=true`. The latest retained public-feed readback was RC26; recheck its exact bytes at promotion. The deliveries are qualified; Developer ID signing, notarization and publication remain pending. The final reviewed source, channel-specific build identity, qualification record and website admission lists must agree before release.
-
-In the hosted workflow, the publication job must have no access to the signing environment; the signing job must retain its read-only GitHub token. Pin download/upload actions and verify same-run/attempt provenance rather than downloading an artifact by a mutable name. Package/source releases become public before the new feed is offered. A package publication receipt is not a successful website promotion receipt or physical iPhone acceptance.
-
-## Remaining release steps
-
-1. Complete the explicitly authorized local Keychain implementation and its protected independent review before using it; follow [LOCAL-MAC-RELEASE.md](LOCAL-MAC-RELEASE.md). If using the installed hosted path instead, complete its remaining existing-credential setup. Neither route grants new credentials or bypass authority, and no new routine deployment-consent request is needed.
-2. Consume the retained ARM/Intel release deliveries at frozen source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`, preserving exact run IDs, artifact IDs/digests and app/source payloads. Revalidate provenance and current custody with the selected reviewed control implementation. Do not rebuild the native source for control-only changes.
-3. Sign, notarize, staple and publish those qualified channel bytes through the chosen reviewed mode. Re-read its applicable live branch/environment custody, source provenance, artifact hashes and previous-feed baseline; unknown or denied checks fail closed. Verify package/source/feed public bytes, tag/source identity and cleanup. Record local-Mac custody separately from hosted environment/job isolation; forced-cancellation cleanup remains unexercised.
-4. The existing website owner consumes the signed-byte packet through its supplied promotion path and proves both-origin production feed/download readback and rollback custody. Preview adapter evidence alone does not satisfy this final promotion gate.
-5. Jeff performs the physical transfer on this Mac with his iPhone, explicitly reviews and Saves each chosen source in his account. Production publication, installed app identity and physical/account acceptance remain separate receipts. Existing deploy-after-checks authority remains in force.
-
-### Runtime custody evidence and limits
-
-The October 17 evidence packet records the exact tested actor/ref/configuration. It supports the reviewed release path without an additional probe-only PR, deliberately failing check, stale-review mutation or environment sentinel cycle. Keep the actual protected review, required checks and live fail-closed authorization; recheck metadata if the configuration or actor changes.
-
-| Boundary | Recorded evidence | Limit |
-| --- | --- | --- |
-| Protected direct push | Normal empty-commit pushes by `JmooreOsirs` to `main` at `7341146f` and `release/native` at `8f7ec4d3` each received GH006; both remote tips stayed unchanged (`rc28-direct-push-denial-receipt.json`). | Tests that actor and those protected refs; no force or bypass was attempted. |
-| Independent code-owner review | Green unreviewed PR #7 ordinary server merge returned HTTP 405, “Waiting on code owner review from bac1876” (`rc28-missing-review-denial-receipt.json`). | Demonstrates missing-review refusal; it is not a failing-check or stale-review test. |
-| Accepted protected path | Brian approved exact PR #4 head `d4b4471`, PR #5 head `d98a44c` and PR #6 head `a61d677`; required checks passed and all merged normally without bypass. Active control is `9fb2fa9`, native is `8f7ec4d3` (`rc28-reviewed-merge-receipt.json`, `rc28-activation-merge-receipt.json`). | Covers those reviewed changes; local-mode implementation still requires protected review. |
-| Effective configuration | Both refs' strict protection and exact merged CODEOWNERS were read back; both environments allow exact `main` only, with no run reviewers/timers (`rc28-premerge-protections.json`, `rc28-reviewed-merge-receipt.json`, `rc28-all-approved-custody-recheck.json`). | Metadata does not exercise off-main environment secret denial. |
-
-**Not independently exercised:** refusal of a failing required check after review, stale/latest-push approval dismissal, off-main environment secret denial, and forced-cancellation cleanup. These remain evidence limits, not additional probe-only release prerequisites. The required status check, review settings and exact-main environment restrictions remain configured; the control workflow validates effective custody on each real run and fails closed. A fresh condition change or failed runtime check requires repair and new evidence, not a bypass.
 
 ### Hosted secure setup from existing owner-held material
 
@@ -212,19 +175,8 @@ exit
 
 `exit` invokes cleanup of the two exact temporary exports and their directory; errors remain visible. If the shell or Mac terminates without running the trap, the owner removes those same exports before resuming. No private-file contents or hashes enter the release receipt. Hosted signing must still match the pinned public Developer ID identity and Sparkle key, authenticate notarization and exercise cleanup. These existing tools/runbook commands are sufficient; no new provisioning helper is needed.
 
-## Installed control baseline and rollback
+## Control verification and rollback
 
-Reviewed PR #4 installed the infrastructure-only control baseline on `main`. Its scoped files include:
+Run the existing control suite with `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release_control -p 'test_*.py' -v`. Source qualification and release evidence remain separately bound to their actual source/channel/build.
 
-- `.github/CODEOWNERS`
-- `.github/workflows/macos-protected-release.yml`
-- `.github/workflows/release-control-checks.yml`
-- `.github/workflows/macos-arm64-check.yml`, `.github/workflows/macos-intel.yml` — register the reviewed native manual build entry points; actual build scripts remain source-owned
-- `release_control/policy.json`, `release_control/release.py`, `release_control/test_release.py`
-- `source/script/verify_macos_architecture.py` — unchanged trusted stdlib verifier from the qualified native head; the signer imports it, so this explicit dependency is mandatory
-- `release_control/producer.py`, `finalize.py`, `feeds.py`, `publish.py`, `test_pipeline.py`
-- `source/script/desktop_update_release.py` and `docs/DESKTOP-UPDATE-SOURCE-PINS.json` — unchanged qualified generator/baseline; wrapper derives planned channel/version only from reviewed source policy
-- `docs/PROTECTED-MAC-RELEASE.md`
-- `docs/RELEASE-DELIVERY-CONTRACT.md`
-
-No unrelated app source or workflow was added by PR #4. It merged with activation false and approved sources empty; PR #6 subsequently merged the exact reviewed RC28 source records and enabled both activation/publication flags at `9fb2fa9`. The local-mode changes described in [LOCAL-MAC-RELEASE.md](LOCAL-MAC-RELEASE.md) are a separate implementation pending protected review; they are not established by the PR #6 receipt. The control test command remains `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release_control -p 'test_*.py' -v`. A reviewed policy change restoring false flags and empty approved sources stops subsequent signing; existing published apps, releases and feeds are separate state. Remove environment credentials through owner custody procedures if the release lane is retired.
+A normal owner-approved policy PR restoring false activation/publication flags and empty approved sources stops subsequent signing/publication. Existing published packages, feeds and installed apps remain separate state. Preserve exact prior feed/deployment receipts for rollback; retire hosted environment credentials only through existing owner custody procedures.

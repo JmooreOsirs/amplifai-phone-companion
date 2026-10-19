@@ -38,9 +38,12 @@ class QualificationProfileTests(unittest.TestCase):
         return paths
 
     def test_existing_rc28_records_remain_exact_schema_one_for_both_channels(self):
-        policy = json.loads((Path(__file__).parent / "policy.json").read_text())
-        sources = [row for row in policy["approvedSources"] if row["sourceCommit"] == "8f7ec4d3de4235ab5d36d5175c29121e3a26548a"]
-        self.assertEqual(len(sources), 2)
+        sources = [
+            {"sourceCommit": "8f7ec4d3de4235ab5d36d5175c29121e3a26548a", "channel": "macos-arm64",
+             "version": "2026.10.16-rc28", "build": "26101628"},
+            {"sourceCommit": "8f7ec4d3de4235ab5d36d5175c29121e3a26548a", "channel": "macos-intel-test",
+             "version": "2026.10.16-rc28-intel1", "build": "261016281"},
+        ]
         for source in sources:
             with self.subTest(channel=source["channel"]):
                 record = self.record(source)

@@ -32,6 +32,8 @@ TEAM = "WSBR54954W"
 CERTIFICATE_SHA1 = "59300C81CAA8FEDF07F60970E4621524243F83F4"
 SPARKLE_ACCOUNT = "ai.satoris.amplifai.phone.candidate"
 NOTARY_PROFILE = "AMPLIFai-notary"
+RELEASE_OPERATORS = ["JmooreOsirs", "bac1876"]
+GITHUB_ACTIONS_APP_ID = 15368
 CHANNELS = {
     "macos-arm64": ("arm64", "ai.satoris.amplifai.phone.candidate", "AMPLIFai Phone", "appcast.xml"),
     "macos-intel-test": ("x86_64", "ai.satoris.amplifai.phone.intel-candidate", "AMPLIFai Phone Intel Test", "intel-appcast.xml"),
@@ -70,7 +72,7 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def exact_json(data: bytes) -> dict:
+def exact_json(data: bytes, *, allow_list: bool = False) -> dict | list:
     def unique(rows):
         result = {}
         for key, value in rows:
@@ -80,7 +82,7 @@ def exact_json(data: bytes) -> dict:
         return result
     result = json.loads(data, object_pairs_hook=unique,
                         parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) and not (allow_list and isinstance(result, list)):
         raise ValueError("JSON object required")
     return result
 
@@ -97,7 +99,7 @@ def command(args: list, *, input_data: bytes | None = None, timeout: int = 1800)
     return result.stdout.decode().strip()
 
 
-def api(path: str, *, audit: bool = False) -> dict:
+def api(path: str, *, audit: bool = False, allow_list: bool = False) -> dict | list:
     token = os.environ.get("GH_POLICY_AUDIT_TOKEN" if audit else "GH_TOKEN")
     if not token:
         raise ValueError("read-only repository Administration audit credential required")
@@ -115,10 +117,21 @@ def api(path: str, *, audit: bool = False) -> dict:
         raise ValueError("GitHub protection/provenance metadata unavailable") from None
     if len(data) > 1024 * 1024:
         raise ValueError("oversized GitHub metadata")
-    return exact_json(data)
+    return exact_json(data, allow_list=allow_list)
+
+
+def validate_release_authority(policy: dict) -> None:
+    if (policy.get("releaseAuthority") != "owner-approved-source-release"
+            or policy.get("operators") != RELEASE_OPERATORS
+            or policy.get("requiredChecks") != ["release-control-checks"]
+            or type(policy.get("requiredCheckAppId")) is not int
+            or policy["requiredCheckAppId"] != GITHUB_ACTIONS_APP_ID
+            or policy.get("codeOwners") != "* @JmooreOsirs @bac1876\n"):
+        raise ValueError("exact Jeff-or-Brian release authority and pinned GitHub Actions checks required")
 
 
 def validate_context(policy: dict, env: dict) -> None:
+    validate_release_authority(policy)
     if (env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
             or env.get("GITHUB_REPOSITORY") != policy["repository"]
             or env.get("GITHUB_ACTOR") not in policy["operators"]
@@ -151,12 +164,12 @@ def validate_provenance(policy: dict, request: dict, run: dict, artifact: dict, 
 
 
 def validate_protection(policy: dict, environment: dict, branches: dict, protected: dict, env: dict) -> None:
+    validate_release_authority(policy)
     rules = environment.get("protection_rules", [])
     branch_names = {item.get("name") for item in branches.get("branch_policies", [])
                     if item.get("type", "branch") == "branch"}
     if (env.get("GITHUB_REF_PROTECTED") != "true" or not protected.get("protected")
             or environment.get("name") != policy["signingEnvironment"]
-            or policy.get("releaseAuthority") != "reviewed-source-independent-release"
             or environment.get("deployment_branch_policy") != {
                 "protected_branches": False, "custom_branch_policies": True}
             or branch_names != {policy["controlRef"].removeprefix("refs/heads/")}
@@ -166,23 +179,38 @@ def validate_protection(policy: dict, environment: dict, branches: dict, protect
 
 
 def validate_branch_custody(policy: dict, protection: dict, owners: str) -> None:
+    validate_release_authority(policy)
     reviews = protection.get("required_pull_request_reviews", {})
+    if not isinstance(reviews, dict):
+        raise ValueError("pull request requirement must remain enabled")
     bypass = reviews.get("bypass_pull_request_allowances", {})
     checks = protection.get("required_status_checks", {})
-    required = set(checks.get("contexts", [])) | {item.get("context") for item in checks.get("checks", [])}
+    if not isinstance(checks, dict):
+        raise ValueError("strict pinned required checks unavailable")
+    check_rows = checks.get("checks", [])
+    pinned_checks = (isinstance(check_rows, list)
+                     and all(isinstance(item, dict) for item in check_rows)
+                     and all(any(item.get("context") == name
+                                 and type(item.get("app_id")) is int
+                                 and item["app_id"] == policy["requiredCheckAppId"]
+                                 for item in check_rows) for name in policy["requiredChecks"])
+                     and all(item.get("app_id") == policy["requiredCheckAppId"]
+                             for item in check_rows if item.get("context") in policy["requiredChecks"]))
     if (protection.get("enforce_admins", {}).get("enabled") is not True
             or reviews.get("dismiss_stale_reviews") is not True
-            or reviews.get("require_code_owner_reviews") is not True
-            or reviews.get("require_last_push_approval") is not True
+            or reviews.get("require_code_owner_reviews") is not False
+            or reviews.get("require_last_push_approval") is not False
             or type(reviews.get("required_approving_review_count")) is not int
-            or reviews["required_approving_review_count"] < 1
-            or any(bypass.get(kind, []) for kind in ("users", "teams", "apps"))
+            or reviews["required_approving_review_count"] != 0
+            or not isinstance(bypass, dict)
+            or set(bypass) - {"users", "teams", "apps"}
+            or any(bypass.get(kind, []) != [] for kind in ("users", "teams", "apps"))
             or protection.get("allow_force_pushes", {}).get("enabled") is not False
             or protection.get("allow_deletions", {}).get("enabled") is not False
             or checks.get("strict") is not True
-            or not set(policy["requiredChecks"]).issubset(required)
+            or not pinned_checks
             or owners != policy["codeOwners"]):
-        raise ValueError("branch custody requires current code-owner review, checks, admin enforcement and zero PR bypass grants")
+        raise ValueError("branch custody requires owner-either PR policy, pinned checks, admin enforcement and zero PR bypass grants")
 
 
 def validate_approved_source(policy: dict, request: dict, run: dict) -> dict:
@@ -222,6 +250,13 @@ def inspected(policy: dict, request: dict, *, signed: bool, custody: bool = True
         if source_branch.get("protected") is not True:
             raise ValueError("native source ref must also be protected")
         if custody:
+            import authority
+
+            def metadata(path):
+                return api(path.removeprefix("repos/"), allow_list=True)
+
+            authority.require_approved_merge(metadata, policy, os.environ["GITHUB_SHA"], "main")
+            authority.require_approved_merge(metadata, policy, request["sourceCommit"], "release/native")
             for ref in (policy["controlRef"], policy["sourceRef"]):
                 branch = quote(ref.removeprefix("refs/heads/"), safe="")
                 protection = api(f"{repo}/branches/{branch}/protection", audit=True)

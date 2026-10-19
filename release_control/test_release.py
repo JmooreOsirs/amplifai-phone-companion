@@ -40,11 +40,12 @@ class ReleaseBoundaryTests(unittest.TestCase):
                        "version": "2026.10.19-rc29", "build": "26101929",
                        "qualificationProfile": release.PHONE_RUN_QUALIFICATION}
         self.protection = {"enforce_admins": {"enabled": True},
-                           "required_pull_request_reviews": {"dismiss_stale_reviews": True, "require_code_owner_reviews": True,
-                               "require_last_push_approval": True, "required_approving_review_count": 1,
+                           "required_pull_request_reviews": {"dismiss_stale_reviews": True, "require_code_owner_reviews": False,
+                               "require_last_push_approval": False, "required_approving_review_count": 0,
                                "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []}},
                            "allow_force_pushes": {"enabled": False}, "allow_deletions": {"enabled": False},
-                           "required_status_checks": {"strict": True, "contexts": ["release-control-checks"]}}
+                           "required_status_checks": {"strict": True, "contexts": ["release-control-checks"],
+                               "checks": [{"context": "release-control-checks", "app_id": 15368}]}}
 
     def provenance(self, **changes):
         run, artifact, comparison = copy.deepcopy((self.run, self.artifact, self.comparison))
@@ -102,26 +103,48 @@ class ReleaseBoundaryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.validate_protection(self.policy, self.environment, {"branch_policies": [item]}, {"protected": True}, self.env)
 
-    def test_weakened_branch_review_or_direct_push_bypass_rejected(self):
-        protection = {"enforce_admins": {"enabled": True},
-                      "required_pull_request_reviews": {"dismiss_stale_reviews": True, "require_code_owner_reviews": True,
-                          "require_last_push_approval": True, "required_approving_review_count": 1,
-                          "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []}},
-                      "allow_force_pushes": {"enabled": False}, "allow_deletions": {"enabled": False},
-                      "required_status_checks": {"strict": True, "contexts": ["release-control-checks"]}}
-        release.validate_branch_custody(self.policy, protection, self.policy["codeOwners"])
+    def test_owner_either_policy_requires_exact_custody_and_no_bypass(self):
+        release.validate_branch_custody(self.policy, self.protection, self.policy["codeOwners"])
+        # GitHub omits bypass allowances on this personal repository.
+        omitted = copy.deepcopy(self.protection)
+        del omitted["required_pull_request_reviews"]["bypass_pull_request_allowances"]
+        release.validate_branch_custody(self.policy, omitted, self.policy["codeOwners"])
         for mutate in (lambda p: p["enforce_admins"].update(enabled=False),
-                       lambda p: p["required_pull_request_reviews"].update(required_approving_review_count=0),
-                       lambda p: p["required_pull_request_reviews"].update(require_last_push_approval=False),
-                       lambda p: p["required_pull_request_reviews"]["bypass_pull_request_allowances"].update(users=["bac1876"]),
+                       lambda p: p.update(required_pull_request_reviews=None),
+                       lambda p: p["required_pull_request_reviews"].update(required_approving_review_count=1),
+                       lambda p: p["required_pull_request_reviews"].update(required_approving_review_count=False),
+                       lambda p: p["required_pull_request_reviews"].update(require_code_owner_reviews=True),
+                       lambda p: p["required_pull_request_reviews"].update(require_last_push_approval=True),
+                       lambda p: p["required_pull_request_reviews"].update(dismiss_stale_reviews=False),
                        lambda p: p["required_status_checks"].update(strict=False),
-                       lambda p: p["allow_force_pushes"].update(enabled=True)):
-            candidate = copy.deepcopy(protection)
+                       lambda p: p["required_status_checks"].update(checks=[]),
+                       lambda p: p["required_status_checks"]["checks"][0].update(app_id=-1),
+                       lambda p: p["required_status_checks"]["checks"][0].update(app_id=123),
+                       lambda p: p["required_status_checks"]["checks"].append({"context": "release-control-checks", "app_id": -1}),
+                       lambda p: p["allow_force_pushes"].update(enabled=True),
+                       lambda p: p["allow_deletions"].update(enabled=True)):
+            candidate = copy.deepcopy(self.protection)
             mutate(candidate)
-            with self.assertRaises(ValueError):
+            with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                release.validate_branch_custody(self.policy, candidate, self.policy["codeOwners"])
+        for bypass in (None, [], {"users": None}, {"users": ["bac1876"]},
+                       {"users": [{"login": "JmooreOsirs"}]}, {"teams": [1]},
+                       {"apps": [15368]}, {"unknown": []}):
+            candidate = copy.deepcopy(self.protection)
+            candidate["required_pull_request_reviews"]["bypass_pull_request_allowances"] = bypass
+            with self.subTest(bypass=bypass), self.assertRaises(ValueError):
                 release.validate_branch_custody(self.policy, candidate, self.policy["codeOwners"])
         with self.assertRaises(ValueError):
-            release.validate_branch_custody(self.policy, protection, "* @attacker\n")
+            release.validate_branch_custody(self.policy, self.protection, "* @attacker\n")
+
+    def test_release_authority_cannot_expand_actors_or_unpin_required_ci(self):
+        for change in ({"operators": ["JmooreOsirs", "bac1876", "attacker"]},
+                       {"operators": ["JmooreOsirs"]}, {"requiredChecks": []},
+                       {"requiredCheckAppId": -1}, {"requiredCheckAppId": "15368"},
+                       {"releaseAuthority": "reviewed-source-independent-release"},
+                       {"codeOwners": "* @attacker\n"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                release.validate_release_authority(dict(self.policy, **change))
 
     def test_unapproved_source_cannot_sign(self):
         policy = json.loads((Path(__file__).parent / "policy.json").read_text())
@@ -142,8 +165,13 @@ class ReleaseBoundaryTests(unittest.TestCase):
         responses = [run or self.run, artifact or self.artifact, self.comparison, self.environment,
                      self.branches, {"protected": True}, {"protected": True},
                      protection or self.protection, owners, self.protection, owners]
-        with patch.dict(release.os.environ, self.env), patch.object(release, "api", side_effect=responses):
-            return release.inspected(self.policy, request or self.request, signed=True)
+        with patch.dict(release.os.environ, self.env), patch.object(release, "api", side_effect=responses), \
+                patch("authority.require_approved_merge") as approval:
+            result = release.inspected(self.policy, request or self.request, signed=True)
+            self.assertEqual([call.args[2:] for call in approval.call_args_list],
+                             [(self.env["GITHUB_SHA"], "main"),
+                              ((request or self.request)["sourceCommit"], "release/native")])
+            return result
 
     def test_brian_can_release_two_ci_runs_of_same_reviewed_source_without_new_policy_approval(self):
         self.policy["activationApproved"] = True
@@ -159,7 +187,7 @@ class ReleaseBoundaryTests(unittest.TestCase):
         self.assertTrue(receipt["signingApproved"])
         self.assertEqual(self.policy, unchanged)
 
-    def test_independent_release_rejects_unreviewed_source_actor_and_weak_live_review(self):
+    def test_owner_release_rejects_unapproved_source_actor_and_weak_live_custody(self):
         self.policy["activationApproved"] = True
         self.policy["approvedSources"] = [self.source]
         with self.assertRaises(ValueError):
@@ -170,7 +198,7 @@ class ReleaseBoundaryTests(unittest.TestCase):
             self.authorize()
         self.env["GITHUB_ACTOR"] = self.env["GITHUB_TRIGGERING_ACTOR"] = "bac1876"
         weak = copy.deepcopy(self.protection)
-        weak["required_pull_request_reviews"]["required_approving_review_count"] = 0
+        weak["required_status_checks"]["strict"] = False
         with self.assertRaises(ValueError):
             self.authorize(protection=weak)
 
