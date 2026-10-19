@@ -1,6 +1,8 @@
 # Native delivery and website promotion contracts
 
-This is the integration contract for pending control PR #4 and native PR #5. Their helpers are implemented but inactive. Protected `release/native` exists at qualified baseline `02670fa2ea2c4fbb09b422e7b8cc183e45126e52`; integration still requires independent review. Historical ARM and Intel deliveries include source-map/Legal qualification evidence, and the existing website owner has supplied adapter/Preview work. Final RC28 source qualification, hosted credential-bearing release and signed-byte production promotion remain pending. Neither historical artifacts nor Preview evidence qualifies the new final bytes.
+The retained October 17 completion receipt establishes RC28 publication from native source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`, protected control `067b2bc687e3af81d033923608679578814c535b`, and website merge `7dd79178b3a028eee3d2c8e358da79b8cb9d88a0` / deployment `dpl_ChSk6sFXE75hatGNYW5q9qtDgxWr`. It does not establish physical acceptance. RC29 is the new candidate: ARM `2026.10.19-rc29` / `26101929`, Intel Test `2026.10.19-rc29-intel1` / `261019291`. Each changed native source requires its own protected review and exact-source qualification before signing.
+
+Use the separately reviewed protected-main release control for local signing/publication with the existing owner Keychain and notarization profile. Native source includes its frozen qualification producer; its inactive policy and older publisher are not the production control plane. The RC29 qualification profile is documented below; the current policy must authorize the final full source SHA before a release-mode build. Jeff owns the physical iPhone test and account review. The website owner coordinates exact migrations, compatibility admission and signed-byte promotion.
 
 ## Native build owner hook
 
@@ -26,7 +28,7 @@ Use the existing hash-locked Python environment for this CLI. It executes the co
 
 5. Upload only `qualified-delivery/` with the existing pinned upload-artifact action (`ea165f8d65b6e75b540449e92b4886f43607fa02`), `if-no-files-found: error`, no `always()` success artifact on failure. Retain the artifact ID and server digest; the release dispatcher takes these exact values. `qualification.json`, `app.zip` and `source.zip` are the only three root files. No human approves those generated hashes again.
 
-PR #5 implements the source-closure/map emitter, five-file Legal staging and producer/upload hook while preserving the newer product fixes and later Windows/Intel work. Historical ARM evidence and Intel run `38926522970` at source `f9a0da3e10f6335be637fc72cea10491fb23f040` demonstrate earlier candidate qualification. The final RC28 commit must be clean, normally reviewed/merged and built/qualified anew for each architecture after the UI/font/version/doc changes are frozen. No historical app or successful test suite substitutes for that exact-source delivery.
+Merged PR #5 installed the source-closure/map emitter, five-file Legal staging and producer/upload hook. RC29 must be clean, normally reviewed/merged and built/qualified anew for each architecture after implementation, identity and documentation freeze. No historical app or successful test suite substitutes for that exact-source delivery.
 
 Confirmed planned identities are ARM `2026.10.16-rc28` / `26101628` and Intel `2026.10.16-rc28-intel1` / `261016281`. The source audit confirmed channel compatibility and monotonic ordering; live feeds still match the retained RC26 hashes. The new packages remain unpublished and unqualified. These identities are not source authorization entries. Keep control `activationApproved=false`, `publicationEnabled=false` and `approvedSources=[]` for the current preparation slice; the eventual protected policy record must bind the confirmed identities to the exact final source and trusted workflows.
 
@@ -75,23 +77,23 @@ The earlier read-only website audit recorded checkout `amplify-database-engine-a
 
 | Surface | Retained audit contract; refresh before final promotion |
 | --- | --- |
-| ARM feed | `public/phone/macos/appcast.xml`; rc26 / `26101526`; 1,561 bytes; SHA256 `afd0ede099c9219853c4626f1466cff4cde6dfd95e7c42abd9a1164d89b72b13` |
-| Intel feed | `public/phone/macos/intel-appcast.xml`; rc26-intel1 / `261015261`; 1,667 bytes; SHA256 `6207d5831dc6f0f638445458379393ac3a9fa7539d7d892e42b54846ec76031c` |
+| ARM feed | `public/phone/macos/appcast.xml`; rc28 / `26101628`; 1,561 bytes; SHA256 `22c677a174a5e4688825fae98f242b23eb74b731be14da3d27252411446a072a` |
+| Intel feed | `public/phone/macos/intel-appcast.xml`; rc28-intel1 / `261016281`; 1,654 bytes; SHA256 `747b851faa2bb4efbb6be3ffdc8265710dcdcee51881e736158ca47ea2f9da2f` |
 | Feed signatures | Embedded trailing Sparkle XML comments; **no Mac feed `.sig` sidecar**. The native package's `.dmg.sig` is a different artifact |
 | Acquisition pointers | `src/lib/release/phone-companion.ts`; update consistently with the same new package/source/version |
 | Exact feed tests | `tests/macos-arm-update-feed.test.ts`, `tests/macos-intel-update-feed.test.ts`: exact bytes/hash/key/channel/source/enclosure |
 | Download/status fixtures | `tests/native-download-metadata.test.ts`, `tests/companion-update-status-ui.test.ts`: version/build/URLs and old/current/newer expectations; preserve Android/Windows |
 | Diagnostic/telemetry admission | `src/lib/telemetry/events.ts` and `src/app/api/v1/companion-diagnostics/route.ts`: separate exact build allowlists must agree |
-| Admission negative fixtures | `tests/telemetry.test.ts`, `tests/companion-diagnostics-route.test.ts`: the earlier audit rejected `26101527`; reconcile current RC28 admission/negative fixtures with both confirmed architecture-specific builds and retain private-field rejection |
+| Admission negative fixtures | `tests/telemetry.test.ts`, `tests/companion-diagnostics-route.test.ts`: the earlier audit rejected `26101527`; reconcile current candidate admission/negative fixtures with both confirmed architecture-specific builds and retain private-field rejection |
 | Routing/cache | Existing anonymous GET/HEAD handling in `proxy.ts`; no-store headers in `next.config.ts` |
 | Observed public origins | `https://amplifai.satoris.ai` and `https://amplifai-database-engine.vercel.app`; both exact files returned 200/no-store at the audit |
 
-The existing website owner has supplied a receipt-consuming adapter and Preview evidence. Final acceptance must verify that the supplied implementation updates feed, acquisition, release-pinned tests and diagnostic allowlists together for the **actual signed public RC28 bytes**. It must independently verify the signed feed/key/channel/CPU/newer build, official immutable assets, current highest published channel build and expected previous website feed. Deployment promotion needs a real expected-state/CAS or serialized equivalent to reject stale/concurrent packets, then both-origin feed/download readback and exact rollback custody. Native CI should receive only scoped dispatch/artifact authority for that interface, never general website deployment credentials. No new feed host or feed-only copying shortcut is part of this work.
+The existing website owner has a receipt-consuming adapter with retained RC28 production evidence. Final acceptance must verify that the supplied implementation updates feed, acquisition, release-pinned tests and diagnostic allowlists together for the **actual signed public candidate bytes**. It must independently verify the signed feed/key/channel/CPU/newer build, official immutable assets, current highest published channel build and expected previous website feed. Deployment promotion needs a real expected-state/CAS or serialized equivalent to reject stale/concurrent packets, then both-origin feed/download readback and exact rollback custody. Native CI should receive only scoped dispatch/artifact authority for that interface, never general website deployment credentials. No new feed host or feed-only copying shortcut is part of this work.
 
 
 ## Custody and enforcement handoff
 
-Follow [PROTECTED-MAC-RELEASE.md](PROTECTED-MAC-RELEASE.md#runtime-enforcement-verification-plan--not-yet-executed) for the bounded noncredential denial checks and owner-operated existing-key provisioning commands. Product secrets remain absent until effective reviewed branch/environment custody is qualified. The audit credential goes to both exact named environments; Apple/Sparkle material goes only to signing. Record metadata-only provisioning receipts, never secret values or export contents.
+The existing local Keychain signing path was used for RC28. Reuse its reviewed protected-main commands and non-secret custody receipts; do not repeat credential provisioning. Hosted execution, if separately selected, retains the custody requirements in PROTECTED-MAC-RELEASE.md. Native build jobs remain free of product secrets, and source checkout code is never executed inside the signing step.
 
 Release readiness requires separate receipts for the exact source/build delivery, hosted signing/notarization, public package/source/feed bytes, website production promotion, installed app identity and Jeff's physical iPhone transfer plus explicit source review/Save. None implies the next. Existing deployment authority carries through these technical checks without another routine deployment permission request.
 
