@@ -1,61 +1,36 @@
-# Real-device local test of the one-approval flow: preparation only
+# Signed RC29 physical iPhone acceptance
 
-**Status (2026-10-19): not staged for this flow, and never launched.** `source/script/stage_local_device_test.sh` was updated for the one-approval run, but it has not been run with this code. No real helper, collection, upload or account action has run, and the installed RC28 app was only read.
+Jeff is the physical tester, on this Mac with his iPhone. Implementation and coordinated publication are authorized; customer approval, contact choice and report review remain Jeff's actions. The candidate has not yet completed signed physical acceptance.
 
-**The earlier staging is the old flow.** `/private/tmp/amplifai-real-test.20261019-061303/` (commit `4d3146d`) has the Mac destination sheet and no `amplifai-phone` link. It doesn't test this flow.
+## Exact candidate boundary
 
-## The boundary: why a real test of this flow waits for the website
+| Channel | Candidate version | Build |
+|---|---|---|
+| Apple Silicon | `2026.10.19-rc29` | `26101929` |
+| Intel Test | `2026.10.19-rc29-intel1` | `261019291` |
 
-This flow can't run end to end until website PR #5 is live on an approved official origin:
-- Its run starts on the website (**Agree and collect**), which needs migration `0058` applied and `NEXT_PUBLIC_PHONE_RUN_APPROVAL_RELEASE=enabled`.
-- The Mac bridge accepts only `https://amplifai.satoris.ai` and `https://amplifai-database-engine.vercel.app`.
-- The app's run authority is fixed to `amplifai-database-engine.vercel.app`.
-- None of these origin or authority checks may be relaxed to test a preview.
+Use the protected, independently reviewed source and qualification receipts, the existing Developer ID/Keychain signing setup, notarization and stapling. Record the exact app/package hashes and source/control commits before testing. Intel qualification executes on its native Intel runner; signing it on this ARM Mac is not physical Intel acceptance.
 
-So the order is: qualify and apply `0058`, deploy the website with the flag off, then use a test environment (or the release order in HANDOFF.md) to turn the flag on for a test account. Only then is a real test meaningful.
+The former `stage_local_device_test.sh` has been removed. It copied the old RC28 helper, ad-hoc signed a changed wrapper, and kept RC28's identity. RC29 changes both helper and wrapper, so that recipe cannot qualify this release. Its historical implementation remains in PR #10 / commit `9730220`.
 
-## What the updated script would stage (when run)
+## Preconditions
 
-```bash
-source/script/stage_local_device_test.sh
-```
+1. The website owner qualifies the exact migration and obtains the required migration approval. `0059` extends `0058`; no production SQL is implied by release permission.
+2. The website candidate implements the shared October 19 Phone protocol and immutable disclosure/policy snapshots. Fixed authority and allowed official origins remain unchanged. No preview-origin bypass is permitted.
+3. Admission is scoped to the approved account, selected platform and verified compatible build. RC28, Windows and Android retain their supported paths. Existing-run recovery is separate from new-run admission.
+4. Stage the exact signed RC29 candidate before broad feed/download publication. Quit any existing companion normally only after confirming no collection is active. Preserve temporary session data and let Jeff handle any recovery prompt.
+5. Present the exact candidate and one short next action through the coordinator. Do not send a generic test request before the app and website are ready.
 
-It builds this branch's Mac app and writes a new, never-reused `/private/tmp/amplifai-real-test.run-approval-v1.<timestamp>/AMPLIFai Phone LOCAL TEST.app` with a `local-device-test-receipt.json`.
+## Owner sequence
 
-| Part | Source |
-|---|---|
-| App binary | This branch, release build |
-| Helper and Sparkle | Copied unchanged from the installed RC28 and verified byte-identical. The branch changes no helper code. |
-| Bundle ID, channel, version, build | RC28's (`ai.satoris.amplifai.phone.candidate`, `26101628`), so the website status and diagnostics routes accept it |
-| URL scheme | `CFBundleURLTypes` for `amplifai-phone` added to the **staged copy's** Info.plist only. The receipt records `runLinkSchemeDeclared` and `registeredWithLaunchServices: false`. |
-| Updates | All `SU*` keys removed |
-| Signature | Outer app ad-hoc signed; the helper and Sparkle keep their Developer ID signatures |
+1. Sign in to the intended account/course. Review the upfront Phone disclosure and select **Agree and collect**, then **Open AMPLIFai Phone**.
+2. Confirm the account, course and selected source categories shown in the app. Connect, unlock and trust the iPhone. Start within the original ten-minute Start window.
+3. If backup encryption is off, follow the Finder guide or explicitly continue with available data. The app's **Recheck** reads the setting; it does not enable encryption or start collection. Any backup password stays in the private local collection flow.
+4. Choose contacts and select **Continue**. Under the same valid run approval, the website saves the selected contacts and available approved metadata automatically. The Mac must not raise itself after handing off.
+5. Review the saved report and select its report-bound Done action. Confirm return-login readback and final native receipt/cleanup. Record source outcomes truthfully; unavailable data is not a successful empty extraction.
 
-**Caution: link registration.** The staged copy keeps RC28's bundle identifier. Opening it lets macOS associate `amplifai-phone://` with that identifier, so a later link could go to RC28, which can't handle it. Run it only after RC28 is quit normally. Afterwards, expect the association to stay until LaunchServices updates. The script itself never runs `lsregister` and never launches anything.
+## Required recovery evidence
 
-## Prerequisites before any real test
+Exercise the bounded approved acceptance cases against the exact signed candidate: uncertain current status, explicit account Stop, retry of the same verification, committed-response loss recovery, and final receipt retry. Preserve the exact run/handoff on retry and verify that saved sources are not saved twice. A local **Stop on this Mac** is not an account revocation claim. The account Stop action has its own verified server result.
 
-1. **Consent:** the parent and Brian approve a real collection and a real save.
-2. **One companion at a time:** RC28's status helper owns `127.0.0.1:48752`. Quit RC28 normally (AMPLIFai Phone menu → Quit) after confirming nothing is in progress. Never use `pkill`, and never use `build_and_run.sh` run, verify, debug, logs or telemetry modes.
-3. **Shared session folder:** `~/Library/Application Support/AMPLIFai Phone Candidate/sessions` is shared with RC28. Review any temporary-data prompt; never clear it automatically.
-4. **Timing:**
-   - Start within 10 minutes of the app opening with the approval.
-   - After **Continue**, the browser must connect within 5 minutes (sign in beforehand).
-   - A released transfer stays open while it's active, with a 2-hour inactivity limit.
-   - An expired connection can't be resumed. Choose **Discard review** in the app, then approve and collect again.
-5. **Data scope:**
-   - The full iPhone backup arrives on this Mac temporarily, and the helper reads contacts, calls and messages metadata for the review.
-   - After **Continue**, the chosen contacts and their available call and message metadata are saved automatically to the approved account and course.
-   - Message text, backup files and passwords never leave the Mac.
-6. **Diagnostics:** the staged copy reports build `26101628`. A failure sends a safe code labelled with RC28's build. Decide whether that is acceptable.
-
-## Checklist once the website is live
-
-1. Website: sign in to the test account, then **Agree and collect** and **Open AMPLIFai Phone**.
-2. Mac: the approved account, course and "Approved to save" appear. Choose **Start collection**; tap Trust, and enter the backup password if encryption is On.
-3. Optionally let the collection run long (35 minutes is fine). Choose contacts, then **Continue**.
-4. The Mac minimizes and the browser comes forward on the course page. It must never come back on its own.
-5. Website: automatic save with progress → report → **Done — I reviewed these results** → **Print or save PDF**.
-6. Also try: Cancel during the check and the transfer; revoke or sign out mid-run (the website asks once to approve again); let a connection expire.
-
-Afterwards, quit the test app and reopen RC28 from `/Applications`. The staged folder in `/private/tmp` can be removed; leave the sessions folder alone.
+Synthetic tests, offscreen renders, hidden AppKit teardown checks, signing, notarization and public-byte readback are distinct evidence layers. None substitutes for this physical/account acceptance. Broad publication follows the required acceptance and coordinated website gates. Keep migration history and prior release artifacts; Sparkle rollback requires a new higher build.
