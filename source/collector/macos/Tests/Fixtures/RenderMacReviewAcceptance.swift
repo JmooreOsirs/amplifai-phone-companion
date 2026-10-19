@@ -13,7 +13,7 @@ struct RenderMacReviewAcceptance {
         var stateEvidence: [String: [String: Any]] = [:]
         let shareStates = ["bind-uncertain", "bind-refused", "expired"]
         let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry"] + shareStates
-        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on"]
+        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
         let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
         let setupStates = ["setup"] + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
@@ -110,8 +110,8 @@ struct RenderMacReviewAcceptance {
                                 throw FixtureError.unexpectedState("link-failed: recovery copy missing")
                             }
                         }
-                        if state == "bind-uncertain" { server.faults = [.malformed, .malformed, .malformed] }
-                        if state == "bind-refused" { server.faults = [.status(409)] }
+                        if state == "bind-uncertain" { server.faultsByPath[PhoneRunContract.bindPath] = [.malformed, .malformed, .malformed] }
+                        if state == "bind-refused" { server.faultsByPath[PhoneRunContract.bindPath] = [.status(409)] }
                         if state != "local-review" && state != "link-failed" {
                             model.pairBrowser(automaticAccountNavigation: false)
                             try receive(pairing)
@@ -119,7 +119,7 @@ struct RenderMacReviewAcceptance {
                                 guard model.handoffBound, !model.canEditWorkspace, !model.handoffAcknowledged else {
                                     throw FixtureError.unexpectedState("\(state): synthetic handoff did not bind")
                                 }
-                                if state == "verify-uncertain" { server.faults = [.malformed, .malformed, .malformed] }
+                                if state == "verify-uncertain" { server.faultsByPath[PhoneRunContract.verifyIntentPath] = [.malformed, .malformed, .malformed] }
                                 try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
                                              "intentId": "00000000-0000-4000-8000-0000000000bb",
                                              "email": "synthetic.owner@example.invalid", "course": "SYNTHETIC review course"])
@@ -173,6 +173,25 @@ struct RenderMacReviewAcceptance {
                 try admit()
             }
             else if state == "run-approved" || guideStates.contains(state) { try admit() }
+            else if state.hasPrefix("status-") {
+                try admit()
+                guard let runID = model.phoneRun?.runID else { throw FixtureError.unexpectedState("status: missing run") }
+                switch state {
+                case "status-uncertain": server.faultsByPath[PhoneRunContract.statusPath] = [.malformed, .malformed, .malformed]
+                case "status-expired": server.now = { Date().addingTimeInterval(13 * 60 * 60) }
+                case "status-revoked": server.revoke(runID)
+                default: server.changeApproval(runID)
+                }
+                model.refreshRunStatus()
+            }
+            else if state == "active-transfer" {
+                try admit()
+                guard model.startCollection() else { throw FixtureError.unexpectedState("active-transfer: check") }
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+                guard model.startCollectionWithAvailableData() else { throw FixtureError.unexpectedState("active-transfer: explicit start") }
+                model.phase = .transferring
+            }
             else if state == "encryption-off" || state == "encryption-on" {
                 try admit()
                 model.checkBackupEncryptionStatus()
@@ -191,13 +210,14 @@ struct RenderMacReviewAcceptance {
             else if state == "completing" { model.phase = .completing }
             else if state == "cancelling" { model.phase = .cancelling }
             guard model.accountNavigationID == nil, !model.helperRunning,
-                  model.operationID == nil || ["connecting", "agree-checking"].contains(state) || !setupStates.contains(state) else {
+                  model.operationID == nil || ["connecting", "agree-checking", "active-transfer"].contains(state) || !setupStates.contains(state) else {
                 throw FixtureError.unexpectedState("Fixture must not request account navigation or start the helper")
             }
             stateEvidence[state] = ["phase": String(describing: model.phase), "reviewPending": model.reviewPending,
                 "selectionNeedsReview": model.selectionNeedsReview, "canEditWorkspace": model.canEditWorkspace,
                 "handoffPresent": !model.handoffID.isEmpty, "browserReceived": model.browserReceived,
                 "runApproval": String(describing: model.runApproval), "runBinding": String(describing: model.runBinding),
+                "runStatus": String(describing: model.runStatus),
                 "approvedToSave": model.phoneRun.map { CollectorModel.approvedToSaveLabel($0.categories) } ?? "",
                 "saveReceiptPending": model.accountSaveAwaitingBrowserReceipt,
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]

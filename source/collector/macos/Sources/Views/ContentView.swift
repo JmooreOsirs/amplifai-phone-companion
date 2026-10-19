@@ -29,6 +29,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: Brand.Space.section) {
                 header.id("phase-heading")
                 JourneySteps(current: model.journeyStep)
+                if showsRunStatusNotice { runStatusNotice }
                 if model.companionStatus == .anotherAppRunning || model.companionStatus == .unavailable { companionStatusNotice }
                 if !model.residues.isEmpty { residueNotice }
                 if model.diagnosticRetention == .failed {
@@ -43,7 +44,7 @@ struct ContentView: View {
                 if (!model.helperRunning || model.backupSettingCheckInProgress) &&
                     (model.phase == .idle || model.phase == .error) {
                     if model.hasUnsavedReview { retainedReviewRecovery }
-                    else { collectionApprovalPanel.id("collection-setup") }
+                    else if !runNeedsAccountAction { collectionApprovalPanel.id("collection-setup") }
                 }
                 if ![.error, .idle, .selecting, .reviewing, .completed].contains(model.phase) { statusPanel }
                 if model.canInstallUpdate && model.backupEncryptionStatus == .notChecked && model.localCollectionApproval == nil && !showingFinderGuide { updatePanel }
@@ -249,6 +250,46 @@ struct ContentView: View {
 
     private var statusPanel: some View {
         CollectionStatusPanel(model: model)
+    }
+
+    private var runNeedsAccountAction: Bool {
+        [.expired, .revoked, .replacementRequired].contains(model.runStatus)
+    }
+
+    private var showsRunStatusNotice: Bool {
+        runNeedsAccountAction || (model.startConfirmation == .none &&
+            (model.runStatus == .uncertain || (model.runStatus == .checking && !model.runStatusMessage.isEmpty)))
+    }
+
+    private var runStatusNotice: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
+            if model.runStatus == .checking {
+                progressLine("Rechecking this approval…")
+            } else {
+                Text(runStatusTitle).font(Brand.headingFont(20)).foregroundStyle(Brand.heading)
+                    .accessibilityAddTraits(.isHeader)
+                Text(model.runStatusMessage).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+                if model.runStatus == .uncertain {
+                    Button("Recheck approval") { model.refreshRunStatus() }
+                        .buttonStyle(SecondaryButton()).disabled(!model.canRefreshRunStatus)
+                } else {
+                    Button("Open your AMPLIFai account") {
+                        returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+                    }
+                        .buttonStyle(LimeButton())
+                }
+            }
+        }
+        .panel()
+    }
+
+    private var runStatusTitle: String {
+        switch model.runStatus {
+        case .expired: return "This approval expired"
+        case .revoked: return "Stopped in your account"
+        case .replacementRequired: return "Check this collection in your account"
+        default: return "Approval check needs a retry"
+        }
     }
 
     private var collectionApprovalPanel: some View {
@@ -466,10 +507,7 @@ struct ContentView: View {
     }
 
     private var privacyURL: URL {
-        let path = model.phoneRun?.claim.disclosureVersion == "phone-run-v1"
-            ? "/experience/account-privacy?version=account-2026-10-v6"
-            : "/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving"
-        return URL(string: "https://amplifai.satoris.ai" + path)!
+        model.approvedPrivacyURL ?? URL(string: "https://amplifai.satoris.ai/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving")!
     }
 
     private var retainedReviewRecovery: some View {
@@ -612,6 +650,7 @@ struct ContentView: View {
             if model.reviewPending {
                 Text("Reviewing selected metadata…").font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
+            if model.phoneRun != nil { accountStopAction }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         if model.canEditWorkspace {
@@ -782,6 +821,7 @@ struct ContentView: View {
                     returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
                 }
                 .buttonStyle(LimeButton())
+                if model.phoneRun != nil && !model.accountSaveAwaitingBrowserReceipt { accountStopAction }
             } else if model.runBinding == .binding || model.accountLinkPending {
                 progressLine("Confirming with your AMPLIFai account…")
             } else if model.runBinding == .uncertain && !model.handoffID.isEmpty {
@@ -807,6 +847,14 @@ struct ContentView: View {
     @ViewBuilder private var uncertainBindActions: some View {
         Button("Try again") { model.retryRunBinding() }
             .buttonStyle(LimeButton())
+    }
+
+    private var accountStopAction: some View {
+        Button("Stop in account…") {
+            returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+        }
+        .buttonStyle(QuietAction())
+        .help("Open your account's Stop control. Opening the account does not stop this collection by itself.")
     }
 
     private func progressLine(_ text: String) -> some View {

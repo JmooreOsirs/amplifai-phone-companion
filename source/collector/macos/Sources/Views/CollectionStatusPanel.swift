@@ -3,6 +3,7 @@ import SwiftUI
 
 struct CollectionStatusPanel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.returnToBrowser) private var returnToBrowser
     @ObservedObject var model: CollectorModel
     @State private var confirmingDiscard = false
     @State private var copyStatus = ""
@@ -140,9 +141,10 @@ struct CollectionStatusPanel: View {
             VStack(alignment: .leading, spacing: Brand.Space.section) {
                 activityHeading
                 if model.phase != .completing {
-                    Button("Stop collection") { model.disconnect() }
-                        .buttonStyle(SecondaryButton())
-                        .frame(minHeight: 44)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Brand.Space.item) { stopActions }
+                        VStack(alignment: .leading, spacing: Brand.Space.item) { stopActions }
+                    }
                 }
                 HStack(spacing: 10) {
                     Image(systemName: "iphone.gen3")
@@ -246,6 +248,18 @@ struct CollectionStatusPanel: View {
         .accessibilityLabel("Stage \(activeStage + 1) of \(stages.count): \(stages[activeStage])")
     }
 
+    @ViewBuilder private var stopActions: some View {
+        Button("Stop on this Mac") { model.disconnect() }
+            .buttonStyle(SecondaryButton()).frame(minHeight: 44)
+        if model.phoneRun != nil {
+            Button("Stop in account…") {
+                returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+            }
+            .buttonStyle(QuietAction())
+            .help("Open your account's Stop control. Opening the account does not stop this collection by itself.")
+        }
+    }
+
     private var activityHeading: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
             Text("ON THIS MAC · STAGE \(activeStage + 1) OF \(stages.count)")
@@ -320,7 +334,10 @@ struct CollectionStatusPanel: View {
         } else if model.phase == .selecting || model.phase == .reviewing {
             Button("Discard review…") { confirmingDiscard = true }.buttonStyle(SecondaryButton())
         } else if model.phase == .passwordRequired {
-            Button("Stop collection") { model.disconnect() }.buttonStyle(SecondaryButton())
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: Brand.Space.item) { stopActions }
+                VStack(alignment: .leading, spacing: Brand.Space.item) { stopActions }
+            }
         }
     }
 }

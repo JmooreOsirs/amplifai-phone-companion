@@ -134,10 +134,14 @@ enum FakeDemoChecks {
         let (model, server, inbox) = runModel()
         try require(!model.startCollection() && model.journeyStep == 0, "Nothing starts before the website's approval")
         try approvedRun(model, server, inbox)
-        try require(model.startCollection(), "Start collection runs the simulated iPhone check, then starts")
+        try require(model.startCollection(), "Start collection runs the simulated iPhone check")
+        try await wait(10, "simulated encryption check") { !model.helperRunning && model.backupEncryptionStatus == .unencrypted }
+        try require(model.phase == .idle && model.phoneRun?.collectionStarted == false,
+                    "Encryption off presents the available-data choice before collection")
+        try require(model.startCollectionWithAvailableData(), "Explicitly continue with available fictional data")
         try await wait(10, "simulated collection") { model.phase == .selecting }
-        try require(model.totalContacts == 312 && model.journeyStep == 2 && server.claimCount == 2,
-                    "Simulated collection reaches Choose after the exact claim replay")
+        try require(model.totalContacts == 312 && model.journeyStep == 2 && server.claimCount == 1 && server.statusCount == 1,
+                    "Simulated collection reaches Choose after checking the existing approved run")
         model.prepareWorkspace()
         try await wait(10, "full contact scan") { model.workspace != nil }
         guard let workspace = model.workspace else { throw Failure.check("workspace") }
@@ -200,7 +204,7 @@ enum FakeDemoChecks {
         try approvedRun(cancelled, cancelledServer, cancelledInbox)
         try require(cancelled.startCollection(), "start")
         cancelled.cancelBackupEncryptionStatusCheck()
-        try require(cancelled.journeyStep == 0, "Cancelling the simulated check stays on Approve")
+        try require(cancelled.journeyStep == 1, "Cancelling the simulated check stays on Collect for the approved run")
         try await wait(5, "check cancellation settles") { !cancelled.helperRunning && cancelled.phase == .idle }
         try require(cancelled.runApproval == .approved && cancelled.phoneRun?.collectionStarted == false,
                     "Cancelling the pre-start check keeps the approved run")
@@ -208,6 +212,8 @@ enum FakeDemoChecks {
         let (stopped, stoppedServer, stoppedInbox) = runModel()
         try approvedRun(stopped, stoppedServer, stoppedInbox)
         try require(stopped.startCollection(), "start")
+        try await wait(10, "simulated encryption check") { !stopped.helperRunning && stopped.backupEncryptionStatus == .unencrypted }
+        try require(stopped.startCollectionWithAvailableData(), "explicit available-data choice")
         try await wait(5, "first simulated connection event") { !stopped.connectionTransport.isEmpty }
         stopped.disconnect()
         try await wait(20, "cancel collection") { !stopped.helperRunning && stopped.phase == .idle }

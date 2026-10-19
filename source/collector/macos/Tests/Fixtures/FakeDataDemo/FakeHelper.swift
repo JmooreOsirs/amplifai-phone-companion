@@ -79,6 +79,7 @@ struct FakeHelper {
         let all = FakeDataSet.contacts
         var reviewIDs: [Int] = []
         var handoffID = ""
+        var authorityCurrent = false
         var timeline = FakeBridgeTimeline()
         // Monotonic, like bridge.py's time.monotonic.
         func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -125,18 +126,25 @@ struct FakeHelper {
                 }
             case "pair":
                 handoffID = UUID().uuidString.lowercased()
+                authorityCurrent = false
                 // The five-minute window starts here, at pair after review, never at the claim or collection.
                 timeline = FakeBridgeTimeline(pairedAt: now())
                 emit(["kind": "pairing", "pairCode": String((0..<10).map { _ in "0123456789".randomElement()! }),
                       "port": 48751, "expiresInSeconds": 300, "handoffId": handoffID,
                       "payloadSha256": FakeBridgeTimeline.payloadDigest(reviewIDs)])
+            case "run-authority":
+                guard command["handoffId"] as? String == handoffID,
+                      let state = command["state"] as? String, ["paused", "current"].contains(state) else { continue }
+                authorityCurrent = state == "current"
             case "handoff-status":
                 guard command["handoffId"] as? String == handoffID else {
                     emit(["kind": "error", "code": "handoff_unconfirmed"])
                     continue
                 }
                 timeline.expireIfDue(at: now())
-                if let next = timeline.nextWebsiteAction, websiteDid(next.rawValue, handoffID) { timeline.apply(next, at: now()) }
+                if let next = timeline.nextWebsiteAction, authorityCurrent, websiteDid(next.rawValue, handoffID) {
+                    timeline.apply(next, at: now())
+                }
                 emit(["kind": "handoff", "state": timeline.handoffState, "handoffId": handoffID])
                 if timeline.destinationPending {
                     emit(["kind": "destination", "state": "pending", "handoffId": handoffID,
@@ -145,7 +153,7 @@ struct FakeHelper {
                 }
             case "destination-decision":
                 let intent = FakeBridgeTimeline.intentID(forHandoff: handoffID, attempt: timeline.connectAttempt)
-                guard command["handoffId"] as? String == handoffID, command["intentId"] as? String == intent,
+                guard authorityCurrent, command["handoffId"] as? String == handoffID, command["intentId"] as? String == intent,
                       let approved = command["approved"] as? Bool, timeline.decide(approved: approved, at: now()) else {
                     emit(["kind": "error", "code": "handoff_unconfirmed"])
                     continue
