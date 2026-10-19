@@ -899,6 +899,7 @@ struct CollectorFlowChecks {
         }
         try require(commands.count == beforeDestination && !model.destinationApproved,
                     "No destination decision is sent without the owner")
+        try require(!model.browserHandoffReady, "The browser waits while the Mac asks for the account confirmation")
         model.decideAccountDestination(true, request: destination)
         let decision = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
         try require(decision["action"] as? String == "destination-decision" && decision["approved"] as? Bool == true,
@@ -911,6 +912,9 @@ struct CollectorFlowChecks {
         model.receive(try event(#"{"kind":"destination","state":"approved","handoffId":"\#(handoff)","intentId":"\#(intent)"}"#))
         try require(model.destinationApproved && !model.destinationDecisionPending,
                     "The helper's acknowledgement ends Confirming and starts Sending")
+        try require(!model.browserHandoffReady, "The Mac keeps the screen until the browser has the preview")
+        model.receive(try event(#"{"kind":"handoff","state":"received","handoffId":"\#(handoff)"}"#))
+        try require(model.browserHandoffReady, "After the confirmation and the receipt, the Mac hands over to the website")
         model.receive(try event(#"{"kind":"handoff","state":"saved_pending_browser_receipt","handoffId":"\#(handoff)"}"#))
         try require(model.accountSaveAwaitingBrowserReceipt && !model.handoffAcknowledged && model.phase == .reviewing,
                     "A first save receipt still waits for the browser's final receipt")
@@ -918,6 +922,7 @@ struct CollectorFlowChecks {
         model.receive(try event(#"{"kind":"handoff","state":"saved","handoffId":"\#(handoff)"}"#))
         try require(model.handoffAcknowledged && model.phase == .completing,
                     "The matching final receipt finishes the run")
+        try require(!model.browserHandoffReady, "A confirmed save ends the handoff")
         model.finished(mode: "connect", code: 0)
         try require(model.phase == .completed && model.contacts.isEmpty && model.selectedIDs.isEmpty &&
                     model.statusTitle == "Saved in your account" && model.statusDetail.contains("report is ready"),

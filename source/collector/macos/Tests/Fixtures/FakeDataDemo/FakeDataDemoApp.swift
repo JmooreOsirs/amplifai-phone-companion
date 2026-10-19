@@ -97,10 +97,10 @@ final class DemoSession: ObservableObject {
         return FileManager.default.createFile(atPath: control.appendingPathComponent("\(step)-\(model.handoffID)").path, contents: Data())
     }
 
-    /// Every browser open from the production views lands here and opens the simulated website instead.
+    /// Every browser open from the production views lands here; nothing opens. The simulated website stays
+    /// out of sight while the Mac asks for the account confirmation and appears only at the Mac's handoff.
     func intercept(_ url: URL) {
         intercepted.append(url.absoluteString)
-        showWebsite()
     }
 
     /// The simulated website's one Save action; the fake helper then sends the account-save receipts.

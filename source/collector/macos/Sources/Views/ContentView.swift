@@ -80,7 +80,8 @@ struct ContentView: View {
         .tint(Brand.lime)
         .foregroundStyle(Brand.body)
         .background(ActiveCompanionWindow(model: model, destinationReviewRequestID: destinationReviewRequestID,
-                                          onDestinationPromptChange: { destinationPromptVisible = $0 })
+                                          onDestinationPromptChange: { destinationPromptVisible = $0 },
+                                          returnToBrowser: returnToBrowser)
             .frame(width: 0, height: 0))
         .onChange(of: model.collectionApprovalRunID) { _, _ in
             localCollectionChecked = false

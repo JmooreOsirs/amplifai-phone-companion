@@ -29,7 +29,7 @@ It also adds a clickable FAKE DATA demo so the flow can be tried in seconds with
 | Finder call-history setup | A step on the setup screen | Optional link, shown only when encryption is Off |
 | Collect | Progress panel; stages Connect / Receive / Read / Review & save | Same panel; stages Connect iPhone / Receive backup / Read locally / Clean up |
 | Choose | "Choose contacts"; Include all; All/Main/Review; Select all N / Deselect all; "Mark for group move" uses the same checkbox as inclusion; "Next · N selected" → share dialog | "Choose contacts to share"; scoped buttons name their scope ("Select all 5,129 in Main", "Deselect all in Main"), hidden for All with no search, where they would duplicate Include all; move marks are a flag tag, not a checkbox; footer **Continue to account** ("You will confirm the account before sharing. Save is approved separately in your account.") |
-| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; a green "Review destination approval" competed with the auto-opened destination sheet; after the save the window closed itself unexplained; stale "Save and continue" recovery text | **Share with your account**, then a one-line summary (contacts, calls, messages) and **one next action per state**: Continue to account → the auto-opened sheet is the **only** destination decision (passive text behind it; a quiet "Review account…" only after Decide later) → "Confirming your sharing choice…" → "Sending to your browser…" → **Finish in your browser** with **Continue in browser** (brings the browser forward, no new tab, so the preview tab is kept; it cannot pick the tab) → "Saving in your account…" → **Saved in your account** with primary **Done** (the window no longer closes itself). Counts, dates, caveats, what is shared, Change selected contacts, Discard review and link/code help sit under one **Details and options** disclosure. |
+| Share & report | "Local review" panel under the locked contact grid; pairing, code and expiry always visible; a green "Review destination approval" competed with the auto-opened destination sheet; after the save the window closed itself unexplained; stale "Save and continue" recovery text | **Share with your account**, then a one-line summary (contacts, calls, messages) and **one next action per state**: Continue to account → the auto-opened sheet is the **only** destination decision (passive text behind it; a quiet "Review account…" only after Decide later) → "Confirming your sharing choice…" → "Sending to your browser…" → **one active surface**: once the account is confirmed and the browser has the preview, the Mac minimizes its window and brings the browser forward by itself (no new tab, so the preview tab is kept; it cannot pick the tab). The website then owns Save, progress, the report and Done, while the helper keeps running for the receipts. A problem after the hand-off restores the Mac window once, without taking focus. If the owner reopens the window, it shows **Finish in your browser** with **Continue in browser** as recovery, and after the save **Saved in your account** with **Done** (the window no longer closes itself). Counts, dates, caveats, what is shared, Change selected contacts, Discard review and link/code help sit under one **Details and options** disclosure. |
 | Journey | — | "Agree · Collect · Choose · Share & report" bar. Finished steps show a check-circle, never a checkbox, so verified progress is never confused with a choice. |
 
 Gates kept exactly: Apple's Trust prompt and the existing backup password; the per-run local approval (bound to
@@ -88,12 +88,11 @@ The script builds a fresh bundle under `/private/tmp/amplifai-fake-demo.<timesta
 `fake-demo-isolation.json` and opens **AMPLIFai FAKE DATA DEMO.app**. Click through:
 1. Check iPhone (simulated), tick the one-run agreement, Start collection (about 6 seconds).
 2. Choose contacts: Include all, Main or Review, search, single checkboxes, or none. Continue to account.
-3. A **SIMULATED AMPLIFai WEBSITE** window (local fixture, labelled) opens where the real browser would and connects.
-4. Answer the real Mac sheet: Share with this account.
-5. On the Mac, Continue in browser brings the simulated website forward: **Save and view report**.
-6. The simulated website shows the sample report with **Done**; the Mac shows Saved in your account.
+3. Only the real Mac sheet is in front: Share with this account. The simulated website connects out of sight.
+4. The Mac minimizes itself and the **SIMULATED AMPLIFai WEBSITE** window (local fixture, labelled) appears once: **Save and view report**.
+5. The simulated website shows the sample report with **Done**.
 
-**Live click-through (2026-10-19, Codex reviewer, `/private/tmp/amplifai-fake-demo.055137`, `cc404a3` plus the report Done change):**
+**Earlier live click-through (2026-10-19, Codex reviewer, `/private/tmp/amplifai-fake-demo.055137`, `cc404a3` plus the report Done change; before the automatic hand-off, so it used Continue in browser):**
 - Check iPhone → one-run checkbox → Start collection.
 - Include all 312 → unchecked one contact → 311 selected → Continue to account.
 - Share with this account (fictional `demo.owner@example.invalid`, "FAKE DATA DEMO course") → Continue in browser.
@@ -151,7 +150,7 @@ device after that PR is reviewed and released to an approved official origin. No
    - Check iPhone with USB/Trust, with encryption On and Off; enter the password when On.
    - Cancel during the check and during the transfer.
    - Choose all, a subset and none; check Change selected contacts and Discard review.
-   - Continue to account → (auto) connect → Mac sheet "Share with this account" → Continue in browser → Save and view report → report → Done.
+   - Continue to account → (auto) connect → Mac sheet "Share with this account" → the Mac minimizes and the browser comes forward → Save and view report → report → Done.
    - Confirm that RC26 and RC28 users still update.
 7. Windows is unaffected (no Windows file changed).
 

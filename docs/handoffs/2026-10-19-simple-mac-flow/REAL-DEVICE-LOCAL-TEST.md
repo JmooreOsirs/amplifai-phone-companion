@@ -67,7 +67,7 @@ Then follow the real-device checklist in [HANDOFF.md](HANDOFF.md):
 3. Try Cancel during the check and during the transfer.
 4. Choose all, some or none, then Continue to account.
 5. The browser connects; on the Mac sheet choose Share with this account.
-6. On the Mac, Continue in browser. With today's Production website: approve and Save each source, then Finalize. After the website PR is released: Save and view report.
-7. Mac: Saved in your account → Done. Website: the report, then Done when it is offered.
+6. The Mac minimizes itself and brings the browser forward. With today's Production website: approve and Save each source, then Finalize. After the website PR is released: Save and view report.
+7. Website: the report, then Done when it is offered. The Mac stays minimized; reopening it shows Saved in your account → Done.
 
 Afterwards, quit the test app and reopen RC28 from `/Applications`. The staged folder in `/private/tmp` can be deleted; the sessions folder must be left alone.

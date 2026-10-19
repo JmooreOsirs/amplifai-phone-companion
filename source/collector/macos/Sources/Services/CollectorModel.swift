@@ -397,6 +397,12 @@ final class CollectorModel: ObservableObject {
     var activeFlow: Bool { helperRunning || hasUnsavedReview }
     /// A one-time link was requested and the helper has not answered yet.
     var accountLinkPending: Bool { pairingRequested }
+    /// The owner confirmed the account on this Mac and the browser holds the reviewed preview: Save and the
+    /// report now belong to the website, so the Mac steps aside (its helper keeps running for the receipts).
+    var browserHandoffReady: Bool {
+        phase == .reviewing && !handoffID.isEmpty && destinationApproved && browserReceived &&
+            !handoffAcknowledged && errorMessage.isEmpty
+    }
     /// Agree · Collect · Choose · Share & report: 0...3 is the current step, 4 means every step finished.
     /// Cancelling the read-only iPhone check happens before any agreement, so it stays on Agree.
     var journeyStep: Int {

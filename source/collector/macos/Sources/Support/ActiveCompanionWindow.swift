@@ -6,6 +6,8 @@ struct ActiveCompanionWindow: NSViewRepresentable {
     let destinationReviewRequestID: UUID?
     /// Tells the page whether the destination sheet is on screen, so only the sheet offers the decision.
     var onDestinationPromptChange: (Bool) -> Void = { _ in }
+    /// Brings the account browser forward once the Mac hands Save over to the website.
+    var returnToBrowser: ReturnToBrowserAction = .system
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
     func makeNSView(context: Context) -> NSView {
@@ -16,6 +18,7 @@ struct ActiveCompanionWindow: NSViewRepresentable {
     func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.model = model
         context.coordinator.onDestinationPromptChange = onDestinationPromptChange
+        context.coordinator.returnToBrowser = returnToBrowser
         context.coordinator.attach(view.window)
         context.coordinator.update()
         context.coordinator.presentDestinationIfNeeded(manualRequestID: destinationReviewRequestID)
@@ -39,6 +42,9 @@ struct ActiveCompanionWindow: NSViewRepresentable {
         private var manualReviewRequestID: UUID?
         private var presentationGeneration = 0
         var onDestinationPromptChange: (Bool) -> Void = { _ in }
+        var returnToBrowser: ReturnToBrowserAction = .system
+        private var handedOffHandoffID = ""
+        private var restoredForProblem = ""
 
         private func announcePrompt(_ visible: Bool) {
             let notify = onDestinationPromptChange
@@ -88,6 +94,19 @@ struct ActiveCompanionWindow: NSViewRepresentable {
             window.level = model.activeFlow && nativeFront && window.attachedSheet == nil && NSApp.modalWindow == nil ? .floating : originalLevel
             window.hidesOnDeactivate = model.activeFlow ? false : originalHides
             // Normal status updates never take focus from the account browser.
+            // One active surface: after the Mac confirmation and the browser receipt, Save and the report belong
+            // to the website. Minimize once per handoff and bring the browser forward; the helper keeps running.
+            if model.browserHandoffReady, handedOffHandoffID != model.handoffID, window.attachedSheet == nil {
+                handedOffHandoffID = model.handoffID
+                window.miniaturize(nil)
+                returnToBrowser()
+            }
+            // A problem after the handoff restores the window once for recovery, without taking focus.
+            let problem = model.phase == .error || !model.errorMessage.isEmpty ? "\(model.handoffID)|\(model.errorMessage)" : ""
+            if !handedOffHandoffID.isEmpty, !problem.isEmpty, restoredForProblem != problem, window.isMiniaturized {
+                restoredForProblem = problem
+                window.deminiaturize(nil)
+            }
         }
         func presentDestinationIfNeeded(manualRequestID: UUID?) {
             manualReviewRequestID = manualRequestID

@@ -94,7 +94,10 @@ enum FakeDemoChecks {
                     "One decision: Confirming shows until the helper acknowledges")
         try await wait(6, "helper acknowledges the sharing choice") { model.destinationApproved }
         try require(!model.destinationDecisionPending, "Acknowledged choice moves to Sending")
+        try await wait(6, "simulated browser receipt") { model.browserReceived }
+        try require(model.browserHandoffReady, "After the confirmation and receipt, Save belongs to the website")
         try await wait(12, "simulated browser receipt and Save") { model.handoffAcknowledged }
+        try require(!model.browserHandoffReady, "A confirmed save ends the handoff")
         try await wait(6, "fake helper exit after Save") { model.phase == .completed && !model.helperRunning }
         try require(model.selectedIDs.isEmpty && model.journeyStep == 4, "Completion clears the private review")
     }
