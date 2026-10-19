@@ -10,10 +10,7 @@ struct ContentView: View {
     @State private var showingConnectionHelp = false
     @State private var showingShareDetails = false
     @Environment(\.returnToBrowser) private var returnToBrowser
-    @State private var showingCollectionDetails = false
     @State private var showingFinderGuide = false
-    @State private var finderGuideStep = 0
-    @AccessibilityFocusState private var finderGuideHeadingFocused: Bool
     @State private var showingUpdates = false
     @State private var confirmingRetainedReviewDiscard = false
     @State private var confirmingBulkMove = false
@@ -30,7 +27,7 @@ struct ContentView: View {
         ScrollViewReader { setupScroll in
         ScrollView {
             VStack(alignment: .leading, spacing: Brand.Space.section) {
-                header
+                header.id("phase-heading")
                 JourneySteps(current: model.journeyStep)
                 if model.companionStatus == .anotherAppRunning || model.companionStatus == .unavailable { companionStatusNotice }
                 if !model.residues.isEmpty { residueNotice }
@@ -76,7 +73,6 @@ struct ContentView: View {
         .background(ActiveCompanionWindow(model: model, returnToBrowser: returnToBrowser)
             .frame(width: 0, height: 0))
         .onChange(of: model.runApproval) { _, _ in
-            showingCollectionDetails = false
             showingFinderGuide = false
             scrollToCollectionSetup(setupScroll)
         }
@@ -88,6 +84,7 @@ struct ContentView: View {
         }
         .onChange(of: model.phase) { _, phase in
             if phase == .connecting { search = "" }
+            setupScroll.scrollTo("phase-heading", anchor: .top)
         }
         .onChange(of: model.canInstallUpdate) { _, safe in
             if safe { updater.resumeIfSafe() }
@@ -141,8 +138,8 @@ struct ContentView: View {
         HStack(spacing: Brand.Space.section) {
             logoTile
             Spacer(minLength: 0)
-            if model.phase == .selecting {
-                Button("Discard review…") { confirmingRetainedReviewDiscard = true }
+            if model.phase == .selecting || model.phase == .reviewing {
+                Button(model.phase == .reviewing ? "Disconnect" : "Discard review…") { confirmingRetainedReviewDiscard = true }
                     .buttonStyle(SecondaryButton())
             }
         }
@@ -257,16 +254,7 @@ struct ContentView: View {
     private var collectionApprovalPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             if showingFinderGuide {
-                Text("Optional: include call history")
-                    .font(Brand.headingFont(28))
-                    .foregroundStyle(Brand.heading)
-                    .accessibilityAddTraits(.isHeader)
-                Text("Call history needs an encrypted local backup. This Finder setup is optional; without it, this app still reads any available calls.")
-                    .font(Brand.bodyFont(16))
-                    .foregroundStyle(Brand.body)
-                Button("Back to collection") { showingFinderGuide = false }
-                    .buttonStyle(SecondaryButton())
-                finderEncryptionGuide
+                FinderEncryptionGuide(model: model) { showingFinderGuide = false }
             } else if model.runApproval == .approved, let run = model.phoneRun {
                 // Re-evaluated as time passes so Start is never offered after its 10-minute window.
                 TimelineView(.periodic(from: .now, by: 5)) { context in
@@ -306,11 +294,11 @@ struct ContentView: View {
             Button("Approve again in your account") { openAccountStart() }
                 .buttonStyle(LimeButton())
         case .none, .approved:
-            Text("Start in your AMPLIFai account. You agree there once, for this one collection, to collect on this Mac and to automatically save the contacts you choose. AMPLIFai Phone then opens here, ready to collect.")
-            collectionFacts
-            collectionDetails
+            Text("Approve this collection in your account, then return here to connect your iPhone.")
+                .font(Brand.bodyFont(16))
             Button("Start in your AMPLIFai account") { openURL(CollectorModel.accountStartURL) }
                 .buttonStyle(LimeButton())
+            privacyDetails
         }
     }
 
@@ -338,15 +326,14 @@ struct ContentView: View {
 
     private func approvedRunContent(_ run: CollectorModel.PhoneRun, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Approved in your account")
+            Text("Prepare your iPhone")
                 .font(Brand.headingFont(28))
                 .foregroundStyle(Brand.heading)
                 .accessibilityAddTraits(.isHeader)
             VerifiedStatusRow(verified: true, title: "Account: \(run.email)",
                               detail: "Course: \(run.course) · \(CollectorModel.approvedToSaveLabel(run.categories))")
-            Text("Start collection copies this iPhone's backup to this Mac and reads it here. Then you choose contacts; only those, with their available call and message metadata, are saved to this account and course.")
             if !run.collectionStarted {
-                Text("Start within 10 minutes of opening the app (about \(max(1, Int(ceil(run.startDeadline.timeIntervalSince(now) / 60)))) min left). After that, approve again in your account.")
+                Text("Approval start window: about \(max(1, Int(ceil(run.startDeadline.timeIntervalSince(now) / 60)))) min remaining.")
                     .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
             }
             if !model.candidateNotice.isEmpty {
@@ -356,9 +343,9 @@ struct ContentView: View {
                 Button("Try the newer approval again") { model.retryCandidateClaim() }
                     .buttonStyle(QuietAction())
             }
-            collectionFacts
-            collectionDetails
+            PhoneConnectionGuide()
             iPhoneCheckCard
+            privacyDetails
         }
     }
 
@@ -382,39 +369,45 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var setupCheckContent: some View {
-            switch model.backupEncryptionStatus {
-            case .checking:
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("Checking the iPhone… No backup or collection has started.")
-                        .font(Brand.bodyFont(16))
-                }
-                if model.backupSettingCheckInProgress {
-                    Button("Cancel check") { model.cancelBackupEncryptionStatusCheck() }
-                        .buttonStyle(SecondaryButton())
-                }
-            case .unknown:
-                VerifiedStatusRow(verified: false, title: "Backup setting not confirmed", detail: backupSettingDetail)
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { unknownSettingActions }
-                    VStack(alignment: .leading, spacing: 12) { unknownSettingActions }
-                }
-            case .notChecked, .encrypted, .unencrypted:
-                Text("Connect the iPhone by USB, unlock it and choose Trust on the iPhone if asked. Start collection checks its backup setting first, then starts.")
-                    .font(Brand.bodyFont(16))
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { startActions }
-                    VStack(alignment: .leading, spacing: 12) { startActions }
-                }
-                Button("Optional: set up call history in Finder") {
-                    finderGuideStep = 0
-                    showingFinderGuide = true
-                }
-                .buttonStyle(QuietAction())
+        switch model.backupEncryptionStatus {
+        case .checking:
+            progressLine("Checking your iPhone…")
+            Text("No backup or collection has started.")
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+            if model.backupSettingCheckInProgress {
+                Button("Cancel check") { model.cancelBackupEncryptionStatusCheck() }
+                    .buttonStyle(SecondaryButton())
             }
+        case .unknown:
+            VerifiedStatusRow(verified: false, title: "Backup setting not confirmed", detail: backupSettingDetail)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { unknownSettingActions }
+                VStack(alignment: .leading, spacing: 12) { unknownSettingActions }
+            }
+            finderGuideAction
+        case .unencrypted:
+            VerifiedStatusRow(verified: false, title: "Backup encryption is off", detail: backupSettingDetail)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { unencryptedSettingActions }
+                VStack(alignment: .leading, spacing: 12) { unencryptedSettingActions }
+            }
+        case .encrypted:
+            VerifiedStatusRow(verified: true, title: "Backup encryption is on", detail: backupSettingDetail)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { startActions }
+                VStack(alignment: .leading, spacing: 12) { startActions }
+            }
+        case .notChecked:
+            Text("We'll check backup encryption before collecting. Call history may be unavailable if it is off.")
+                .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { startActions }
+                VStack(alignment: .leading, spacing: 12) { startActions }
+            }
+            finderGuideAction
+        }
     }
 
-    /// Start collection is an action, not consent; the agreement was given in the account.
     @ViewBuilder private var startActions: some View {
         Button("Start collection") { model.startCollection() }
             .buttonStyle(LimeButton())
@@ -424,32 +417,35 @@ struct ContentView: View {
             .keyboardShortcut(.cancelAction)
     }
 
-    /// Unknown settings keep the recheck as the main action; starting anyway stays possible but secondary.
     @ViewBuilder private var unknownSettingActions: some View {
-        Button("Check iPhone again") { model.startCollection() }
-            .buttonStyle(LimeButton())
-            .disabled(!model.canPrepareCollection || !model.hasStartableRun)
-        Button("Start without confirmed call history") { model.startWithoutConfirmedCallHistory() }
+        Button("Recheck iPhone") { model.checkBackupEncryptionStatus() }
+            .buttonStyle(LimeButton()).disabled(!model.canPrepareCollection)
+        Button("Continue with available data") { model.startCollectionWithAvailableData() }
             .buttonStyle(SecondaryButton())
             .disabled(!model.canPrepareCollection || !model.hasStartableRun)
     }
 
-    private var backupSettingLabel: String {
-        switch model.backupEncryptionStatus {
-        case .notChecked: return "Not checked"
-        case .checking: return "Checking…"
-        case .encrypted: return "On"
-        case .unencrypted: return "Off"
-        case .unknown: return "Could not read"
-        }
+    @ViewBuilder private var unencryptedSettingActions: some View {
+        Button("Set up encryption in Finder") { showingFinderGuide = true }
+            .buttonStyle(LimeButton())
+        Button("Continue with available data") { model.startCollectionWithAvailableData() }
+            .buttonStyle(SecondaryButton())
+            .disabled(!model.canPrepareCollection || !model.hasStartableRun)
+        Button("Recheck") { model.checkBackupEncryptionStatus() }
+            .buttonStyle(QuietAction()).disabled(!model.canPrepareCollection)
+    }
+
+    private var finderGuideAction: some View {
+        Button("Set up encrypted backup in Finder") { showingFinderGuide = true }
+            .buttonStyle(QuietAction())
     }
 
     private var backupSettingDetail: String {
         switch model.backupEncryptionStatus {
         case .notChecked: return "Connect by USB, unlock the iPhone and approve Trust if asked."
         case .checking: return "Reading the existing backup setting. No backup or phone-data collection has started."
-        case .encrypted: return "Calls can be included. When asked, enter this iPhone's existing backup password on this Mac. The setting is checked again when collection starts."
-        case .unencrypted: return "Available data will be read. An unencrypted backup may not include call history."
+        case .encrypted: return "Call history may be available. Keep your existing backup password ready; full history is not guaranteed."
+        case .unencrypted: return "Call history may be unavailable. Set up encryption in Finder, or continue with whatever data is available."
         case .unknown:
             switch model.backupEncryptionCheckCode {
             case "workspace_low_space":
@@ -464,194 +460,16 @@ struct ContentView: View {
         }
     }
 
-    private var finderEncryptionGuide: some View {
-        let step = finderEncryptionSteps[finderGuideStep]
-        return VStack(alignment: .leading, spacing: 12) {
-            Text("To prepare call history in Finder")
-                .font(Brand.headingFont(22))
-                .foregroundStyle(Brand.heading)
-                .accessibilityAddTraits(.isHeader)
-            Text("Step \(finderGuideStep + 1) of \(finderEncryptionSteps.count) · Finder guide")
-                .font(Brand.headingFont(16))
-                .foregroundStyle(Brand.lime)
-            HStack(spacing: 6) {
-                ForEach(finderEncryptionSteps.indices, id: \.self) { index in
-                    Capsule()
-                        .fill(index == finderGuideStep ? Brand.lime : index < finderGuideStep ? Brand.blue : Brand.border)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 5)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Finder guide, step \(finderGuideStep + 1) of \(finderEncryptionSteps.count)")
-            finderIllustration
-            Text(step.title)
-                .font(Brand.headingFont(22))
-                .foregroundStyle(Brand.heading)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityFocused($finderGuideHeadingFocused)
-            Text(step.detail)
-                .font(Brand.bodyFont(18))
-                .foregroundStyle(Brand.body)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            if finderGuideStep == 2 {
-                Text("Turning encryption on starts a Finder backup and can overwrite and encrypt earlier local backups. Finder needs separate Mac storage beyond this app's 2 GiB reserve. Let that backup finish.")
-                    .font(Brand.bodyFont(16))
-                    .foregroundStyle(Brand.body)
-                    .textSelection(.enabled)
-            }
-            if finderGuideStep == 3 {
-                Button("Back to collection") { showingFinderGuide = false }
-                    .buttonStyle(LimeButton())
-            }
-            HStack(spacing: 12) {
-                Button("Back") { finderGuideStep -= 1 }
-                    .buttonStyle(SecondaryButton())
-                    .disabled(finderGuideStep == 0)
-                    .frame(minHeight: 44)
-                if finderGuideStep < finderEncryptionSteps.count - 1 {
-                    Button("Next") { finderGuideStep += 1 }
-                        .buttonStyle(LimeButton())
-                        .frame(minHeight: 44)
-                }
-            }
-            DisclosureGroup("iPhone missing in Finder or password unknown?") {
-                Text("Use a data-capable USB cable, unlock the iPhone and answer any normal Allow or Trust prompt yourself. In Finder, use View > Show Sidebar and check Locations. Keep an existing backup password; AMPLIFai cannot reset it or change encryption for you.")
-                .font(Brand.bodyFont(16))
-                .foregroundStyle(Brand.body)
-                .textSelection(.enabled)
-            }
-            .font(Brand.bodyFont(16))
-        }
-        .onChange(of: finderGuideStep) { _, _ in finderGuideHeadingFocused = true }
-    }
-
-    @ViewBuilder private var finderIllustration: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("FINDER GUIDE · ILLUSTRATION")
-                .font(Brand.headingFont(12))
-                .foregroundStyle(Brand.muted)
-            switch finderGuideStep {
-            case 0:
-                HStack(spacing: 10) {
-                    Image(systemName: "face.smiling").font(.system(size: 30)).foregroundStyle(Brand.blue)
-                    Text("Finder in the Dock").font(Brand.headingFont(18))
-                    Spacer(minLength: 0)
-                    Image(systemName: "iphone.gen3").font(.system(size: 30)).foregroundStyle(Brand.lime)
-                }
-            case 1:
-                HStack(alignment: .top, spacing: 0) {
-                    VStack(alignment: .leading, spacing: 9) {
-                        Text("Locations").font(Brand.headingFont(14))
-                        Text("▸ This iPhone").foregroundStyle(Brand.lime)
-                        Text("◇ AMPLIFai Phone disk").foregroundStyle(Brand.muted)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Rectangle().fill(Brand.border).frame(width: 1)
-                    Text("Select the iPhone device")
-                        .font(Brand.bodyFont(16))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.leading, 12)
-                }
-            case 2:
-                VStack(alignment: .leading, spacing: 9) {
-                    HStack(spacing: 12) {
-                        Text("General").foregroundStyle(Brand.lime)
-                        Text("Music").foregroundStyle(Brand.muted)
-                        Text("Files").foregroundStyle(Brand.muted)
-                    }
-                    .font(Brand.headingFont(15))
-                    Rectangle().fill(Brand.border).frame(height: 1)
-                    Text("Backups").font(Brand.headingFont(16))
-                    HStack(spacing: 8) {
-                        Image(systemName: "square").foregroundStyle(Brand.lime)
-                        Text("Encrypt local backup")
-                    }
-                    .font(Brand.bodyFont(16))
-                }
-            default:
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("Finder backup finishes", systemImage: "clock")
-                    Label("Return and recheck", systemImage: "arrow.right")
-                }
-                .font(Brand.headingFont(16))
-            }
-        }
-        .font(Brand.bodyFont(16))
-        .foregroundStyle(Brand.heading)
-        .textSelection(.enabled)
-        .padding(16)
-        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
-        .background(Brand.background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Brand.border, lineWidth: 1))
-    }
-
-    private var finderEncryptionSteps: [(title: String, detail: String)] {
-        [
-            ("Open Finder", "Connect the unlocked iPhone with a data-capable USB cable. Decide any Allow or Trust prompt on the phone yourself, then open Finder on this Mac."),
-            ("Select this iPhone", "In Finder's Locations sidebar, select the iPhone. The AMPLIFai Phone installer disk is a different item. If Locations is hidden, use View > Show Sidebar."),
-            ("Prepare the local backup", "Open General, then Backups. Choose Encrypt local backup and set a password you can keep. AMPLIFai does not change this setting for you."),
-            ("Finish, then start", "Let Finder finish its backup. Return to AMPLIFai and choose Start collection; it checks the setting again. Keep the existing backup password; enter it only in this Mac app if asked. Even an encrypted backup may not contain every older call.")
-        ]
-    }
-
-    private var collectionSystemRequirements: String {
-        #if arch(x86_64)
-        let computer = "an Intel Mac"
-        #else
-        let computer = "an Apple M-series Mac"
-        #endif
-        return "Requires \(computer) with macOS 14 or later, a data-capable USB cable and enough Mac storage for selected databases, parsing copies and a further 2 GiB reserve. Internet is needed to confirm your approval, for diagnostic delivery and for the account save; the USB backup runs locally."
-    }
-
-    /// Upfront summary of what this collection does; shown before the iPhone check and the agreement.
-    private var collectionFacts: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 20, alignment: .top)], alignment: .leading, spacing: 14) {
-            consentFact("externaldrive", "Arrives on this Mac, temporarily",
-                        "The iPhone's full backup, including message content. Only contacts, calls and messages are kept for this review; the rest is discarded as it arrives.")
-            consentFact("lock.doc", "Stays on this Mac",
-                        "Backup files, message text and the backup password, which is never saved.")
-            consentFact("person.2", "Saved automatically, only what you choose",
-                        "After you choose contacts and Continue: their names and phone numbers, plus matching call and message metadata (dates, participants, call duration, message direction and transport), are saved to the account and course you approved. Nothing you leave out is saved.")
-            consentFact("lifepreserver", "If something fails",
-                        "A safe code is sent: build, stage, failure type, elapsed time and byte counts. Never records, content, passwords or paths.")
-        }
-    }
-
-    private var collectionDetails: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(showingCollectionDetails ? "Hide exact collection details" : "Show exact collection details") {
-                showingCollectionDetails.toggle()
-            }
+    private var privacyDetails: some View {
+        Link("Privacy details", destination: privacyURL)
             .buttonStyle(QuietAction())
-            if showingCollectionDetails {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(collectionSystemRequirements)
-                    Text("The local review can include phone numbers, dates, participants, call duration and message transport/direction. Physical source coverage varies. Changing Finder encryption after a collection requires another owner-approved capture.")
-                    Text("Your approval in the AMPLIFai account covers this one collection and automatically saving the contacts you choose to that account and course. It does not answer Apple's Trust prompt or supply a backup password. A later collection, another account or course, or saving anything outside what was approved to save needs a new approval. This Mac still reads contacts, calls and message metadata locally for your review; only what is approved to save, for the contacts you choose, is saved.")
-                    Text("Safe diagnostics contain build, random reference, failure category and stage, elapsed time, byte counts and optional numeric device status. They exclude phone records, backup files, paths and raw errors. Cleanup is attempted; marked residue must be inspected here.")
-                    Text("Disclosure: \(CollectorModel.collectionDisclosureVersion) · account approval \(PhoneRunContract.disclosureVersion)").textSelection(.enabled)
-                }
-                .font(Brand.bodyFont(16))
-                .foregroundStyle(Brand.muted)
-                .brandControls()
-            }
-        }
     }
 
-    private func consentFact(_ symbol: String, _ title: String, _ detail: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 20))
-                .foregroundStyle(Brand.blue)
-                .frame(width: 24)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
-                Text(detail).font(Brand.bodyFont(15)).fixedSize(horizontal: false, vertical: true)
-            }
-        }
+    private var privacyURL: URL {
+        let path = model.phoneRun?.claim.disclosureVersion == "phone-run-v1"
+            ? "/experience/account-privacy?version=account-2026-10-v6"
+            : "/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving"
+        return URL(string: "https://amplifai.satoris.ai" + path)!
     }
 
     private var retainedReviewRecovery: some View {
@@ -671,7 +489,7 @@ struct ContentView: View {
             Text("Existing encrypted-backup password")
                 .font(Brand.headingFont(22))
                 .foregroundStyle(Brand.heading)
-            Text("Use the password already set for this iPhone's encrypted computer backup, not its screen-unlock passcode. Ask its owner if you do not know it. This app never changes or resets encryption; the password stays in the local helper and is not saved.")
+            Text("Enter your existing backup password, not your iPhone passcode. It stays on this Mac and is not saved. AMPLIFai cannot reset it.")
                 .font(Brand.bodyFont(18))
             SecureField("Backup password", text: $model.password)
                 .textFieldStyle(.plain)
@@ -721,25 +539,29 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(["calls", "messages"], id: \.self) { category in
                     if model.missingSources.contains(category) {
-                        Text(model.unavailableDescription(category))
-                            .foregroundStyle(Brand.muted)
+                        Label(category == "calls" ? "Calls unavailable" : "Messages unavailable",
+                              systemImage: "exclamationmark.circle")
+                            .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
                     }
                 }
-                if !model.currentSourceDiagnostics.isEmpty {
-                    DisclosureGroup("Source details for this run") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(model.currentSourceDiagnostics) { record in
-                                Text(record.detail).textSelection(.enabled)
-                            }
-                            if model.diagnosticRetention == .retained {
-                                Text("These safe source details were retained on this Mac.")
+                DisclosureGroup("Source details for this run") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(["calls", "messages"], id: \.self) { category in
+                            if model.missingSources.contains(category) {
+                                Text(model.unavailableDescription(category)).textSelection(.enabled)
                             }
                         }
-                        .foregroundStyle(Brand.muted)
-                        .padding(.top, 6)
+                        ForEach(model.currentSourceDiagnostics) { record in
+                            Text(record.detail).textSelection(.enabled)
+                        }
+                        if model.diagnosticRetention == .retained {
+                            Text("These safe source details were retained on this Mac.")
+                        }
                     }
-                    .font(Brand.bodyFont(16))
+                    .foregroundStyle(Brand.muted)
+                    .padding(.top, 6)
                 }
+                .font(Brand.bodyFont(14))
             }
         }
     }
@@ -811,7 +633,7 @@ struct ContentView: View {
         if model.selectionChangePending { return "Checking that changing contacts won’t interrupt a save… Your reviewed selection is still intact." }
         if !model.handoffID.isEmpty { return "This selection is linked to your AMPLIFai account in the browser." }
         if let run = model.phoneRun {
-            return "\(model.selectedIDs.count.formatted()) contacts selected. Continue saves them, with their call and message metadata, to \(run.email) · \(run.course)."
+            return "Continue saves \(model.selectedIDs.count.formatted()) contacts and their available metadata to \(run.email) · \(run.course)."
         }
         return "\(model.selectedIDs.count.formatted()) contacts selected."
     }
@@ -846,7 +668,7 @@ struct ContentView: View {
     }
 
     private var contactTitle: some View {
-        Text("Choose contacts to share").font(Brand.headingFont(28)).foregroundStyle(Brand.heading)
+        Text("Choose contacts").font(Brand.headingFont(28)).foregroundStyle(Brand.heading)
     }
 
     private var contactTitleCount: some View {
@@ -861,34 +683,29 @@ struct ContentView: View {
 
     private var reviewPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(model.browserOwnsFlow ? "Saving in your AMPLIFai account" : "Save to your account")
+            Text(handoffTitle)
                 .font(Brand.headingFont(28))
                 .foregroundStyle(Brand.heading)
                 .accessibilityAddTraits(.isHeader)
-            Text(shareSummary)
-                .font(Brand.bodyFont(16))
+            if let run = model.phoneRun {
+                Text("\(run.email) · \(run.course)").font(Brand.bodyFont(16))
+            }
+            selectedSourceMetrics
             shareNextStep
-            if !model.handoffNotice.isEmpty {
+            if !model.handoffNotice.isEmpty && !model.canRetryAccountCompletion {
                 Text(model.handoffNotice).font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
             }
             if !model.errorMessage.isEmpty {
                 Text(model.errorMessage).foregroundStyle(.red).textSelection(.enabled)
             }
-            // Everything that is not the next step: what is saved, counts and caveats, recovery.
+            // Diagnostic dates and optional recovery stay separate from the normal browser handoff.
             DisclosureGroup("Details and options", isExpanded: $showingShareDetails) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Saved to the account and course you approved: the selected contacts' names and phone numbers and their matching call and message metadata. Never sent: message text, backup files or passwords.")
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 16)], alignment: .leading, spacing: 16) {
-                        metric(model.selectedIDs.count, "Selected contacts")
-                        metric(model.matchedCalls, "Matching calls", unavailable: model.missingSources.contains("calls"))
-                        metric(model.matchedMessages, "Matching messages", unavailable: model.missingSources.contains("messages"))
-                    }
-                    .brandWell()
-                    Text("The collector attempted all retained available history. The observed dates below do not prove complete phone history.")
+                    Text("Available history can be partial.")
                     Text("Observed calls: \(model.missingSources.contains("calls") ? "unavailable" : dateRange(model.observedCallEarliest, model.observedCallLatest)).")
                     Text("Observed messages: \(model.missingSources.contains("messages") ? "unavailable" : dateRange(model.observedMessageEarliest, model.observedMessageLatest)).")
                     currentSourceDetails
-                    Text("This Mac keeps its private local copy until your account confirms the matching save, then clears it.")
+                    privacyDetails
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 12) { reviewRecoveryActions }
                         VStack(alignment: .leading, spacing: 12) { reviewRecoveryActions }
@@ -907,19 +724,60 @@ struct ContentView: View {
         .panel()
     }
 
-    private var shareSummary: String {
-        let calls = model.missingSources.contains("calls") ? "calls unavailable" : "\(model.matchedCalls.formatted()) calls"
-        let messages = model.missingSources.contains("messages") ? "messages unavailable" : "\(model.matchedMessages.formatted()) messages"
-        let destination = model.phoneRun.map { " · \($0.email) · \($0.course)" } ?? ""
-        return "\(model.selectedIDs.count.formatted()) contacts · \(calls) · \(messages)\(destination)"
+    private var handoffTitle: String {
+        if model.canRetryAccountCompletion { return "Finish on this Mac" }
+        if model.accountSaveAwaitingBrowserReceipt { return "Waiting for the final receipt" }
+        if model.browserReceived { return "Waiting for account Save" }
+        if model.canRetryDestinationVerification { return "Account verification needs a retry" }
+        if model.browserOwnsFlow { return "Continue in your browser" }
+        return "Ready to save"
+    }
+
+    private var handoffDetail: String {
+        if model.canRetryAccountCompletion {
+            return "Your account save is confirmed. Retry finishing to clear this Mac's private copy."
+        }
+        if model.accountSaveAwaitingBrowserReceipt {
+            return "Your account reported the save. Waiting for the browser's final confirmation."
+        }
+        if model.browserReceived {
+            return "Your browser has the selected data. Waiting for your account to confirm the save."
+        }
+        if model.canRetryDestinationVerification {
+            return "The account check did not finish. Your selected data is retained; retry the same check."
+        }
+        return "The browser handles transfer, saving and your report. This Mac is waiting for confirmation."
+    }
+
+    private var selectedSourceMetrics: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: Brand.Space.item)],
+                  alignment: .leading, spacing: Brand.Space.item) {
+            metric(model.selectedIDs.count, "Selected contacts")
+            if model.phoneRun?.categories.contains("calls") != false {
+                metric(model.matchedCalls, "Matching calls", unavailable: model.missingSources.contains("calls"))
+            }
+            if model.phoneRun?.categories.contains("messages") != false {
+                metric(model.matchedMessages, "Matching messages", unavailable: model.missingSources.contains("messages"))
+            }
+        }
+        .brandWell()
+        .accessibilityLabel("Selected local data; saved totals are confirmed in your browser")
     }
 
     /// One next action per state. After the handoff this is passive status only: the website owns the flow,
     /// and the window shows this only when the owner reopens it.
     @ViewBuilder private var shareNextStep: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if model.browserOwnsFlow {
-                Text(model.statusDetail).foregroundStyle(Brand.body)
+            if model.canRetryAccountCompletion {
+                Text(handoffDetail).foregroundStyle(Brand.body)
+                Button("Retry finishing") { model.retryAccountCompletion() }
+                    .buttonStyle(LimeButton())
+            } else if model.browserOwnsFlow {
+                Text(handoffDetail).foregroundStyle(Brand.body)
+                if model.canRetryDestinationVerification {
+                    Button("Retry account verification") { model.retryDestinationVerification() }
+                        .buttonStyle(SecondaryButton())
+                }
                 Button("Continue in browser") {
                     returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
                 }
@@ -936,7 +794,7 @@ struct ContentView: View {
                 Button("Start in your AMPLIFai account") { openAccountStart() }
                     .buttonStyle(LimeButton())
             } else {
-                Text("Continue saves the contacts you chose to the account you approved. Your AMPLIFai account then opens in your browser with the progress and your report.")
+                Text("Continue to your browser for saving and your report.")
                     .foregroundStyle(Brand.body)
                 Button("Continue") { model.pairBrowser(automaticAccountNavigation: true) }
                     .buttonStyle(LimeButton())
@@ -1006,7 +864,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(unavailable ? "Unavailable" : value.formatted())
                 .font(Brand.headingFont(28))
-                .foregroundStyle(Brand.lime)
+                .foregroundStyle(unavailable ? Brand.muted : Brand.lime)
             Text(label).font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

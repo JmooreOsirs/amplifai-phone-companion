@@ -192,10 +192,15 @@ struct ContactReviewView: View {
     }
 
     private var organizingToggle: some View {
-        Button("\(showingGroupTools ? "Hide organizing" : "Organize Main and Review") · \(model.markedGroupMoveIDs.count) marked to move") {
+        Button(organizingLabel) {
             showingGroupTools.toggle()
         }
         .buttonStyle(QuietAction())
+    }
+
+    private var organizingLabel: String {
+        let title = showingGroupTools ? "Hide Organize" : "Organize"
+        return model.markedGroupMoveIDs.isEmpty ? title : "\(title) · \(model.markedGroupMoveIDs.count) marked"
     }
 
     private var organizingTools: some View {

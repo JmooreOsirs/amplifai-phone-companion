@@ -1,5 +1,34 @@
 # One approval at the start: AMPLIFai Phone Mac handoff for Jeff (2026-10-19)
 
+## Approved October 19 native UI integration
+
+Jeff approved the reconciled Fable/Brian implementation and exact revised consent wording, with Astra / Ultra for implementation. This section records the new UI delta; the original PR proposal below remains historical and is superseded wherever it conflicts with the canonical October 19 packet or later integration ledger. Publication still requires the coordinated protocol, migration, cross-version and signed-device gates.
+
+### Reference contract and primitive mapping
+
+Authority: RC28 native source `8f7ec4d`, accepted 1180×820 geometry and Round 5 reference captures, plus the approved October 19 requirements P03–P12/P15. `Brand.swift` is unchanged: Open Sans body, Arial bold headings, existing navy/lime/blue palette, 12/20/28 spacing, 8/10/12 radii. No second design system or downloaded illustration assets.
+
+| Changed element | Existing primitive / deliberate derivation |
+|---|---|
+| Connect → Unlock → Trust guide | Existing phone/Mac SF Symbols and blue illustration treatment; `brandControls`, body 14, heading 16 and existing spacing. Instruction numbers never masquerade as detected device states. |
+| Finder encryption guide | Existing four-step guide extracted into `FinderEncryptionGuide`; `PanelStyle`, control surface, `VerifiedStatusRow`, Lime/Secondary/Quiet buttons. Static Finder illustrations name the real OS control and are explicitly labelled illustrations. |
+| Encryption-off decision | Existing read-only model check; `VerifiedStatusRow` plus one primary Finder guide, secondary **Continue with available data**, quiet **Recheck**. Recheck does not start collection. No in-app setting/password change. |
+| Approval/account preparation | Existing verified-account row and model-driven journey stepper; repeated legal fact cards removed. The already disclosed account, course and category authority remain visible; `Privacy details` opens the existing Account Privacy Notice. |
+| Local review | Existing 220 pt adaptive cards, inclusion checkboxes, separate move flags, raised cards, recessed well and sticky Continue. Quiet Organize label shortened. Calls/Messages unavailable stay visible; source diagnostics remain accessible on demand. |
+| Browser handoff / recovery | Existing panels and metric cards. Selected local contacts/calls/messages are labelled as such; only approved categories appear. Exact verification retry and final-receipt retry use model APIs without new consent or a new save. Waiting is not shown as confirmed saving. |
+| Collection activity / completion | Existing status panel, timing and byte counts. **Stop collection** remains a local cancellation action. Waiting/unmeasured/stale activity has static blue dots; progress animation retains reduced-motion guards. Native **Close** does not duplicate the website's report-bound Done. |
+
+Apple instruction evidence, checked October 19: [encrypted backups](https://support.apple.com/108353), [Finder sidebar](https://support.apple.com/guide/mac-help/mchl83c9e8b8/mac), [device connection](https://support.apple.com/108643). Finder's installed English `LocalizableMerged.strings` also resolves `SD17` to **CDs, DVDs, and iOS Devices**. Enabling encryption is the owner's Finder action and can overwrite earlier local backups; encryption never promises complete call history.
+
+### Qualification boundary
+
+Offscreen `NSHostingView` renders exercise production SwiftUI views with synthetic contacts and a simulated run authority. No window is created, app activated, helper/device process started, customer files read or account action performed. The render receipt resolves native fonts, colors, spacing and radii; existing brand tokens are unchanged. Changed state previews cover the accepted 1180×820 plus 375×844, 768×900, 1440×1000 and short 820×640 / 1180×680 sizes. Narrow layouts retain outer scrolling and the contact action dock.
+
+Verification: release Swift build passed. Saved PNG/JSON evidence is in the canonical October 19 packet at `native-ui-renders/`; `integration-evidence.json` records source hashes, pass provenance, the accepted 1180×820 reference comparison and unverified boundaries. Preparation, contact/review and final status renders are retained separately so an earlier unchanged area is not misrepresented as a new full pass. Runtime fonts resolve to OpenSans-Regular / Arial-BoldMT and the existing sRGB/geometry tokens. No fixture executable or app bundle is included in that evidence folder. Privacy details pins `phone-run-v1` to `account-2026-10-v6`, and the new v2 disclosure to the agreed v7 Phone section.
+
+Physical/signed qualification remains separate: Finder guide followed on a real phone; read-only recheck; encrypted/off/unknown availability; keyboard and VoiceOver interaction; system reduced-motion setting; real browser focus and final saved receipt. UI does not claim local Disconnect revokes account authority. Coordinated server Stop and retained-run expiry/replacement handling belong to the protocol integration and cannot be proven by these previews.
+
+
 Brian's correction after his real test:
 
 > "I only wanted to do it at the beginning … it switched back to my app in the middle of this process … If I have to have permissions it shouldn't switch back to the app."

@@ -12,9 +12,10 @@ struct RenderMacReviewAcceptance {
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
         let shareStates = ["bind-uncertain", "bind-refused", "expired"]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed"] + shareStates
-        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown"]
-        let setupStates = ["setup"] + runStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry"] + shareStates
+        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on"]
+        let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
+        let setupStates = ["setup"] + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
@@ -37,6 +38,7 @@ struct RenderMacReviewAcceptance {
                 guard model.startCollection() else { throw FixtureError.unexpectedState("\(state): start") }
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
                 model.finished(mode: "backup-encryption-status", code: 0)
+                guard model.startCollectionWithAvailableData() else { throw FixtureError.unexpectedState("\(state): explicit available-data choice") }
                 let names = ["Priya Natarajan", "Marcus Bell", "Elena Fischer", "Sam Okafor", "Dana Whitfield", "Lin Zhao", "Omar Haddad", "Noor Khalil", "Grace Liu", "Tomás Rivera", "Aisha Bello", "Ruth Abara"]
                 let total = 5501
                 let rows: [[String: Any]] = (1...total).map { id in
@@ -113,15 +115,20 @@ struct RenderMacReviewAcceptance {
                         if state != "local-review" && state != "link-failed" {
                             model.pairBrowser(automaticAccountNavigation: false)
                             try receive(pairing)
-                            if ["handoff", "save-receipt", "expired"].contains(state) {
+                            if ["handoff", "save-receipt", "expired", "verify-uncertain", "finish-retry"].contains(state) {
                                 guard model.handoffBound, !model.canEditWorkspace, !model.handoffAcknowledged else {
                                     throw FixtureError.unexpectedState("\(state): synthetic handoff did not bind")
                                 }
+                                if state == "verify-uncertain" { server.faults = [.malformed, .malformed, .malformed] }
                                 try receive(["kind": "destination", "state": "pending", "handoffId": handoffID,
                                              "intentId": "00000000-0000-4000-8000-0000000000bb",
                                              "email": "synthetic.owner@example.invalid", "course": "SYNTHETIC review course"])
-                                try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
-                                             "intentId": "00000000-0000-4000-8000-0000000000bb"])
+                                if state != "verify-uncertain" {
+                                    try receive(["kind": "destination", "state": "approved", "handoffId": handoffID,
+                                                 "intentId": "00000000-0000-4000-8000-0000000000bb"])
+                                } else if !model.canRetryDestinationVerification {
+                                    throw FixtureError.unexpectedState("verify-uncertain: exact retry not available")
+                                }
                             }
                             if state == "save-receipt" {
                                 try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
@@ -129,6 +136,15 @@ struct RenderMacReviewAcceptance {
                                 guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged else {
                                     throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
                                 }
+                            }
+                            if state == "finish-retry" {
+                                try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
+                                for _ in 0..<3 {
+                                    try receive(["kind": "handoff", "state": "saved", "handoffId": handoffID])
+                                    try receive(["kind": "error", "code": "handoff_unconfirmed"])
+                                }
+                                try receive(["kind": "handoff", "state": "saved", "handoffId": handoffID])
+                                guard model.canRetryAccountCompletion else { throw FixtureError.unexpectedState("finish-retry: exact receipt retry unavailable") }
                             }
                             if state == "expired" { try receive(["kind": "handoff", "state": "expired", "handoffId": handoffID]) }
                         }
@@ -156,7 +172,14 @@ struct RenderMacReviewAcceptance {
                 server.faults = [.status(409)]
                 try admit()
             }
-            else if state == "run-approved" { try admit() }
+            else if state == "run-approved" || guideStates.contains(state) { try admit() }
+            else if state == "encryption-off" || state == "encryption-on" {
+                try admit()
+                model.checkBackupEncryptionStatus()
+                let event: [String: Any] = ["kind": "backup-encryption-status", "backupEncrypted": state == "encryption-on"]
+                model.receive(try AgentEvent.decode(JSONSerialization.data(withJSONObject: event)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+            }
             else if state == "agree-checking" { try admit(); _ = model.startCollection() }
             else if state == "agree-unknown" {
                 try admit()
@@ -180,8 +203,16 @@ struct RenderMacReviewAcceptance {
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
             timings[state] = Date().timeIntervalSince(start)
             for (width, height) in viewports {
-                try render(ContentView(model: model, updater: updater), width: width, height: height,
-                           path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
+                if let guideStep = guideStates.firstIndex(of: state) {
+                    try render(ScrollView {
+                        FinderEncryptionGuide(model: model, initialStep: guideStep, onClose: {})
+                            .panel().frame(maxWidth: 880).padding(28)
+                    }.background(Brand.background).tint(Brand.lime), width: width, height: height,
+                               path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
+                } else {
+                    try render(ContentView(model: model, updater: updater), width: width, height: height,
+                               path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
+                }
                 if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
                     try render(ContactReviewView(model: model, workspace: workspace, wellHeight: 322,
                                search: .constant(workspace.query), showingGroupTools: .constant(state == "review"), confirmingBulkMove: .constant(false))
@@ -202,11 +233,29 @@ struct RenderMacReviewAcceptance {
             "viewports": viewports.map { [$0.0, $0.1] }, "states": states, "fixturePreparationSeconds": timings,
             "stateEvidence": stateEvidence,
             "font": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
+            "resolvedNativeStyle": [
+                "bodyFont": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
+                "headingFont": NSFont(name: "Arial-BoldMT", size: 28)?.fontName ?? "missing",
+                "bodySize": 16, "headingSize": 28, "pagePadding": Brand.Space.page,
+                "itemGap": Brand.Space.item, "sectionGap": Brand.Space.section,
+                "controlRadius": Brand.Radius.control, "panelRadius": Brand.Radius.panel,
+                "contactMinimum": Brand.Layout.contactMinimum,
+                "backgroundSRGB": rgb(Brand.background), "panelSRGB": rgb(Brand.panel),
+                "headingSRGB": rgb(Brand.heading), "bodySRGB": rgb(Brand.body),
+                "mutedSRGB": rgb(Brand.muted), "limeSRGB": rgb(Brand.lime), "blueSRGB": rgb(Brand.blue)
+            ],
+            "guideSymbolsAvailable": ["iphone.gen3", "cable.connector.horizontal", "laptopcomputer", "lock.iphone"]
+                .allSatisfy { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil },
             "screenCaptured": false, "windowCreated": false, "appActivated": false,
             "collectorStarted": false, "ownerWorkspaceRead": false, "updateControllerStarted": false]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("mac-review-render-receipt.json"))
         print("Rendered synthetic Mac states without a window, collection or account action")
+    }
+
+    private static func rgb(_ color: Color) -> [Double] {
+        let resolved = NSColor(color).usingColorSpace(.sRGB)!
+        return [resolved.redComponent, resolved.greenComponent, resolved.blueComponent].map { Double($0) }
     }
 
     private static func render<V: View>(_ view: V, width: Int, height: Int, path: URL) throws {
