@@ -312,6 +312,9 @@ struct CollectorModelChecks {
         try require(cancelledCheck.backupSettingCheckInProgress,
                     "A running setting check must remain visible and cancellable")
         cancelledCheck.cancelBackupEncryptionStatusCheck()
+        try require(cancelledCheck.phase == .cancelling && cancelledCheck.backupSettingCheckInProgress &&
+                    cancelledCheck.journeyStep == 0,
+                    "Cancelling the pre-agreement iPhone check must stay on Agree, not mark it finished")
         let cancelDeadline = Date().addingTimeInterval(3)
         while cancelledCheck.helperRunning && Date() < cancelDeadline {
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -339,6 +342,27 @@ struct CollectorModelChecks {
         let started = model.collectionStartedAt
         model.connect()
         try require(!model.helperRunning && model.collectionStartedAt == started, "A fresh retry cannot capture without another agreement")
+
+        // One Start action records this run's agreement and launches exactly that run.
+        let single = CollectorModel()
+        try observeBackupSetting(single, encrypted: true)
+        try require(!single.agreeAndStartCollection(for: single.collectionApprovalRunID, checked: false) &&
+                    !single.helperRunning && single.collectionStartedAt == nil && single.backupEncryptionStatus == .notChecked,
+                    "An unchecked Start declines without launching and needs a fresh iPhone check")
+        try observeBackupSetting(single, encrypted: true)
+        let singleRun = single.collectionApprovalRunID
+        try require(single.agreeAndStartCollection(for: singleRun, checked: true), "Checked Start must launch")
+        try require(single.helperRunning && single.operationID == singleRun && single.phase == .connecting &&
+                    single.journeyStep == 1,
+                    "One Start action launches the agreed run and moves to Collect")
+        try require(single.localCollectionApproval == nil && single.collectionApprovalRunID != singleRun,
+                    "Starting consumes the one-run agreement; nothing authorizes a later transfer")
+        single.disconnect()
+        let singleDeadline = Date().addingTimeInterval(3)
+        while single.helperRunning && Date() < singleDeadline { await Task.yield() }
+        try require(!single.helperRunning, "The synthetic collection helper must stop on Cancel")
+        try require(!single.agreeAndStartCollection(for: singleRun, checked: true) && !single.helperRunning,
+                    "A consumed agreement cannot start another collection")
     }
 
     private static func storageReasons() throws {

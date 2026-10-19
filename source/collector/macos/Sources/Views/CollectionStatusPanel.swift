@@ -9,7 +9,7 @@ struct CollectionStatusPanel: View {
     @State private var showingTechnicalDetails = false
     @State private var cancelHovered = false
 
-    private let stages = ["Connect", "Receive", "Read", "Review & save"]
+    private let stages = ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]
     // Existing /experience messaging, shown as waiting content rather than collection progress.
     private let waitingLines = [
         "The system proposes. You decide.",
@@ -51,7 +51,7 @@ struct CollectionStatusPanel: View {
                         Text("\(index + 1). \(step)").font(Brand.bodyFont(16))
                     }
                 } else {
-                    Text("Use the call-history setup below. The read-only setting check comes before any new collection.")
+                    Text("Check the iPhone again below. The read-only setting check comes before any new collection.")
                         .font(Brand.bodyFont(18))
                         .foregroundStyle(Brand.body)
                 }
@@ -135,8 +135,8 @@ struct CollectionStatusPanel: View {
     private var nextAction: String {
         switch model.phase {
         case .connecting: return "Next: receive the iPhone backup on this Mac. Keep the phone unlocked for Trust prompts."
-        case .transferring: return "Next: read available sources locally, then choose contacts to review."
-        case .processing: return "Next: review observed sources and choose contacts before any browser handoff."
+        case .transferring: return "Next: read available sources locally, then choose which contacts to share."
+        case .processing: return "Next: choose which contacts to share. Nothing is shared until you confirm."
         default: return "Next: inspect receipt-confirmed sources in your signed-in account."
         }
     }
@@ -264,7 +264,7 @@ struct CollectionStatusPanel: View {
 
     private var activityHeading: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
-            Text("LOCAL PHONE PROCESS · \(activeStage + 1) OF \(stages.count)")
+            Text("COLLECTING ON THIS MAC · STAGE \(activeStage + 1) OF \(stages.count)")
                 .font(Brand.bodyFont(13).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
             Text(model.phase == .transferring && !model.transferIsKnown
                  ? "Waiting for the first received byte" : model.phase == .processing && model.processedBytes == 0
@@ -309,8 +309,13 @@ struct CollectionStatusPanel: View {
             if model.needsStorageReview && !model.helperRunning {
                 Button("Check temporary data") { model.inspectResidue() }.buttonStyle(SecondaryButton())
             }
+            if model.phase == .completed {
+                // The report itself needs the account's course scope, so open the signed-in account page.
+                Link("Open your account to view the saved report", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
+                    .buttonStyle(LimeButton())
+            }
         } else if model.phase == .selecting || model.phase == .reviewing {
-            Button("Disconnect") { confirmingDiscard = true }.buttonStyle(SecondaryButton())
+            Button("Discard review…") { confirmingDiscard = true }.buttonStyle(SecondaryButton())
         } else if model.phase == .passwordRequired {
             Button("Cancel collection") { model.disconnect() }.buttonStyle(SecondaryButton())
         }

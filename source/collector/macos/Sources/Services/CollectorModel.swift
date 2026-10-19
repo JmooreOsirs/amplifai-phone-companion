@@ -9,7 +9,7 @@ final class CollectorModel: ObservableObject {
     private let reviewPageSize = 1000
     private let maxContactQueryLength = 120
     private static let maxHelperCommandBytes = 600_000
-    static let collectionDisclosureVersion = "native-local-collection-v4"
+    static let collectionDisclosureVersion = "native-local-collection-v5"
     private static let localCollectionScopes = ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"]
     enum CallHistoryPreparation: Equatable {
         case confirmedEncryptedBackup
@@ -225,6 +225,25 @@ final class CollectorModel: ObservableObject {
         return true
     }
 
+    /// The read-only setting check decides call-history coverage, so the owner is not asked a second question.
+    var settingCallHistoryPreparation: CallHistoryPreparation? {
+        switch backupEncryptionStatus {
+        case .encrypted: return .confirmedEncryptedBackup
+        case .unencrypted, .unknown: return .continueWithoutConfirmedCoverage
+        case .notChecked, .checking: return nil
+        }
+    }
+
+    /// One owner action records agreement for this run only and starts it. Apple's Trust prompt,
+    /// the existing backup password, browser sharing and account Save each still ask separately.
+    @discardableResult
+    func agreeAndStartCollection(for runID: UUID, checked: Bool) -> Bool {
+        guard approveLocalCollection(for: runID, checked: checked,
+                                     callHistoryPreparation: settingCallHistoryPreparation) else { return false }
+        connect()
+        return true
+    }
+
     func declineLocalCollection() {
         localCollectionApproval = nil
         collectionApprovalRunID = UUID()
@@ -364,6 +383,20 @@ final class CollectorModel: ObservableObject {
         return suggestionPageCursor + suggestionVisible.count < suggestionMatches[kind, default: []].count
     }
     var activeFlow: Bool { helperRunning || hasUnsavedReview }
+    /// A one-time link was requested and the helper has not answered yet.
+    var accountLinkPending: Bool { pairingRequested }
+    /// Agree · Collect · Choose · Share & report: 0...3 is the current step, 4 means every step finished.
+    /// Cancelling the read-only iPhone check happens before any agreement, so it stays on Agree.
+    var journeyStep: Int {
+        switch phase {
+        case .idle, .error: return hasUnsavedReview ? 2 : 0
+        case .cancelling: return backupSettingCheckInProgress ? 0 : 1
+        case .connecting, .transferring, .passwordRequired, .processing: return 1
+        case .selecting: return 2
+        case .reviewing, .completing: return 3
+        case .completed: return 4
+        }
+    }
     func unavailableDescription(_ category: String) -> String {
         let label = category == "calls" ? "Call history" : "Message history"
         guard missingSources.contains(category) else { return "" }
@@ -1128,7 +1161,7 @@ final class CollectorModel: ObservableObject {
 
     func accountNavigationFailed() {
         guard phase == .reviewing, !pairCode.isEmpty, !handoffID.isEmpty else { return }
-        errorMessage = "The account page did not open automatically. Your local review and one-use pairing remain available. Open AMPLIFai account in browser or copy the temporary code below."
+        errorMessage = "The account page did not open automatically. Your local review and one-time link remain available. Choose Open AMPLIFai account in browser, or copy the one-time code under Having trouble connecting?"
     }
 
     func decideAccountDestination(_ approved: Bool, request: DestinationApprovalRequest) {
@@ -1465,7 +1498,7 @@ final class CollectorModel: ObservableObject {
                       !handoffAcknowledged else { break }
                 resetHandoff()
                 errorMessage = ""
-                handoffNotice = "The old browser link is closed. Your local review is still here; change selected contacts, then Save and continue again."
+                handoffNotice = "The old browser link is closed. Your local review is still here. Change your selection, then choose Continue to account again."
             default: break
             }
         case "progress":
@@ -1726,7 +1759,7 @@ final class CollectorModel: ObservableObject {
                       event.handoffId.flatMap(UUID.init(uuidString:)) != nil else {
                     resetHandoff()
                     send(["action": "revoke"])
-                    errorMessage = "The one-use account connection was not ready. Your local review is intact; retry Save and continue or use the temporary code."
+                    errorMessage = "The one-time account link was not ready. Your local review is intact. Choose Continue to account to try again."
                     return
                 }
             }
@@ -1984,16 +2017,16 @@ final class CollectorModel: ObservableObject {
         case .processing:
             return "The helper is finishing metadata reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
         case .selecting:
-            return "\(totalContacts) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then review their matching metadata."
+            return "\(totalContacts) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then share them with your account."
         case .reviewing:
             if accountSaveAwaitingBrowserReceipt {
                 return "The Mac received the first bound account-save receipt. Keep this review open until the browser confirms the final receipt; an interrupted reply may need account readback."
             }
-            return browserReceived ? "A received preview is not the final account-save acknowledgment. Verify each source in the account and keep this review open until the matching final receipt arrives." : "Review the counts and observed dates. Creating a pairing only permits local transfer; cloud saving requires separate approval in your account."
+            return browserReceived ? "A received preview is not the final account-save acknowledgment. Verify each source in the account and keep this review open until the matching final receipt arrives." : "Review the counts and observed dates. A one-time link only permits a local transfer to your browser; saving needs separate approval in your account."
         case .completing:
             return "The matching browser run acknowledged its account save. This window stays open until the owned helper finishes safely."
         case .completed:
-            return "The matching save was acknowledged and the helper exited. Continue in the account browser to review your saved sources and results."
+            return "Your account confirmed the matching save, the local helper finished, and this Mac's private review copy was cleared. Your saved phone report is in your AMPLIFai account."
         case .cancelling:
             return "Wait for the owned helper to stop. If temporary phone data remains, inspect it here before reconnecting; cleanup never targets other backups."
         }
@@ -2005,8 +2038,8 @@ final class CollectorModel: ObservableObject {
         }
         switch lastErrorCode {
         case "backup_password": return ["Check the existing encrypted computer-backup password with its owner.", "Reconnect and enter it only in this companion. Do not reset encryption to bypass this step."]
-        case "backup_encryption_disabled": return ["No backup started. This iPhone reported local backup encryption off, despite your call-history choice.", "If Calls matter, choose Encrypt local backup for this iPhone in Finder and keep its password, then start a fresh collection. Finder may create its own full backup and needs Mac storage."]
-        case "backup_encryption_unknown": return ["No backup started because this companion could not confirm the iPhone's backup encryption setting.", "Check the setting in Finder, reconnect, and retry. You can instead explicitly choose to continue without confirmed call-history coverage."]
+        case "backup_encryption_disabled": return ["No backup started. This iPhone now reports local backup encryption off, although the earlier check reported it on.", "If Calls matter, choose Encrypt local backup for this iPhone in Finder and keep its password, then start a fresh collection. Finder may create its own full backup and needs Mac storage."]
+        case "backup_encryption_unknown": return ["No backup started because this companion could not confirm the iPhone's backup encryption setting.", "Check the setting in Finder, then choose Check iPhone again. You can instead choose Start without confirmed call history."]
         case "backup_encryption_changed": return ["The completed backup did not confirm encryption after the earlier preflight; no preview was admitted.", "Check the iPhone's current Finder backup setting, then start a new collection. Do not treat this run as saved data."]
         case "workspace_low_space": return ["Free space for retained source databases, their parsing copies and a further 2 GiB reserve on the temporary-storage volume.", "Keep other backups intact, then reconnect."]
         case "backup_host_space": return ["The iPhone refused the host-space answer before a verified backup completion. Check available space on the Mac's temporary-storage volume; do not delete other backups just to satisfy this app.", "If a normal Finder backup works on this Mac but collection repeats this code, share the safe reference with support before another long retry."]
@@ -2032,7 +2065,7 @@ final class CollectorModel: ObservableObject {
         case "trust_required": return "Unlock the iPhone and approve its Trust prompt, then try again."
         case "backup_password": return "The existing encrypted-backup password was not accepted. Check it and retry."
         case "backup_encryption_disabled": return "Collection stopped before backup: this iPhone reported local backup encryption off. Calls may be unavailable. Check Finder if Calls matter."
-        case "backup_encryption_unknown": return "Collection stopped before backup: the iPhone's backup encryption setting could not be confirmed. Check Finder, then retry or choose to continue without confirmed Calls coverage."
+        case "backup_encryption_unknown": return "Collection stopped before backup: the iPhone's backup encryption setting could not be confirmed. Check Finder, then check the iPhone again or choose Start without confirmed call history."
         case "backup_encryption_changed": return "The completed backup did not confirm encryption. No local preview or account save was made. Check Finder before a new collection."
         case "unsupported_schema": return "This iPhone backup format is not supported safely yet. No metadata was saved."
         case "backup_control_invalid": return "Required iPhone backup control metadata was missing or invalid. No metadata was saved."

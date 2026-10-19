@@ -95,11 +95,11 @@ struct ActiveCompanionWindow: NSViewRepresentable {
                     (manualRequestID != nil && manualRequestID != lastManualReviewRequestID),
                   window.attachedSheet == nil, NSApp.modalWindow == nil else { return }
             let alert = NSAlert()
-            alert.messageText = "Confirm the signed-in account destination"
-            alert.informativeText = "Account: \(current.email). Course: \(current.course). These details came from AMPLIFai's authenticated server. Connecting sends only the reviewed preview to this browser; each source still needs separate Save approval in the account."
-            alert.addButton(withTitle: "Connect to this account")
-            alert.addButton(withTitle: "Deny this connection")
-            alert.addButton(withTitle: "Keep for later")
+            alert.messageText = "Share your reviewed contacts with this account?"
+            alert.informativeText = "Account: \(current.email). Course: \(current.course). These details came from AMPLIFai's authenticated server. Sharing sends only the reviewed contacts and their call and message metadata to this browser. Nothing is saved until you approve Save for each source in the account."
+            alert.addButton(withTitle: "Share with this account")
+            alert.addButton(withTitle: "Not this account")
+            alert.addButton(withTitle: "Decide later")
             activeDestinationAlert = alert
             activeDestinationRequest = current
             lastPresentedDestinationID = current.attentionID

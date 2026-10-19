@@ -41,6 +41,8 @@ struct CollectorFlowChecks {
         try allGroupWorkspaceActions()
         try scopedSelectionAtScale()
         try reviewedAccountContinuation()
+        try singleAgreementStartGates()
+        try simplifiedJourneyEndToEnd()
         try staleDestinationEventsCannotClearApprovedRequest()
         try firstReceiptDuringReconnectKeepsOldBinding()
         try selectionChangeWaitsForSafeHelperRevocation()
@@ -705,6 +707,179 @@ struct CollectorFlowChecks {
         model.receive(try event(#"{"kind":"handoff","state":"expired","handoffId":"\#(handoff)"}"#))
         try require(model.accountNavigationID == nil && model.pairCode.isEmpty && model.selectedIDs == [3],
                     "Expiry must clear navigation and code while retaining the local unsaved review")
+    }
+
+    /// Agree step: one Start action still needs a finished read-only check, the owner's checkbox and this run.
+    private static func singleAgreementStartGates() throws {
+        let model = CollectorModel()
+        try require(model.settingCallHistoryPreparation == nil &&
+                    !model.agreeAndStartCollection(for: model.collectionApprovalRunID, checked: true) &&
+                    model.localCollectionApproval == nil && model.phase == .idle && model.collectionStartedAt == nil,
+                    "Start must wait for the read-only iPhone check")
+        try require(model.beginBackupEncryptionStatusCheck(), "The iPhone check must begin")
+        try require(model.settingCallHistoryPreparation == nil &&
+                    !model.agreeAndStartCollection(for: model.collectionApprovalRunID, checked: true) &&
+                    model.collectionStartedAt == nil,
+                    "A pending check cannot start collection")
+        model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
+        try require(model.settingCallHistoryPreparation == .confirmedEncryptedBackup,
+                    "Encryption On selects encrypted call coverage without a second question")
+        try require(!model.agreeAndStartCollection(for: UUID(), checked: true) && model.localCollectionApproval == nil &&
+                    model.collectionStartedAt == nil,
+                    "An unrelated run cannot start")
+        let run = model.collectionApprovalRunID
+        try require(!model.agreeAndStartCollection(for: run, checked: false) && model.localCollectionApproval == nil &&
+                    model.collectionApprovalRunID != run && model.backupEncryptionStatus == .notChecked &&
+                    model.collectionStartedAt == nil,
+                    "An unchecked agreement declines and requires a fresh check")
+        try require(model.beginBackupEncryptionStatusCheck(), "A fresh run must check again")
+        model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#))
+        try require(model.settingCallHistoryPreparation == .continueWithoutConfirmedCoverage,
+                    "Encryption Off reads available data only")
+        model.declineLocalCollection()
+        try require(model.beginBackupEncryptionStatusCheck(), "Another fresh run must check again")
+        model.receive(try event(#"{"kind":"error","code":"phone_connection"}"#))
+        try require(model.backupEncryptionStatus == .unknown &&
+                    model.settingCallHistoryPreparation == .continueWithoutConfirmedCoverage,
+                    "An unconfirmed setting can only start without confirmed call history")
+        try require(model.pairCode.isEmpty && !model.handoffAcknowledged && model.accountNavigationID == nil,
+                    "Collection agreement cannot pair a browser, navigate or save")
+        try require(model.journeyStep == 0, "Checking the iPhone is still the Agree step")
+        let stepping = CollectorModel()
+        for (phase, step) in [(CollectorModel.Phase.connecting, 1), (.transferring, 1), (.passwordRequired, 1),
+                              (.processing, 1), (.cancelling, 1), (.selecting, 2), (.reviewing, 3),
+                              (.completing, 3), (.completed, 4), (.error, 0), (.idle, 0)] {
+            stepping.phase = phase
+            try require(stepping.journeyStep == step, "Journey step for \(phase) must be \(step)")
+        }
+    }
+
+    /// Synthetic Choose → Share → saved-report path, plus cancellation and recovery, with no helper or browser.
+    private static func simplifiedJourneyEndToEnd() throws {
+        let total = 450
+        // Contacts 401...450 have no supported phone number, so they start in Review.
+        let rows = (1...total).map { id -> String in
+            #"{"id":\#(id),"name":"Synthetic Person \#(id)","phoneCount":\#(id > 400 ? 0 : 1),"phoneEnds":[\#(id > 400 ? "" : #""0000""#)]}"#
+        }
+        func loaded(_ model: CollectorModel, lastCommand: () -> Data?) throws {
+            model.receive(try event(#"{"kind":"capture","query":"","cursor":0,"totalContacts":\#(total),"nextCursor":200,"contacts":[\#(rows.prefix(200).joined(separator: ","))]}"#))
+            model.prepareWorkspace()
+            let scan = try JSONSerialization.jsonObject(with: lastCommand()!) as! [String: Any]
+            let scanID = scan["scanId"] as! String
+            for cursor in stride(from: 0, to: total, by: 200) {
+                let end = min(cursor + 200, total)
+                let next = end == total ? "null" : String(end)
+                model.receive(try event(#"{"kind":"contacts","scanId":"\#(scanID)","query":"","cursor":\#(cursor),"totalContacts":\#(total),"nextCursor":\#(next),"contacts":[\#(rows[cursor..<end].joined(separator: ","))]}"#))
+            }
+        }
+        var commands: [Data] = []
+        let model = CollectorModel(commandWriter: { commands.append($0) })
+        try loaded(model) { commands.last }
+        guard let workspace = model.workspace else { throw Failure.check("The synthetic workspace must build") }
+        try require(workspace.mainCount == 400 && workspace.reviewCount == 50 && model.selectedIDs == workspace.mainIDs,
+                    "Choose opens with the 400 Main contacts selected and 50 Review contacts waiting")
+        try require(model.journeyStep == 2, "Choose is the current step once contacts are ready")
+
+        // Select all, individual exceptions, then a partial scope.
+        model.selectAllVerifiedContacts()
+        try require(model.selectedIDs.count == total, "Include all covers every page")
+        model.toggle(2)
+        model.toggle(450)
+        try require(model.selectedIDs.count == total - 2 && !model.selectedIDs.contains(2) && !model.selectedIDs.contains(450),
+                    "Individual exceptions remove only those contacts")
+        model.showContactGroup(.review)
+        model.clearScopedContacts()
+        try require(model.selectedIDs.count == 399 && model.selectedReviewCount == 0 && model.selectedScopedCount == 0,
+                    "Deselect all in Review removes only the Review scope")
+        model.showContactGroup(.main)
+        model.markContactForGroupMove(5)
+        try require(model.markedGroupMoveIDs == [5] && model.selectedIDs.contains(5) && model.selectedIDs.count == 399,
+                    "A move mark is not an inclusion choice")
+        model.clearGroupMoveMarks()
+
+        // Share: the reviewed selection pairs once, then account navigation is requested.
+        let shared = model.selectedIDs.sorted()
+        model.reviewWorkspace(continueToAccount: true)
+        let reviewID = try emittedReviewID(commands)
+        for cursor in stride(from: 0, to: shared.count, by: 1000) {
+            model.receive(try event(#"{"kind":"review-page","reviewId":"\#(reviewID)","nextCursor":\#(min(cursor + 1000, shared.count))}"#))
+        }
+        try require(model.accountNavigationID == nil, "Nothing opens before the local review is confirmed")
+        model.receive(try event(#"{"kind":"review","reviewId":"\#(reviewID)","selected_contacts":\#(shared.count),"selectionSha256":"\#(CollectorModel.selectionDigest(shared))","matched_calls":12,"matched_messages":34}"#))
+        try require(model.phase == .reviewing && model.matchedCalls == 12 && model.matchedMessages == 34,
+                    "The local review summary keeps its matching call and message counts")
+        let pair = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
+        try require(pair["action"] as? String == "pair", "Share requests one one-time link after review")
+        let handoff = "00000000-0000-4000-8000-0000000000aa"
+        let intent = "00000000-0000-4000-8000-0000000000bb"
+        model.receive(try event(#"{"kind":"pairing","pairCode":"1234567890","port":48751,"expiresInSeconds":300,"handoffId":"\#(handoff)"}"#))
+        try require(model.accountNavigationID != nil && !model.canEditWorkspace && !model.handoffAcknowledged,
+                    "A valid one-time link opens the account and locks the selection, without saving")
+        let beforeDestination = commands.count
+        model.receive(try event(#"{"kind":"destination","state":"pending","handoffId":"\#(handoff)","intentId":"\#(intent)","email":"synthetic@example.invalid","course":"Synthetic course"}"#))
+        guard let destination = model.pendingDestinationApproval else {
+            throw Failure.check("The account and course must wait for confirmation on this Mac")
+        }
+        try require(commands.count == beforeDestination && !model.destinationApproved,
+                    "No destination decision is sent without the owner")
+        model.decideAccountDestination(true, request: destination)
+        let decision = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
+        try require(decision["action"] as? String == "destination-decision" && decision["approved"] as? Bool == true,
+                    "Only the owner's confirmation approves the destination")
+        model.receive(try event(#"{"kind":"destination","state":"approved","handoffId":"\#(handoff)","intentId":"\#(intent)"}"#))
+        model.receive(try event(#"{"kind":"handoff","state":"saved_pending_browser_receipt","handoffId":"\#(handoff)"}"#))
+        try require(model.accountSaveAwaitingBrowserReceipt && !model.handoffAcknowledged && model.phase == .reviewing,
+                    "A first save receipt still waits for the browser's final receipt")
+        try require(model.journeyStep == 3, "Share & report is the current step until the save is confirmed")
+        model.receive(try event(#"{"kind":"handoff","state":"saved","handoffId":"\#(handoff)"}"#))
+        try require(model.handoffAcknowledged && model.phase == .completing,
+                    "The matching final receipt finishes the run")
+        model.finished(mode: "connect", code: 0)
+        try require(model.phase == .completed && model.contacts.isEmpty && model.selectedIDs.isEmpty &&
+                    model.statusTitle == "Saved in your account" && model.statusDetail.contains("saved phone report"),
+                    "Completion clears the private review and points to the saved report")
+        try require(model.journeyStep == 4, "Every step shows finished only after the confirmed save")
+
+        // Cancellation: discarding during Choose clears the private review.
+        var cancelCommands: [Data] = []
+        let cancelled = CollectorModel(commandWriter: { cancelCommands.append($0) })
+        try loaded(cancelled) { cancelCommands.last }
+        cancelled.disconnect()
+        try require(cancelled.phase == .idle && cancelled.selectedIDs.isEmpty && cancelled.contacts.isEmpty &&
+                    !cancelled.hasUnsavedReview,
+                    "Discarding during Choose clears the local review")
+
+        // Recovery: a revoked link keeps the review and names the current Share action.
+        var recoveryCommands: [Data] = []
+        let recovery = CollectorModel(commandWriter: { recoveryCommands.append($0) })
+        try loaded(recovery) { recoveryCommands.last }
+        let kept = recovery.selectedIDs.sorted()
+        recovery.reviewWorkspace(continueToAccount: false)
+        let recoveryReviewID = try emittedReviewID(recoveryCommands)
+        recovery.receive(try event(#"{"kind":"review-page","reviewId":"\#(recoveryReviewID)","nextCursor":\#(kept.count)}"#))
+        recovery.receive(try event(#"{"kind":"review","reviewId":"\#(recoveryReviewID)","selected_contacts":\#(kept.count),"selectionSha256":"\#(CollectorModel.selectionDigest(kept))"}"#))
+        recovery.pairBrowser()
+        recovery.receive(try event(#"{"kind":"pairing","pairCode":"1234567890","port":48751,"expiresInSeconds":300,"handoffId":"\#(handoff)"}"#))
+        recovery.requestSelectionChange()
+        recovery.receive(try event(#"{"kind":"state","state":"pairing_revoked"}"#))
+        try require(recovery.handoffID.isEmpty && recovery.selectedIDs == Set(kept) &&
+                    recovery.handoffNotice.contains("Continue to account") && !recovery.handoffNotice.contains("Save and continue"),
+                    "A revoked link keeps the review and names the current Share action, not stale wording")
+        recovery.reviewWorkspace(continueToAccount: true)
+        let retryID = try emittedReviewID(recoveryCommands)
+        recovery.receive(try event(#"{"kind":"review-page","reviewId":"\#(retryID)","nextCursor":\#(kept.count)}"#))
+        recovery.receive(try event(#"{"kind":"review","reviewId":"\#(retryID)","selected_contacts":\#(kept.count),"selectionSha256":"\#(CollectorModel.selectionDigest(kept))"}"#))
+        recovery.receive(try event(#"{"kind":"pairing","pairCode":"bad","port":48751,"expiresInSeconds":300,"handoffId":"\#(handoff)"}"#))
+        try require(recovery.errorMessage.contains("Continue to account") && !recovery.errorMessage.contains("Save and continue") &&
+                    recovery.selectedIDs == Set(kept) && recovery.accountNavigationID == nil && !recovery.accountLinkPending,
+                    "A failed automatic link keeps the review and names the current recovery action")
+        // The share panel's Continue to account retries the same one-time link and navigation path.
+        recovery.pairBrowser(automaticAccountNavigation: true)
+        try require(recovery.accountLinkPending, "Continue to account requests one new link")
+        recovery.receive(try event(#"{"kind":"pairing","pairCode":"1234567890","port":48751,"expiresInSeconds":300,"handoffId":"\#(handoff)"}"#))
+        try require(!recovery.accountLinkPending && recovery.accountNavigationID != nil && recovery.handoffID == handoff &&
+                    !recovery.handoffAcknowledged && recovery.pendingDestinationApproval == nil,
+                    "A retried link opens the account but still needs the account confirmation on this Mac")
     }
 
     private static func staleDestinationEventsCannotClearApprovedRequest() throws {

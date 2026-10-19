@@ -120,16 +120,26 @@ struct ContactReviewView: View {
         .overlay(Capsule().stroke(Brand.border, lineWidth: 1))
     }
 
+    /// Visible scope for bulk buttons, e.g. "Main" or "“Priya” in All"; actions cover every page of it.
+    private var scopeName: String {
+        workspace.query.isEmpty ? workspace.group.rawValue : "“\(workspace.query)” in \(workspace.group.rawValue)"
+    }
+
+    /// All with no search is the same scope as Include all, so only explicit groups and searches get scoped actions.
     @ViewBuilder private var scopeActions: some View {
-        Button("Select all \(workspace.filteredCount.formatted())") { model.selectScopedContacts() }
+        if workspace.isScoped { scopedSelectionActions }
+    }
+
+    @ViewBuilder private var scopedSelectionActions: some View {
+        Button("Select all \(workspace.filteredCount.formatted()) in \(scopeName)") { model.selectScopedContacts() }
             .buttonStyle(QuietAction())
             .disabled(!model.canSelectScopedContacts)
             .accessibilityLabel("Select all \(workspace.filteredCount) contacts in \(workspace.scopeLabel)")
-        Button("Deselect all") { model.clearScopedContacts() }
+        Button("Deselect all in \(scopeName)") { model.clearScopedContacts() }
             .buttonStyle(QuietAction())
             .disabled(!model.canClearScopedContacts)
             .accessibilityLabel("Deselect all contacts in \(workspace.scopeLabel)")
-        Text("\(model.selectedScopedCount.formatted()) of \(workspace.filteredCount.formatted()) selected")
+        Text("\(model.selectedScopedCount.formatted()) of \(workspace.filteredCount.formatted()) selected in \(scopeName)")
             .font(Brand.bodyFont(13))
             .foregroundStyle(Brand.muted)
             .monospacedDigit()
@@ -182,7 +192,7 @@ struct ContactReviewView: View {
     }
 
     private var organizingToggle: some View {
-        Button("\(showingGroupTools ? "Hide organizing" : "Organize groups") · \(model.markedGroupMoveIDs.count) marked") {
+        Button("\(showingGroupTools ? "Hide organizing" : "Organize Main and Review") · \(model.markedGroupMoveIDs.count) marked to move") {
             showingGroupTools.toggle()
         }
         .buttonStyle(QuietAction())
@@ -190,7 +200,7 @@ struct ContactReviewView: View {
 
     private var organizingTools: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Marks are for moving groups, not selecting contacts to save. Moving to Review clears their selection; Undo restores it.")
+            Text("Move marks (flag icons) organize Main and Review. They do not include or exclude anyone; only the checkboxes do. Moving contacts to Review removes them from the selection; Undo restores it.")
                 .font(Brand.bodyFont(13))
                 .foregroundStyle(Brand.muted)
             if workspace.group == .all {
@@ -216,14 +226,14 @@ struct ContactReviewView: View {
             if model.beginBulkMove(to: destination) { confirmingBulkMove = true }
         }
         .buttonStyle(SecondaryButton()).disabled(!model.canEditWorkspace)
-        Button("Mark all \(workspace.filteredCount) matches") { model.markAllMatchingForGroupMove() }
+        Button("Mark all \(workspace.filteredCount) to move") { model.markAllMatchingForGroupMove() }
             .buttonStyle(SecondaryButton()).disabled(!model.canEditWorkspace)
         Button("Move \(model.markedGroupMoveIDs.count) marked to \(destination.rawValue)") {
             if model.beginMarkedBulkMove(to: destination) { confirmingBulkMove = true }
         }
         .buttonStyle(SecondaryButton()).disabled(!model.canEditWorkspace || model.markedGroupMoveIDs.isEmpty)
         if !model.markedGroupMoveIDs.isEmpty {
-            Button("Clear group marks") { model.clearGroupMoveMarks() }.buttonStyle(QuietAction())
+            Button("Clear move marks") { model.clearGroupMoveMarks() }.buttonStyle(QuietAction())
         }
     }
 }
@@ -268,14 +278,13 @@ private struct ContactReviewCard: View {
                 .popover(isPresented: $showingSourceDetails) { sourceDetails }
             }
             if organizing && workspace.group != .all {
-                Toggle("Mark for group move", isOn: Binding(
+                Toggle(model.markedGroupMoveIDs.contains(contact.id) ? "Marked to move" : "Mark to move", isOn: Binding(
                     get: { model.markedGroupMoveIDs.contains(contact.id) },
                     set: { _ in model.markContactForGroupMove(contact.id) }
                 ))
-                .toggleStyle(BrandCheckbox())
-                .font(Brand.bodyFont(13))
+                .toggleStyle(MoveMarkToggle())
                 .disabled(!model.canEditWorkspace)
-                .accessibilityLabel("Mark \(displayName) for group move")
+                .accessibilityLabel("Mark \(displayName) to move between Main and Review")
             }
         }
         .brandRaisedCard(selected: model.selectedIDs.contains(contact.id))

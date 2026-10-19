@@ -11,8 +11,9 @@ struct RenderMacReviewAcceptance {
         NSApplication.shared.setActivationPolicy(.prohibited)
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change"]
-        let allStates = ["main", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["setup", "consent", "password", "error", "completed", "no-selection", "unavailable", "connecting", "transferring", "processing", "completing", "cancelling"]
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "selection-change", "recovery-revoked", "link-failed"]
+        let setupStates = ["setup", "consent", "agree-checking", "agree-on", "agree-off", "agree-unknown", "password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
         guard !states.isEmpty, states.allSatisfy({ allStates.contains($0) }) else { throw CocoaError(.validationMissingMandatoryProperty) }
@@ -21,7 +22,7 @@ struct RenderMacReviewAcceptance {
             let model = CollectorModel(commandWriter: { commands.append($0) })
             let updater = CompanionUpdater(bundleInformation: [:])
             let start = Date()
-            if !["setup", "consent", "password", "error", "completed", "connecting", "transferring", "processing", "completing", "cancelling"].contains(state) {
+            if !setupStates.contains(state) {
                 let names = ["Priya Natarajan", "Marcus Bell", "Elena Fischer", "Sam Okafor", "Dana Whitfield", "Lin Zhao", "Omar Haddad", "Noor Khalil", "Grace Liu", "Tomás Rivera", "Aisha Bello", "Ruth Abara"]
                 let total = 5501
                 let rows: [[String: Any]] = (1...total).map { id in
@@ -40,6 +41,7 @@ struct RenderMacReviewAcceptance {
                                  "totalContacts": total, "nextCursor": end == total ? NSNull() : end, "contacts": Array(rows[cursor..<end])])
                 }
                 model.phase = .selecting
+                if state == "all-selected" { model.selectAllVerifiedContacts() }
                 if state == "all-exceptions" { model.showContactGroup(.all); model.selectAllVerifiedContacts(); model.toggle(7); model.toggle(total) }
                 if state == "review" { model.showContactGroup(.review) }
                 if state == "last-page" { model.showContactGroup(.all); for _ in 0..<27 { model.nextWorkspacePage() } }
@@ -78,7 +80,16 @@ struct RenderMacReviewAcceptance {
                               model.selectedIDs == Set(selected), model.handoffID.isEmpty else {
                             throw FixtureError.unexpectedState("\(state): exact local review was not accepted")
                         }
-                        if state != "local-review" {
+                        if state == "link-failed" {
+                            // Automatic account link failure keeps the review and names the recovery action.
+                            model.pairBrowser(automaticAccountNavigation: true)
+                            try receive(["kind": "pairing", "pairCode": "invalid", "port": 48751, "expiresInSeconds": 300,
+                                         "handoffId": "00000000-0000-4000-8000-0000000000aa"])
+                            guard model.errorMessage.contains("Continue to account"), model.accountNavigationID == nil else {
+                                throw FixtureError.unexpectedState("link-failed: recovery copy missing")
+                            }
+                        }
+                        if state != "local-review" && state != "link-failed" {
                             let handoffID = "00000000-0000-4000-8000-0000000000aa"
                             let intentID = "00000000-0000-4000-8000-0000000000bb"
                             model.pairBrowser(automaticAccountNavigation: false)
@@ -100,6 +111,14 @@ struct RenderMacReviewAcceptance {
                                     throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
                                 }
                             }
+                            if state == "recovery-revoked" {
+                                model.requestSelectionChange()
+                                try receive(["kind": "state", "state": "pairing_revoked"])
+                                guard model.handoffID.isEmpty, model.handoffNotice.contains("Continue to account"),
+                                      model.selectedIDs == Set(selected) else {
+                                    throw FixtureError.unexpectedState("recovery-revoked: review must survive a revoked link")
+                                }
+                            }
                             if state == "selection-change" {
                                 model.requestSelectionChange()
                                 guard model.selectionChangePending, !model.canEditWorkspace,
@@ -115,6 +134,12 @@ struct RenderMacReviewAcceptance {
             else if state == "completed" { model.phase = .completed }
             else if state == "connecting" { model.phase = .connecting }
             else if state == "transferring" { model.phase = .transferring }
+            else if state == "transferring-progress" {
+                model.phase = .connecting
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"progress","value":42}"#.utf8)))
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"transfer","stage":"backup","receivedBytes":2147483648,"retainedBytes":402653184,"discardedBytes":1744830464,"filesReceived":812,"bytesPerSecond":31457280,"elapsedSeconds":68}"#.utf8)))
+            }
+            else if state == "agree-checking" { _ = model.beginBackupEncryptionStatusCheck() }
             else if state == "processing" { model.phase = .processing }
             else if state == "completing" { model.phase = .completing }
             else if state == "cancelling" { model.phase = .cancelling }
@@ -128,12 +153,14 @@ struct RenderMacReviewAcceptance {
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
             timings[state] = Date().timeIntervalSince(start)
             for (width, height) in viewports {
-                if state == "consent" {
+                if ["consent", "agree-on", "agree-off", "agree-unknown"].contains(state) {
                     guard model.beginBackupEncryptionStatusCheck() else { throw FixtureError.unexpectedState("Synthetic setting check did not begin") }
-                    model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
+                    let reading = state == "agree-unknown" ? #"{"kind":"error","code":"phone_connection"}"#
+                        : #"{"kind":"backup-encryption-status","backupEncrypted":\#(state == "agree-on")}"#
+                    model.receive(try AgentEvent.decode(Data(reading.utf8)))
                 }
                 try render(ContentView(model: model, updater: updater,
-                           initialCollectionPreparation: state == "consent" ? .continueWithoutConfirmedCoverage : nil), width: width, height: height,
+                           initialCollectionAgreement: ["consent", "agree-on"].contains(state)), width: width, height: height,
                            path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
                     try render(ContactReviewView(model: model, workspace: workspace, wellHeight: 322,
@@ -145,6 +172,10 @@ struct RenderMacReviewAcceptance {
             if ["local-review", "handoff", "save-receipt"].contains(state) {
                 try render(ContentView(model: model, updater: updater), width: 1440, height: 2400,
                            path: output.appendingPathComponent("mac-\(state)-overview-1440x2400.png"))
+            }
+            if ["consent", "agree-on", "agree-off", "agree-unknown", "completed", "error", "recovery-revoked", "link-failed"].contains(state) {
+                try render(ContentView(model: model, updater: updater, initialCollectionAgreement: ["consent", "agree-on"].contains(state)),
+                           width: 1180, height: 1500, path: output.appendingPathComponent("mac-\(state)-tall-1180x1500.png"))
             }
         }
         let receipt: [String: Any] = ["renderer": "offscreen NSHostingView bitmap of production views", "contacts": 5501,
@@ -160,7 +191,14 @@ struct RenderMacReviewAcceptance {
 
     private static func render<V: View>(_ view: V, width: Int, height: Int, path: URL) throws {
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark)
-            .frame(width: CGFloat(width), height: CGFloat(height)))
+            .frame(width: CGFloat(width), height: CGFloat(height))
+            .overlay(alignment: .bottomLeading) {
+                // Every image is labeled so a synthetic state cannot be mistaken for a real device or account.
+                Text("SYNTHETIC FIXTURE · no iPhone, helper or account")
+                    .font(.system(size: 11, weight: .bold)).foregroundStyle(.black)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.yellow, in: Capsule()).padding(8)
+            })
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { throw CocoaError(.coderInvalidValue) }
