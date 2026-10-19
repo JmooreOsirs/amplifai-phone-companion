@@ -144,7 +144,7 @@ struct CollectorModelChecks {
         try require(receipt.runID == run && receipt.disclosureVersion == CollectorModel.collectionDisclosureVersion &&
                     receipt.disclosureVersion == "native-run-v1", "Approval must bind the current local run and the run disclosure")
         try require(receipt.serverRunID == server.runID && receipt.serverApprovalID == server.claim.approvalID &&
-                    receipt.serverDisclosureVersion == "phone-run-v1" && receipt.serverRunID != run.uuidString.lowercased(),
+                    receipt.serverDisclosureVersion == "phone-run-v2" && receipt.serverRunID != run.uuidString.lowercased(),
                     "The local approval records the distinct server run and its disclosure")
         try require(receipt.approvedAt >= before && receipt.approvedAt <= Date(), "Approval timestamp must be action time")
         try require(receipt.scopes == ["contacts", "call-context", "message-context", "temporary-full-backup", "sanitized-failure-diagnostic"], "Local approval scopes must describe collection and its bounded automatic failure report")
@@ -156,6 +156,7 @@ struct CollectorModelChecks {
     private static func observeBackupSetting(_ model: CollectorModel, encrypted: Bool) throws {
         try require(model.beginBackupEncryptionStatusCheck(), "A fresh owner action must begin the read-only setting check")
         model.receive(try event("{\"kind\":\"backup-encryption-status\",\"backupEncrypted\":\(encrypted)}"))
+        model.refreshRunStatus()
     }
 
     private static func checkedBackupSettingGatesCallCoverageChoice() throws {
@@ -171,6 +172,7 @@ struct CollectorModelChecks {
                     "A pending check cannot be treated as known coverage")
         model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#))
         try require(model.backupEncryptionStatus == .unencrypted, "Literal false must be shown as encryption off")
+        model.refreshRunStatus()
         try require(!model.composeRunCollectionApproval(callHistoryPreparation: .confirmedEncryptedBackup),
                     "A false phone setting cannot authorize encrypted-call collection")
         try require(model.composeRunCollectionApproval(callHistoryPreparation: .continueWithoutConfirmedCoverage),
@@ -362,7 +364,7 @@ struct CollectorModelChecks {
         model.connect()
         try require(!model.helperRunning && model.collectionStartedAt == started, "A fresh retry cannot capture without another approval")
 
-        // One Start action checks the iPhone with the real helper path, replays the claim and launches exactly that run.
+        // One Start checks the iPhone with the real helper path, revalidates status and launches exactly that run.
         let (single, singleServer) = try approvedModel()
         try require(single.startCollection(), "Start collection runs the read-only check")
         let checkDeadline = Date().addingTimeInterval(3)
@@ -371,8 +373,8 @@ struct CollectorModelChecks {
         }
         let singleRun = single.operationID
         try require(single.helperRunning && single.phase == .connecting && single.journeyStep == 1 &&
-                    singleServer.claimCount == 2 && single.phoneRun?.collectionStarted == true,
-                    "After the check and the exact claim replay, one Start launches the run and moves to Collect")
+                    singleServer.claimCount == 1 && singleServer.statusCount == 1 && single.phoneRun?.collectionStarted == true,
+                    "After the check and current capability status, one Start launches the run and moves to Collect")
         try require(single.localCollectionApproval == nil && single.collectionApprovalRunID != singleRun,
                     "Starting consumes the one-run approval; nothing authorizes a later transfer")
         single.disconnect()
@@ -381,6 +383,27 @@ struct CollectorModelChecks {
         try require(!single.helperRunning, "The synthetic collection helper must stop on Cancel")
         try require(!single.startCollection() && !single.helperRunning && single.phoneRun == nil,
                     "A consumed run cannot start another collection")
+
+        // Actual Process lifecycle with the in-process authority: periodic status revocation stops the owned
+        // synthetic helper, without a phone, account request, or a new collection permission.
+        let (polled, pollingServer) = try approvedModel()
+        polled.runStatusPollNanoseconds = 20_000_000
+        try require(polled.startCollection(), "Polling fixture starts with verified authority")
+        let pollStartDeadline = Date().addingTimeInterval(3)
+        while polled.phoneRun?.collectionStarted != true && Date() < pollStartDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard let polledRun = polled.phoneRun?.runID else {
+            throw RecoveryCheckError.failed("Synthetic polling collection did not start")
+        }
+        pollingServer.revoke(polledRun)
+        let revokeDeadline = Date().addingTimeInterval(3)
+        while (polled.phoneRun != nil || polled.helperRunning) && Date() < revokeDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try require(pollingServer.statusCount >= 2 && polled.phoneRun == nil && !polled.helperRunning &&
+                    polled.runStatus == .revoked && !polled.startCollection(),
+                    "Periodic current-status polling terminates the owned helper on explicit revocation")
     }
 
     private static func storageReasons() throws {

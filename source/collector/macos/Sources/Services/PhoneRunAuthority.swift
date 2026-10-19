@@ -17,11 +17,19 @@ import Security
 enum PhoneRunContract {
     static let host = "amplifai-database-engine.vercel.app"
     static let claimPath = "/api/v1/phone-run-approvals/claim"
+    static let statusPath = "/api/v1/phone-run-approvals/status"
     static let bindPath = "/api/v1/phone-run-approvals/bind"
     static let verifyIntentPath = "/api/v1/phone-run-approvals/verify-intent"
-    static let paths: Set<String> = [claimPath, bindPath, verifyIntentPath]
+    static let paths: Set<String> = [claimPath, statusPath, bindPath, verifyIntentPath]
     /// The website's combined collection-and-save disclosure. Older collection-only receipts never stand in for it.
-    static let disclosureVersion = "phone-run-v1"
+    static let disclosureVersion = "phone-run-v2"
+    static let supportedDisclosureVersions: Set<String> = ["phone-run-v1", "phone-run-v2"]
+    static func privacyURL(disclosureVersion: String) -> URL? {
+        // v1 shipped against the immutable v6 account notice; never relabel that receipt as v2/v7.
+        guard supportedDisclosureVersions.contains(disclosureVersion) else { return nil }
+        let policy = disclosureVersion == "phone-run-v1" ? "account-2026-10-v6" : "account-2026-10-v7"
+        return URL(string: "https://amplifai.satoris.ai/experience/account-privacy?version=\(policy)#phone-collection-and-saving")
+    }
     static let categories = ["contacts", "calls", "messages"]
     static let maximumResponseBytes = 2048
     static let maximumRequestBytes = 1024
@@ -84,18 +92,38 @@ enum PhoneRunContract {
         return object
     }
 
-    static func claim(_ body: Data?) -> PhoneRunClaim? {
-        guard let object = object(body, keys: ["approvalId", "enrollmentId", "destinationEmail", "destinationCourse",
-                                               "categories", "disclosureVersion", "expiresAt"]),
-              let approval = object["approvalId"] as? String, isID(approval),
+    private static let claimKeys: Set<String> = ["approvalId", "enrollmentId", "destinationEmail", "destinationCourse",
+                                                  "categories", "disclosureVersion", "expiresAt"]
+
+    private static func claimFields(_ object: [String: Any], startRequired: Bool) -> PhoneRunClaim? {
+        guard let approval = object["approvalId"] as? String, isID(approval),
               let enrollment = object["enrollmentId"] as? String, isID(enrollment),
               let email = object["destinationEmail"] as? String, isEmail(email),
               let course = object["destinationCourse"] as? String, isCourse(course),
               let categories = categories(object["categories"]),
-              object["disclosureVersion"] as? String == disclosureVersion,
+              let version = object["disclosureVersion"] as? String, supportedDisclosureVersions.contains(version),
               let expiresAt = date(object["expiresAt"]) else { return nil }
+        let start = date(object["startExpiresAt"])
+        guard (!startRequired || start != nil), start.map({ $0 <= expiresAt }) ?? true else { return nil }
         return PhoneRunClaim(approvalID: approval, enrollmentID: enrollment, email: email, course: course,
-                             categories: categories, disclosureVersion: disclosureVersion, expiresAt: expiresAt)
+                             categories: categories, disclosureVersion: version, expiresAt: expiresAt,
+                             startExpiresAt: start)
+    }
+
+    static func claim(_ body: Data?) -> PhoneRunClaim? {
+        if let fields = object(body, keys: claimKeys), fields["disclosureVersion"] as? String == "phone-run-v1" {
+            return claimFields(fields, startRequired: false)
+        }
+        guard let fields = object(body, keys: claimKeys.union(["startExpiresAt"])),
+              fields["disclosureVersion"] as? String == "phone-run-v2" else { return nil }
+        return claimFields(fields, startRequired: true)
+    }
+
+    static func status(_ body: Data?) -> PhoneRunStatus? {
+        guard let fields = object(body, keys: claimKeys.union(["startExpiresAt", "state"])),
+              let stateName = fields["state"] as? String, let state = PhoneRunStatus.State(rawValue: stateName),
+              let claim = claimFields(fields, startRequired: true) else { return nil }
+        return PhoneRunStatus(claim: claim, state: state)
     }
 
     static func destination(_ body: Data?) -> PhoneRunDestination? {
@@ -124,6 +152,24 @@ struct PhoneRunClaim: Equatable {
     let categories: [String]
     let disclosureVersion: String
     let expiresAt: Date
+    let startExpiresAt: Date?
+}
+
+struct PhoneRunStatus: Equatable {
+    enum State: String { case current, replacementRequired = "replacement_required", expired, revoked }
+    let claim: PhoneRunClaim
+    let state: State
+}
+
+struct PhoneRunStatusRequest: Equatable {
+    let runID: String
+    let body: Data
+    init?(runID: String, capability: String) {
+        guard PhoneRunContract.isID(runID), PhoneRunContract.isCapability(capability),
+              let body = PhoneRunContract.body(["runId": runID, "capability": capability]) else { return nil }
+        self.runID = runID
+        self.body = body
+    }
 }
 
 /// What bind and verify-intent return: the account, course and categories the run currently saves to.
@@ -213,6 +259,7 @@ enum PhoneRunTransportResult: Equatable {
 /// The injectable run authority the model uses. Production: `PhoneRunAuthorityClient.production()`.
 @MainActor protocol RunAuthority: AnyObject {
     func claim(_ request: PhoneRunClaimRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void)
+    func status(_ request: PhoneRunStatusRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunStatus>) -> Void)
     func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void)
     func verifyIntent(_ request: PhoneRunVerifyRequest,
                       completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void)
@@ -245,6 +292,10 @@ enum PhoneRunTransportResult: Equatable {
 
     func claim(_ request: PhoneRunClaimRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void) {
         send(PhoneRunContract.claimPath, request.body, parse: PhoneRunContract.claim, attempt: 1, completion: completion)
+    }
+
+    func status(_ request: PhoneRunStatusRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunStatus>) -> Void) {
+        send(PhoneRunContract.statusPath, request.body, parse: PhoneRunContract.status, attempt: 1, completion: completion)
     }
 
     func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void) {

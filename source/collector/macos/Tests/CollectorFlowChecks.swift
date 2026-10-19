@@ -796,9 +796,9 @@ struct CollectorFlowChecks {
         let beforeDestination = commands.count
         model.receive(try event(#"{"kind":"destination","state":"pending","handoffId":"\#(handoff)","intentId":"\#(intent)","email":"\#(PhoneRunFlowChecks.email)","course":"\#(PhoneRunFlowChecks.course)"}"#))
         let decision = try JSONSerialization.jsonObject(with: commands.last!) as! [String: Any]
-        try require(commands.count == beforeDestination + 1 && decision["action"] as? String == "destination-decision" &&
+        try require(commands.count == beforeDestination + 3 && decision["action"] as? String == "destination-decision" &&
                     decision["approved"] as? Bool == true && server.verifyCount == 1,
-                    "The verified destination is approved automatically, once")
+                    "Fresh authority pauses/resumes the same bridge and approves the verified destination once")
         model.receive(try event(#"{"kind":"destination","state":"approved","handoffId":"\#(handoff)","intentId":"\#(intent)"}"#))
         try require(model.destinationApproved && !model.destinationDecisionPending && model.browserHandoffReady,
                     "The helper's acknowledgement keeps the website in charge")

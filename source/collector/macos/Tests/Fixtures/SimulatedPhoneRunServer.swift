@@ -11,6 +11,7 @@ import Foundation
         let bootstrap: String
         let email: String
         let enrollmentID: String
+        let disclosureVersion: String
         var course: String
         var categories: [String]
         var bootstrapExpiresAt: Date
@@ -43,6 +44,7 @@ import Foundation
     var intents: [String: Intent] = [:]
     private(set) var requests: [(path: String, body: Data)] = []
     var faults: [Fault] = []
+    var faultsByPath: [String: [Fault]] = [:]
     /// Replaces the next successful reply object for a path (mismatch checks).
     var replyOverrides: [String: [String: Any]] = [:]
     var now: () -> Date = Date.init
@@ -51,16 +53,19 @@ import Foundation
     private var held: [() -> Void] = []
 
     var claimCount: Int { requests.filter { $0.path == PhoneRunContract.claimPath }.count }
+    var statusCount: Int { requests.filter { $0.path == PhoneRunContract.statusPath }.count }
     var bindCount: Int { requests.filter { $0.path == PhoneRunContract.bindPath }.count }
     var verifyCount: Int { requests.filter { $0.path == PhoneRunContract.verifyIntentPath }.count }
 
     /// The website's own step after the owner's Agree and collect: a run with a one-use bootstrap.
     func createRun(email: String = "synthetic.owner@example.invalid", course: String = "SYNTHETIC course",
-                   categories: [String] = ["contacts", "calls", "messages"]) -> (runID: String, bootstrap: String) {
+                   categories: [String] = ["contacts", "calls", "messages"],
+                   disclosureVersion: String = PhoneRunContract.disclosureVersion) -> (runID: String, bootstrap: String) {
         let runID = UUID().uuidString.lowercased()
         let bootstrap = PhoneRunContract.newCapability() ?? String(repeating: "B", count: 43)
         runs[runID] = Run(runID: runID, approvalID: UUID().uuidString.lowercased(), bootstrap: bootstrap, email: email,
-                          enrollmentID: UUID().uuidString.lowercased(), course: course, categories: categories,
+                          enrollmentID: UUID().uuidString.lowercased(), disclosureVersion: disclosureVersion,
+                          course: course, categories: categories,
                           bootstrapExpiresAt: now().addingTimeInterval(10 * 60))
         return (runID, bootstrap)
     }
@@ -92,7 +97,11 @@ import Foundation
 
     func post(path: String, body: Data, completion: @escaping @MainActor (PhoneRunTransportResult) -> Void) {
         requests.append((path, body))
-        let fault = faults.isEmpty ? nil : faults.removeFirst()
+        let fault: Fault?
+        if var pathFaults = faultsByPath[path], !pathFaults.isEmpty {
+            fault = pathFaults.removeFirst()
+            faultsByPath[path] = pathFaults
+        } else { fault = faults.isEmpty ? nil : faults.removeFirst() }
         let deliver: (PhoneRunTransportResult) -> Void = { [weak self] result in
             guard let self else { return }
             if self.holdReplies { self.held.append { completion(result) } } else { completion(result) }
@@ -116,6 +125,14 @@ import Foundation
         return formatter.string(from: date)
     }
 
+    private func claimFields(_ run: Run, includeStart: Bool) -> [String: Any] {
+        var fields: [String: Any] = ["approvalId": run.approvalID, "enrollmentId": run.enrollmentID,
+            "destinationEmail": run.email, "destinationCourse": run.course, "categories": run.categories,
+            "disclosureVersion": run.disclosureVersion, "expiresAt": Self.timestamp(run.expiresAt ?? now())]
+        if includeStart { fields["startExpiresAt"] = Self.timestamp((run.claimedAt ?? now()).addingTimeInterval(10 * 60)) }
+        return fields
+    }
+
     private func refusal(_ status: Int, _ code: String) -> (Int, [String: Any]) { (status, ["code": code]) }
 
     private func handle(_ path: String, _ body: Data) -> (Int, [String: Any]) {
@@ -133,7 +150,8 @@ import Foundation
             guard run.bootstrap == bootstrap, !run.revoked, run.approvalCurrent else { return refusal(409, "phone_run_changed") }
             if let claimed = run.capability {
                 // An exact retry reads the same claim back for ten minutes; anything else is refused.
-                guard claimed == capability, let at = run.claimedAt, now().timeIntervalSince(at) <= 10 * 60,
+                guard claimed == capability, let at = run.claimedAt,
+                      run.disclosureVersion == "phone-run-v2" || now().timeIntervalSince(at) <= 10 * 60,
                       let expires = run.expiresAt, now() < expires else { return refusal(409, "phone_run_changed") }
             } else {
                 guard now() < run.bootstrapExpiresAt else { return refusal(409, "phone_run_changed") }
@@ -142,10 +160,15 @@ import Foundation
                 run.expiresAt = now().addingTimeInterval(PhoneRunContract.runLifetime)
                 runs[runID] = run
             }
-            return (200, ["approvalId": run.approvalID, "enrollmentId": run.enrollmentID,
-                          "destinationEmail": run.email, "destinationCourse": run.course,
-                          "categories": run.categories, "disclosureVersion": PhoneRunContract.disclosureVersion,
-                          "expiresAt": Self.timestamp(run.expiresAt ?? now())])
+            return (200, claimFields(run, includeStart: run.disclosureVersion == "phone-run-v2"))
+        case PhoneRunContract.statusPath:
+            guard Set(fields.keys) == ["runId", "capability"], let runID = fields["runId"], let run = runs[runID],
+                  run.capability == fields["capability"], let expires = run.expiresAt,
+                  now() < expires.addingTimeInterval(24 * 60 * 60) else { return refusal(409, "phone_run_changed") }
+            var result = claimFields(run, includeStart: true)
+            result["state"] = run.revoked ? "revoked" : now() >= expires ? "expired" :
+                run.approvalCurrent ? "current" : "replacement_required"
+            return (200, result)
         case PhoneRunContract.bindPath:
             guard Set(fields.keys) == ["runId", "capability", "handoffId", "payloadSha256"],
                   let runID = fields["runId"], let handoff = fields["handoffId"], let digest = fields["payloadSha256"],

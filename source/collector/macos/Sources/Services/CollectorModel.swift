@@ -16,7 +16,7 @@ final class CollectorModel: ObservableObject {
     static let accountOrigin = "https://amplifai.satoris.ai"
     /// Timing, kept distinct (server values are enforced by the server; the app only stays truthful about them):
     /// - start-key bootstrap: one use, 10 minutes after the website issues it (the website's approval window is 1 hour);
-    /// - Start claim replay: the exact claim is read back for 10 minutes after the claim, so Start must happen then;
+    /// - Start deadline: status returns the original ten-minute deadline; status/replay never renew it;
     /// - durable run: 12 hours after the claim, covering a long collection, review and bind;
     /// - initial helper bridge: 5 minutes from `pair` (after review and Continue) to browser release;
     /// - website connect intent: 5 minutes from creation to consume;
@@ -71,9 +71,9 @@ final class CollectorModel: ObservableObject {
     struct PhoneRun: Equatable {
         let runID: String
         let capability: String
-        /// The exact prepared claim, resent unchanged right before collection starts to revalidate the run.
+        /// The exact prepared claim retained for uncertain claim recovery; status revalidates before Start.
         let claimRequest: PhoneRunClaimRequest
-        let claim: PhoneRunClaim
+        var claim: PhoneRunClaim
         let returnBrowserBundleID: String?
         /// The course and categories the run saves to now; a replacement approval may update them, never the
         /// account or enrollment.
@@ -85,13 +85,14 @@ final class CollectorModel: ObservableObject {
         var boundHandoffID: String?
         var boundPayloadSha256: String?
 
-        /// Start revalidation replays the exact claim, which the server accepts for 10 minutes after the claim.
-        var startDeadline: Date { claimedAt.addingTimeInterval(CollectorModel.runStartWindow) }
+        /// Status supplies the original Start deadline. Legacy claim responses use a conservative local fallback.
+        var startDeadline: Date { claim.startExpiresAt ?? claimedAt.addingTimeInterval(CollectorModel.runStartWindow) }
         var email: String { claim.email }
         var enrollmentID: String { claim.enrollmentID }
     }
     enum RunApproval: Equatable { case none, claiming, uncertain, refused, approved }
     enum RunBinding: Equatable { case none, binding, bound, uncertain, refused }
+    enum RunStatus: Equatable { case unchecked, checking, current, uncertain, replacementRequired, expired, revoked }
     /// Revalidation of the run immediately before the helper launches.
     enum StartConfirmation: Equatable { case none, confirming, uncertain }
     struct AccountNavigation: Equatable {
@@ -161,6 +162,12 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var runApproval: RunApproval = .none
     @Published private(set) var runApprovalMessage = ""
     @Published private(set) var runBinding: RunBinding = .none
+    @Published private(set) var runStatus: RunStatus = .unchecked
+    @Published private(set) var runStatusMessage = ""
+    private var runStatusToken: UUID?
+    private var lastBridgeAuthority: String?
+    private var runStatusPollTask: Task<Void, Never>?
+    var runStatusPollNanoseconds: UInt64 = 30_000_000_000
     @Published private(set) var startConfirmation: StartConfirmation = .none
     private var startConfirmationToken: UUID?
     private var startPreparation: CallHistoryPreparation?
@@ -327,7 +334,7 @@ final class CollectorModel: ObservableObject {
     /// A verified run for this collection that has not started and has not expired.
     var hasStartableRun: Bool { runStartWindowOpen(at: now()) }
 
-    /// Before Start, a run is startable only inside the 10-minute claim replay window; once collection has
+    /// Before Start, a run is startable only inside its original ten-minute Start window; once collection has
     /// started, the run stays valid for its 12 hours.
     func runStartWindowOpen(at date: Date) -> Bool {
         guard runApproval == .approved, let run = phoneRun else { return false }
@@ -344,11 +351,12 @@ final class CollectorModel: ObservableObject {
     }
 
     private var hasCurrentCollectionApproval: Bool {
-        guard let approval = localCollectionApproval, hasStartableRun, let run = phoneRun else { return false }
+        guard let approval = localCollectionApproval, hasStartableRun, runStatus == .current, let run = phoneRun else { return false }
         return approval.runID == collectionApprovalRunID &&
             approval.disclosureVersion == Self.collectionDisclosureVersion && approval.scopes == Self.localCollectionScopes &&
             approval.serverRunID == run.runID && approval.serverApprovalID == run.claim.approvalID &&
-            approval.serverDisclosureVersion == PhoneRunContract.disclosureVersion
+            approval.serverDisclosureVersion == run.claim.disclosureVersion &&
+            PhoneRunContract.supportedDisclosureVersions.contains(run.claim.disclosureVersion)
     }
 
     var canConnect: Bool { canPrepareCollection && hasCurrentCollectionApproval }
@@ -358,8 +366,8 @@ final class CollectorModel: ObservableObject {
     /// consumed at launch, so it never authorizes a later collection.
     @discardableResult
     func composeRunCollectionApproval(callHistoryPreparation: CallHistoryPreparation) -> Bool {
-        guard canPrepareCollection, hasStartableRun, candidateClaim == nil, let run = phoneRun,
-              run.claim.disclosureVersion == PhoneRunContract.disclosureVersion,
+        guard canPrepareCollection, hasStartableRun, runStatus == .current, candidateClaim == nil, let run = phoneRun,
+              PhoneRunContract.supportedDisclosureVersions.contains(run.claim.disclosureVersion),
               backupEncryptionStatus != .notChecked, backupEncryptionStatus != .checking else { return false }
         if callHistoryPreparation == .confirmedEncryptedBackup && backupEncryptionStatus != .encrypted { return false }
         localCollectionApproval = LocalCollectionApproval(
@@ -367,7 +375,7 @@ final class CollectorModel: ObservableObject {
             approvedAt: now(), scopes: Self.localCollectionScopes,
             callHistoryPreparation: callHistoryPreparation,
             serverRunID: run.runID, serverApprovalID: run.claim.approvalID,
-            serverDisclosureVersion: PhoneRunContract.disclosureVersion
+            serverDisclosureVersion: run.claim.disclosureVersion
         )
         return true
     }
@@ -411,7 +419,7 @@ final class CollectorModel: ObservableObject {
             candidateClaimStartedAt = now()
             candidateUncertain = false
             candidateNotice = ""
-            authority.claim(request) { [weak self] outcome in self?.candidateClaimFinished(request, outcome) }
+            claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.candidateClaimFinished(request, outcome) }
             return true
         }
         endPhoneRun()
@@ -420,7 +428,7 @@ final class CollectorModel: ObservableObject {
         pendingClaimBrowser = item.returnBrowserBundleID
         pendingClaimStartedAt = now()
         runApproval = .claiming
-        authority.claim(request) { [weak self] outcome in self?.claimFinished(request, outcome) }
+        claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.claimFinished(request, outcome) }
         return true
     }
 
@@ -429,7 +437,28 @@ final class CollectorModel: ObservableObject {
         guard runApproval == .uncertain, let request = pendingClaim, let authority = runAuthority else { return }
         runApproval = .claiming
         runApprovalMessage = ""
-        authority.claim(request) { [weak self] outcome in self?.claimFinished(request, outcome) }
+        claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.claimFinished(request, outcome) }
+    }
+
+    /// A committed v1 claim may outlive its direct ten-minute readback window. Only the same already-bound
+    /// capability can recover it through status; a new capability never recovers or extends the approval.
+    private func claimWithRecovery(_ request: PhoneRunClaimRequest, authority: RunAuthority,
+                                   completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void) {
+        authority.claim(request) { outcome in
+            guard case .refused(status: 409, code: _) = outcome,
+                  let statusRequest = PhoneRunStatusRequest(runID: request.runID, capability: request.capability) else {
+                completion(outcome)
+                return
+            }
+            authority.status(statusRequest) { statusOutcome in
+                switch statusOutcome {
+                case .accepted(let status) where status.state == .current: completion(.accepted(status.claim))
+                case .accepted, .refused: completion(.refused(status: 409, code: "phone_run_changed"))
+                case .uncertain: completion(.uncertain)
+                case .malformed: completion(.malformed)
+                }
+            }
+        }
     }
 
     private func claimFinished(_ request: PhoneRunClaimRequest, _ outcome: PhoneRunOutcome<PhoneRunClaim>) {
@@ -440,6 +469,9 @@ final class CollectorModel: ObservableObject {
                 refuseRun(Self.runRefusedMessage)
                 return
             }
+            runStatusToken = nil
+            runStatus = .unchecked
+            runStatusMessage = ""
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
                                 returnBrowserBundleID: pendingClaimBrowser, course: claim.course,
                                 categories: claim.categories, claimedAt: pendingClaimStartedAt)
@@ -458,7 +490,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func claimIsCurrent(_ claim: PhoneRunClaim) -> Bool {
-        claim.disclosureVersion == PhoneRunContract.disclosureVersion && claim.expiresAt > now() &&
+        PhoneRunContract.supportedDisclosureVersions.contains(claim.disclosureVersion) && claim.expiresAt > now() &&
             claim.expiresAt <= now().addingTimeInterval(PhoneRunContract.runLifetime + 3600)
     }
 
@@ -467,7 +499,7 @@ final class CollectorModel: ObservableObject {
         guard candidateUncertain, let request = candidateClaim, let authority = runAuthority else { return }
         candidateUncertain = false
         candidateNotice = ""
-        authority.claim(request) { [weak self] outcome in self?.candidateClaimFinished(request, outcome) }
+        claimWithRecovery(request, authority: authority) { [weak self] outcome in self?.candidateClaimFinished(request, outcome) }
     }
 
     private func discardCandidate() {
@@ -492,6 +524,9 @@ final class CollectorModel: ObservableObject {
             startConfirmationToken = nil
             startConfirmation = .none
             startPreparation = nil
+            runStatusToken = nil
+            runStatus = .unchecked
+            runStatusMessage = ""
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
                                 returnBrowserBundleID: candidateClaimBrowser, course: claim.course,
                                 categories: claim.categories, claimedAt: candidateClaimStartedAt)
@@ -510,6 +545,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func refuseRun(_ message: String) {
+        runStatusToken = nil
         phoneRun = nil
         pendingClaim = nil
         startConfirmation = .none
@@ -528,6 +564,11 @@ final class CollectorModel: ObservableObject {
 
     /// Ends this app's use of the run: completion, discard, or a collection that stopped.
     private func endPhoneRun() {
+        runStatusPollTask?.cancel()
+        runStatusPollTask = nil
+        runStatusToken = nil
+        runStatus = .unchecked
+        runStatusMessage = ""
         phoneRun = nil
         pendingClaim = nil
         pendingClaimBrowser = nil
@@ -608,55 +649,136 @@ final class CollectorModel: ObservableObject {
         confirmRunThenStart(preparation)
     }
 
-    /// Right before the helper launches, the exact original claim is sent again (same run, bootstrap and
-    /// capability bytes, no new endpoint). The server reads the same claim back only while the run is not revoked
-    /// or expired, its approval is the newest and still current (session, enrollment, course, consent receipt,
-    /// agreement, retention and reset fences unchanged), and the claim is at most 10 minutes old. So Start must
-    /// happen within 10 minutes of the claim; otherwise the owner approves again in the account.
+    /// Start uses capability-authenticated current status, including the original ten-minute Start deadline.
+    /// It can recover a lost claim response without treating the twelve-hour run lifetime as a fresh Start.
     private func confirmRunThenStart(_ preparation: CallHistoryPreparation) {
-        guard let run = phoneRun, let authority = runAuthority else { return }
+        guard let run = phoneRun else { return }
         let token = UUID()
         startConfirmationToken = token
         startPreparation = preparation
         startConfirmation = .confirming
-        authority.claim(run.claimRequest) { [weak self] outcome in
-            self?.runConfirmedForStart(token: token, runID: run.runID, outcome)
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.startConfirmationToken == token, self.startConfirmation == .confirming,
+                  let active = self.phoneRun, active.runID == run.runID, !active.collectionStarted else { return }
+            self.startConfirmationToken = nil
+            guard current else { self.startConfirmation = .uncertain; return }
+            self.startConfirmation = .none
+            self.startPreparation = nil
+            guard self.hasStartableRun else {
+                self.declineLocalCollection()
+                self.refuseRun(Self.runRefusedMessage)
+                return
+            }
+            guard self.canPrepareCollection, !self.helperRunning, self.process == nil,
+                  self.composeRunCollectionApproval(callHistoryPreparation: preparation) else { return }
+            self.connect()
         }
     }
 
-    /// Not confirmed: resend the identical claim bytes.
     func retryStartConfirmation() {
         guard startConfirmation == .uncertain, let preparation = startPreparation, hasStartableRun,
               candidateClaim == nil, canPrepareCollection, !helperRunning, process == nil else { return }
         confirmRunThenStart(preparation)
     }
 
-    private func runConfirmedForStart(token: UUID, runID: String, _ outcome: PhoneRunOutcome<PhoneRunClaim>) {
-        // A late answer for an earlier attempt, another run, or after cancel or Not now starts nothing.
-        guard startConfirmationToken == token, startConfirmation == .confirming, let run = phoneRun,
-              run.runID == runID, !run.collectionStarted, let preparation = startPreparation else { return }
-        startConfirmationToken = nil
-        switch outcome {
-        case .accepted(let claim):
-            let unchanged = claim.approvalID == run.claim.approvalID && claim.enrollmentID == run.claim.enrollmentID &&
-                claim.email == run.claim.email && claim.course == run.claim.course &&
-                claim.categories == run.claim.categories && claim.disclosureVersion == PhoneRunContract.disclosureVersion &&
-                now() < claim.expiresAt
-            guard unchanged else {
-                declineLocalCollection()
-                refuseRun(Self.runRefusedMessage)
-                return
+    var approvedPrivacyURL: URL? {
+        phoneRun.flatMap { PhoneRunContract.privacyURL(disclosureVersion: $0.claim.disclosureVersion) }
+    }
+
+    var canRefreshRunStatus: Bool { phoneRun != nil && runStatus != .checking }
+
+    /// A bounded explicit recheck. Existing collection/review is retained while transport is uncertain.
+    func refreshRunStatus() {
+        revalidateCurrentRun { _ in }
+    }
+
+    private func revalidateCurrentRun(_ completion: @escaping @MainActor (Bool) -> Void) {
+        guard let run = phoneRun, let authority = runAuthority, runStatus != .checking,
+              let request = PhoneRunStatusRequest(runID: run.runID, capability: run.capability) else {
+            completion(false)
+            return
+        }
+        let token = UUID()
+        runStatusToken = token
+        runStatus = .checking
+        synchronizeBridgeAuthority(paused: true)
+        authority.status(request) { [weak self] outcome in
+            guard let self, self.runStatusToken == token, var active = self.phoneRun,
+                  active.runID == run.runID, active.capability == run.capability else { return }
+            self.runStatusToken = nil
+            switch outcome {
+            case .accepted(let status):
+                guard status.state == .current else {
+                    self.stopForRunStatus(status.state)
+                    completion(false)
+                    return
+                }
+                let same = status.claim.approvalID == active.claim.approvalID &&
+                    status.claim.enrollmentID == active.enrollmentID && status.claim.email == active.email &&
+                    status.claim.course == active.claim.course && status.claim.categories == active.claim.categories &&
+                    status.claim.disclosureVersion == active.claim.disclosureVersion &&
+                    status.claim.expiresAt == active.claim.expiresAt &&
+                    (active.claim.startExpiresAt == nil || status.claim.startExpiresAt == active.claim.startExpiresAt)
+                guard same, status.claim.expiresAt > self.now() else {
+                    self.stopForRunStatus(status.claim.expiresAt <= self.now() ? .expired : .replacementRequired)
+                    completion(false)
+                    return
+                }
+                active.claim = status.claim
+                self.phoneRun = active
+                self.runStatus = .current
+                self.runStatusMessage = ""
+                self.synchronizeBridgeAuthority(paused: false)
+                completion(true)
+            case .refused:
+                self.stopForRunStatus(.replacementRequired)
+                completion(false)
+            case .uncertain, .malformed:
+                self.runStatus = .uncertain
+                self.synchronizeBridgeAuthority(paused: true)
+                self.runStatusMessage = "Approval could not be checked. New connections and saving wait for a successful recheck."
+                completion(false)
             }
-            startConfirmation = .none
-            startPreparation = nil
-            guard canPrepareCollection, !helperRunning, process == nil,
-                  composeRunCollectionApproval(callHistoryPreparation: preparation) else { return }
-            connect()
-        case .refused:
-            declineLocalCollection()
-            refuseRun(Self.runRefusedMessage)
-        case .uncertain, .malformed:
-            startConfirmation = .uncertain
+        }
+    }
+
+    private func synchronizeBridgeAuthority(paused: Bool) {
+        guard commandReady, !handoffID.isEmpty else { return }
+        let state = paused ? "paused" : "current"
+        let identity = handoffID + ":" + state
+        guard lastBridgeAuthority != identity else { return }
+        lastBridgeAuthority = identity
+        send(["action": "run-authority", "handoffId": handoffID, "state": state])
+    }
+
+    private func stopForRunStatus(_ state: PhoneRunStatus.State) {
+        let wasStarted = phoneRun?.collectionStarted == true
+        if wasStarted { disconnect() }
+        else { declineLocalCollection(); refuseRun(Self.runRefusedMessage) }
+        switch state {
+        case .revoked:
+            runStatus = .revoked
+            runStatusMessage = "This collection was stopped in your account. Already confirmed saves remain in your report."
+        case .expired:
+            runStatus = .expired
+            runStatusMessage = "This approval expired. Already confirmed saves remain in your account. A new collection needs a new approval."
+        case .current, .replacementRequired:
+            runStatus = .replacementRequired
+            runStatusMessage = "This approval changed. Collection and saving stopped. Check your AMPLIFai account before continuing."
+        }
+        if wasStarted { errorMessage = runStatusMessage }
+    }
+
+    private func pollRunStatus() {
+        guard commandWriter == nil, let runID = phoneRun?.runID, phoneRun?.collectionStarted == true else { return }
+        runStatusPollTask?.cancel()
+        runStatusPollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: self?.runStatusPollNanoseconds ?? 30_000_000_000) }
+                catch { return }
+                guard let self, self.phoneRun?.runID == runID, self.phoneRun?.collectionStarted == true else { return }
+                if self.runStatus != .checking { self.refreshRunStatus() }
+            }
         }
     }
 
@@ -1610,7 +1732,11 @@ final class CollectorModel: ObservableObject {
         }
         pendingBind = request
         runBinding = .binding
-        authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingBind == request, self.runBinding == .binding else { return }
+            guard current else { self.runBinding = .uncertain; self.errorMessage = Self.bindUncertainMessage; return }
+            authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        }
     }
 
     /// Try again after an uncertain bind: the identical request for the same handoff.
@@ -1619,7 +1745,11 @@ final class CollectorModel: ObservableObject {
               let authority = runAuthority else { return }
         runBinding = .binding
         errorMessage = ""
-        authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingBind == request, self.runBinding == .binding else { return }
+            guard current else { self.runBinding = .uncertain; self.errorMessage = Self.bindUncertainMessage; return }
+            authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        }
     }
 
     private func bindFinished(_ request: PhoneRunBindRequest, _ outcome: PhoneRunOutcome<PhoneRunDestination>) {
@@ -1631,9 +1761,10 @@ final class CollectorModel: ObservableObject {
         }
         switch outcome {
         case .accepted(let destination):
-            // Account and enrollment must be exactly the approved run's. A replacement approval in the account
-            // may change the course label or narrow/alter categories; it is shown, never widened silently.
-            guard destination.enrollmentID == run.enrollmentID, destination.email == run.email else {
+            // Binding must match the original current approval across owner, enrollment, course and scope.
+            // A contradictory reply cannot silently rewrite a started collection's authority.
+            guard destination.enrollmentID == run.enrollmentID, destination.email == run.email,
+                  destination.course == run.claim.course, destination.categories == run.claim.categories else {
                 refuseBinding(Self.bindRefusedMessage)
                 return
             }
@@ -1692,8 +1823,15 @@ final class CollectorModel: ObservableObject {
         destinationVerificationUncertain = false
         let pendingEmail = destinationEmail
         let pendingCourse = destinationCourse
-        authority.verifyIntent(request) { [weak self] outcome in
-            self?.verifyFinished(request, pendingEmail: pendingEmail, pendingCourse: pendingCourse, outcome)
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingVerify == request, self.destinationVerificationPending else { return }
+            guard current else {
+                self.verifyFinished(request, pendingEmail: pendingEmail, pendingCourse: pendingCourse, .uncertain)
+                return
+            }
+            authority.verifyIntent(request) { [weak self] outcome in
+                self?.verifyFinished(request, pendingEmail: pendingEmail, pendingCourse: pendingCourse, outcome)
+            }
         }
     }
 
@@ -1734,6 +1872,7 @@ final class CollectorModel: ObservableObject {
             verifiedDestinationIntentIDs.insert(request.intentID)
             let exact = now() < verifyDeadline && verified.email == pendingEmail && verified.course == pendingCourse &&
                 verified.enrollmentID == run.enrollmentID && verified.email == run.email &&
+                verified.course == run.claim.course && verified.categories == run.claim.categories &&
                 run.boundHandoffID == request.handoffID && run.boundPayloadSha256 == request.payloadSha256 &&
                 pairingPayloadSha256 == request.payloadSha256
             if exact {
@@ -1763,6 +1902,8 @@ final class CollectorModel: ObservableObject {
     }
 
     func disconnect() {
+        runStatusToken = nil
+        if runStatus == .checking { runStatus = .unchecked }
         declineLocalCollection()
         startAfterSettingCheck = false
         startConfirmationToken = nil
@@ -1770,6 +1911,7 @@ final class CollectorModel: ObservableObject {
         // Discarding or cancelling a started collection ends its run; cancelling the pre-start check does not.
         if phoneRun?.collectionStarted == true { endPhoneRun() }
         guard let process else {
+            if commandReady { send(["action": "disconnect"]) }
             // Explicit owner discard remains usable after an unexpected helper exit.
             clearPrivateReview()
             resetHandoff()
@@ -1824,6 +1966,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func resetHandoff() {
+        lastBridgeAuthority = nil
         finishAttemptCount = 0
         completionNeedsRetry = false
         handoffPollTask?.cancel()
@@ -1993,6 +2136,7 @@ final class CollectorModel: ObservableObject {
         }
         do {
             try runner.run()
+            if mode == "connect" { pollRunStatus() }
             output.fileHandleForWriting.closeFile()
             input.fileHandleForReading.closeFile()
         } catch {
@@ -2422,8 +2566,16 @@ final class CollectorModel: ObservableObject {
             if event.state == "pending", let intent = event.intentId.flatMap(UUID.init(uuidString:)),
                let email = event.email, let course = event.course,
                PhoneRunContract.isEmail(email), PhoneRunContract.isCourse(course) {
-                if destinationIntentID.isEmpty && !closedDestinationIntentIDs.contains(intent.uuidString.lowercased()) {
-                    destinationIntentID = intent.uuidString.lowercased()
+                let incoming = intent.uuidString.lowercased()
+                // The helper emits a different pending intent only after fixed-authority authentication
+                // supersedes an unconsumed attempt. An old callback or delayed pending cannot revive it.
+                if incoming != destinationIntentID, !closedDestinationIntentIDs.contains(incoming),
+                   !browserReceived, !accountSaveAwaitingBrowserReceipt, !handoffAcknowledged {
+                    if !destinationIntentID.isEmpty { closedDestinationIntentIDs.insert(destinationIntentID) }
+                    clearDestinationVerification()
+                    submittedDestinationDecision = nil
+                    approvedDestinationIntentID = ""
+                    destinationIntentID = incoming
                     destinationEmail = email
                     destinationCourse = course
                     destinationApproved = false
