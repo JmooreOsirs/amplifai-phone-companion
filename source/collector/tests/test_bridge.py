@@ -117,9 +117,11 @@ class BridgeTest(unittest.TestCase):
             self.assertTrue(paired["confirmReceiptRequired"])
             self.assertNotIn("owner@example.test", raw.decode())
             self.assertEqual(proofs[1][0], "consume")
-            self.assertEqual(self.request(bridge, "POST", "/v3/release",
-                             {"intentId": intent, "capability": capability, "releaseCode": release})[0], 410)
-            self.assertEqual(len(proofs), 2)
+            replay_status, _, replay_raw = self.request(bridge, "POST", "/v3/release",
+                             {"intentId": intent, "capability": capability, "releaseCode": release})
+            self.assertEqual(replay_status, 200)
+            self.assertEqual(json.loads(replay_raw)["token"], paired["token"])
+            self.assertEqual(proofs[2], proofs[1])
         finally:
             bridge.close()
 

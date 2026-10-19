@@ -111,6 +111,18 @@ address in CSP. Hosted navigation and route security headers were verified,
 but public HTTPS-to-loopback pairing and cross-browser local-network behavior
 remain unverified. No helper starts collection or the bridge merely because a
 site is visited.
+
+Account connection recovery replays the exact `/v3/connect` proof without
+resetting an already approved destination. An exact `/v3/release` retry retains
+the same token, handoff and payload digest; it revalidates the fixed authority's
+consume proof before returning them. Different intent credentials or release
+codes cannot recover that token. Released paged transfers use their existing
+two-hour inactivity deadline; retries do not create another collection or
+extend an expired transfer. `/v1/complete` and both save-receipt steps can be
+reconciled on the same transfer without delivering or saving sources again.
+These local guarantees require matching idempotent server proof enforcement;
+synthetic bridge tests do not establish production authorization or persistence.
+
 An earlier USB charge or Trust tap alone does not prove Wi-Fi availability.
 Apple documents a separate Finder **General → Show this iPhone when on Wi-Fi**
 setting, enabled while the phone is connected by USB; this app does not change
