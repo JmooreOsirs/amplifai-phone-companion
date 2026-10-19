@@ -134,7 +134,7 @@ def selected_metadata(capture: IPhoneCapture, ids: set[int]) -> bytes:
 
 
 class BridgeServer:
-    """Exact-origin, exact-Host loopback server with expiring one-use code/token."""
+    """Exact-origin, exact-Host loopback server with one expiring transfer."""
 
     def __init__(
         self,
@@ -171,6 +171,7 @@ class BridgeServer:
         self.connecting = False
         self.releasing = False
         self.release_request: dict[str, str] | None = None
+        self.authority_paused = False
         self.destination: dict[str, str] | None = None
         self.destination_state = "waiting"
         self.next_cursor = 0
@@ -313,7 +314,7 @@ class BridgeServer:
                     ):
                         self._reply(410)
                         return
-                    if bridge.destination_state in ("pending", "approved", "released"):
+                    if bridge.authority_paused or bridge.destination_state in ("pending", "approved", "released"):
                         self._reply(409)
                         return
                     bridge.attempts += 1
@@ -359,14 +360,14 @@ class BridgeServer:
                     if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None or bridge.used:
                         self._reply(410)
                         return
-                    if (bridge.connecting or bridge.releasing or bridge.destination_state == "released"
+                    if (bridge.authority_paused or bridge.connecting or bridge.releasing or bridge.destination_state == "released"
                             or command["handoffId"] != bridge.handoff_id
                             or command["payloadSha256"] != bridge.payload_sha256):
                         self._reply(409)
                         return
                     retained = bridge.destination if bridge.destination_state in ("pending", "approved") else None
-                    if retained is not None and (retained["intentId"] != command["intentId"] or
-                            not hmac.compare_digest(retained["capability"], command["capability"])):
+                    same_intent = retained is not None and retained["intentId"] == command["intentId"]
+                    if same_intent and not hmac.compare_digest(retained["capability"], command["capability"]):
                         self._reply(409)
                         return
                     bridge.connecting = True
@@ -381,12 +382,12 @@ class BridgeServer:
                         return
                     email = result.get("destinationEmail") if isinstance(result, dict) else None
                     course = result.get("destinationCourse") if isinstance(result, dict) else None
-                    if (not isinstance(email, str) or len(email) > 254 or "@" not in email or
+                    if (bridge.authority_paused or not isinstance(email, str) or len(email) > 254 or "@" not in email or
                             not isinstance(course, str) or not 0 < len(course) <= 160 or
                             any(ord(char) < 32 for char in email + course)):
                         self._reply(409)
                         return
-                    if retained is not None:
+                    if same_intent:
                         if (bridge.destination_state not in ("pending", "approved") or
                                 retained["email"] != email or retained["course"] != course):
                             self._reply(409)
@@ -411,6 +412,9 @@ class BridgeServer:
                                 else bridge.expires_at)
                     if bridge.closed or bridge.now() >= deadline:
                         self._reply(410)
+                        return
+                    if bridge.authority_paused or bridge.connecting:
+                        self._reply(409)
                         return
                     if (pending is None or bridge.destination_state not in ("approved", "released") or bridge.releasing or
                             pending["intentId"] != command["intentId"] or not hmac.compare_digest(
@@ -439,7 +443,7 @@ class BridgeServer:
                     if bridge.closed or bridge.now() >= deadline:
                         self._reply(410)
                         return
-                    if not isinstance(result, dict) or result.get("consumed") is not True:
+                    if bridge.authority_paused or not isinstance(result, dict) or result.get("consumed") is not True:
                         self._reply(409)
                         return
                     if bridge.token is None:
@@ -663,6 +667,9 @@ class BridgeServer:
                     ):
                         self._reply(403)
                         return
+                    if bridge.authority_paused:
+                        self._reply(409)
+                        return
                     page_count = (len(bridge.payload) + PAGE_BYTES - 1) // PAGE_BYTES
                     if cursor >= page_count or cursor > bridge.next_cursor:
                         self._reply(409)
@@ -698,6 +705,9 @@ class BridgeServer:
                         authorizations[0], f"Bearer {bridge.token}"
                     ):
                         self._reply(403)
+                        return
+                    if bridge.authority_paused:
+                        self._reply(409)
                         return
                     if bridge.source_dispositions[category] == "declined":
                         self._reply(410)
@@ -749,10 +759,18 @@ class BridgeServer:
 
     def approve_destination(self, intent_id: str, approved: bool) -> bool:
         with self.lock:
-            if (self.closed or self.now() >= self.expires_at or self.destination_state != "pending"
+            if (self.closed or self.authority_paused or self.now() >= self.expires_at or self.destination_state != "pending"
                     or self.destination is None or self.destination["intentId"] != intent_id):
                 return False
             self.destination_state = "approved" if approved else "denied"
+            return True
+
+    def set_run_authority(self, handoff_id: str, state: str) -> bool:
+        """Pause new delivery on uncertain authority without discarding a receipt."""
+        with self.lock:
+            if self.closed or handoff_id != self.handoff_id or state not in ("paused", "current"):
+                return False
+            self.authority_paused = state == "paused"
             return True
 
     def start(self) -> None:

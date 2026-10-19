@@ -74,6 +74,90 @@ class BridgeRecoveryTest(unittest.TestCase):
         tick[0] = TRANSFER_SECONDS + 1.0
         self.assertEqual(self.release(bridge)[0], 410)
 
+    def test_fresh_verified_intent_supersedes_unconsumed_attempt_and_retires_old_approval(self):
+        self.proofs = []
+        bridge = self.bridge([0.0], self.authority)
+        self.assertEqual(self.connect(bridge)[0], 200)
+        self.assertTrue(bridge.approve_destination(INTENT, True))
+        replacement = "22222222-2222-4222-8222-222222222222"
+        self.assertEqual(self.connect(bridge, intentId=replacement, capability="N" * 43)[0], 200)
+        self.assertEqual(bridge.pending_destination()["intentId"], replacement)
+        self.assertFalse(bridge.approve_destination(INTENT, True))
+        self.assertEqual(self.release(bridge)[0], 403)
+        self.assertEqual(self.release(bridge, intentId=replacement, capability="N" * 43)[0], 403)
+        self.assertTrue(bridge.approve_destination(replacement, True))
+        self.assertEqual(self.release(bridge, intentId=replacement, capability="N" * 43)[0], 200)
+        self.assertEqual(self.connect(bridge)[0], 410)
+
+    def test_uncertain_replacement_preserves_old_local_attempt_until_fresh_proof(self):
+        self.proofs = []
+        allow = [True]
+
+        def proof(action, command):
+            result = self.authority(action, command)
+            return result if allow[0] else None
+
+        bridge = self.bridge([0.0], proof)
+        self.assertEqual(self.connect(bridge)[0], 200)
+        self.assertTrue(bridge.approve_destination(INTENT, True))
+        retained = dict(bridge.destination)
+        allow[0] = False
+        replacement = "22222222-2222-4222-8222-222222222222"
+        self.assertEqual(self.connect(bridge, intentId=replacement, capability="N" * 43)[0], 409)
+        self.assertEqual(bridge.destination, retained)
+        self.assertEqual(bridge.destination_state, "approved")
+        self.assertIsNone(bridge.token)
+
+    def test_authority_pause_blocks_delivery_without_discarding_exact_transfer(self):
+        self.proofs = []
+        tick = [0.0]
+        bridge = self.bridge(tick, self.authority)
+        self.assertFalse(bridge.set_run_authority("wrong", "paused"))
+        self.assertFalse(bridge.set_run_authority(bridge.handoff_id, "revoked"))
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "paused"))
+        self.assertEqual(self.connect(bridge)[0], 409)
+        self.assertEqual(self.proofs, [])
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "current"))
+        self.assertEqual(self.connect(bridge)[0], 200)
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "paused"))
+        self.assertFalse(bridge.approve_destination(INTENT, True))
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "current"))
+        self.assertTrue(bridge.approve_destination(INTENT, True))
+        status, _, raw = self.release(bridge)
+        self.assertEqual(status, 200)
+        first = json.loads(raw)
+        deadline = bridge.transfer_expires_at
+        authorization = "Bearer " + first["token"]
+        tick[0] = 10.0
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "paused"))
+        self.assertEqual(self.release(bridge)[0], 409)
+        self.assertEqual(self.request(bridge, "GET", "/v2/source/contacts?cursor=0", authorization=authorization)[0], 409)
+        self.assertEqual(bridge.source_cursors["contacts"], 0)
+        self.assertEqual(bridge.token, first["token"])
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "current"))
+        self.assertEqual(bridge.transfer_expires_at, deadline)
+        self.assertEqual(self.request(bridge, "GET", "/v2/source/contacts?cursor=0", authorization=authorization)[0], 200)
+
+    def test_pause_during_consume_retains_exact_retry_without_issuing_token(self):
+        self.proofs = []
+        pause = [True]
+
+        def proof(action, command):
+            result = self.authority(action, command)
+            if action == "consume" and pause[0]:
+                bridge.set_run_authority(bridge.handoff_id, "paused")
+            return result
+
+        bridge = self.bridge([0.0], proof)
+        self.assertEqual(self.connect(bridge)[0], 200)
+        self.assertTrue(bridge.approve_destination(INTENT, True))
+        self.assertEqual(self.release(bridge)[0], 409)
+        self.assertIsNone(bridge.token)
+        pause[0] = False
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "current"))
+        self.assertEqual(self.release(bridge)[0], 200)
+        self.assertEqual(self.proofs[-1], self.proofs[-2])
+
     def test_committed_consume_with_lost_authority_reply_recovers_same_proof(self):
         self.proofs = []
         committed = []
@@ -129,6 +213,7 @@ class BridgeRecoveryTest(unittest.TestCase):
         for _ in range(2):
             self.assertEqual(self.request(bridge, "POST", "/v1/complete", authorization=authorization)[0], 200)
         self.assertEqual(bridge.handoff_state(), "received")
+        self.assertTrue(bridge.set_run_authority(bridge.handoff_id, "paused"))
         binding = {"handoffId": bridge.handoff_id, "payloadSha256": bridge.payload_sha256}
         for _ in range(2):
             self.assertEqual(self.request(bridge, "POST", "/v1/acknowledge-save", {**binding, "saved": True},
