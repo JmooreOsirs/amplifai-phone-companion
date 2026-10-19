@@ -87,6 +87,8 @@ final class DemoSession: ObservableObject {
     /// Brings the simulated website window forward; set by the app delegate.
     var showWebsite: () -> Void = {}
     var runAgain: () -> Void = {}
+    /// Closes this demo once the Mac has finished; set by the app delegate.
+    var finishDemo: () -> Void = {}
 
     private var control: URL { Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("demo-control") }
 
@@ -187,7 +189,9 @@ struct SimulatedWebsiteView: View {
 
     @ViewBuilder private var content: some View {
         if model.handoffAcknowledged {
-            SampleReportView(report: FakeDataSet.sampleReport(selected: session.reviewedIDs), runAgain: session.runAgain)
+            SampleReportView(report: FakeDataSet.sampleReport(selected: session.reviewedIDs),
+                             finished: model.phase == .completed && !model.helperRunning,
+                             done: session.finishDemo, runAgain: session.runAgain)
         } else if model.accountSaveAwaitingBrowserReceipt || session.saveRequested {
             heading("Saving to your account…")
             ProgressView()
@@ -221,6 +225,9 @@ struct SimulatedWebsiteView: View {
 
 struct SampleReportView: View {
     let report: FakeDataSet.SampleReport?
+    /// The Mac has shown Saved and its fake helper has exited, so the demo can close cleanly.
+    let finished: Bool
+    let done: () -> Void
     let runAgain: () -> Void
 
     var body: some View {
@@ -243,9 +250,16 @@ struct SampleReportView: View {
                     Text("\(index + 1). \(row.name) · \(row.calls) calls · \(row.messages) messages")
                 }
             }
-            Button("Run the demo again", action: runAgain)
-                .buttonStyle(.link)
-                .padding(.top, 6)
+            HStack(spacing: 16) {
+                Button(finished ? "Done" : "Finishing on your Mac…", action: done)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!finished)
+                Button("Run the demo again", action: runAgain)
+                    .buttonStyle(.link)
+            }
+            .padding(.top, 6)
         }
     }
 }
@@ -291,6 +305,10 @@ final class DemoDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         windows.append(window)
+        session.finishDemo = { [weak self, weak window] in
+            self?.website?.close()
+            window?.performClose(nil)
+        }
     }
 
     /// The simulated website sits above the floating companion window, as a browser would.
