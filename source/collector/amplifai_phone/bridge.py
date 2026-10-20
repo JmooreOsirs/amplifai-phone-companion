@@ -34,6 +34,8 @@ MAX_TRANSFER_BYTES = 32 * 1024 * 1024
 PAGE_BYTES = 128 * 1024
 PAIR_SECONDS = 5 * 60
 TRANSFER_SECONDS = 2 * 60 * 60
+AUTHORITY_REFRESH_SECONDS = 65
+AUTHORITY_REFRESH_RETRY_MS = 250
 MAX_PAIR_ATTEMPTS = 5
 CONNECT_API_HOST = "amplifai-database-engine.vercel.app"
 CONNECT_API_PATH = "/api/v1/phone-connect-intents/"
@@ -171,7 +173,8 @@ class BridgeServer:
         self.connecting = False
         self.releasing = False
         self.release_request: dict[str, str] | None = None
-        self.authority_paused = False
+        self.authority_state = "current"
+        self.authority_refresh_expires_at: float | None = None
         self.destination: dict[str, str] | None = None
         self.destination_state = "waiting"
         self.next_cursor = 0
@@ -314,7 +317,7 @@ class BridgeServer:
                     ):
                         self._reply(410)
                         return
-                    if bridge.authority_paused or bridge.destination_state in ("pending", "approved", "released"):
+                    if bridge.authority_state != "current" or bridge.destination_state in ("pending", "approved", "released"):
                         self._reply(409)
                         return
                     bridge.attempts += 1
@@ -360,7 +363,7 @@ class BridgeServer:
                     if bridge.closed or bridge.now() >= bridge.expires_at or bridge.token is not None or bridge.used:
                         self._reply(410)
                         return
-                    if (bridge.authority_paused or bridge.connecting or bridge.releasing or bridge.destination_state == "released"
+                    if (bridge.authority_state != "current" or bridge.connecting or bridge.releasing or bridge.destination_state == "released"
                             or command["handoffId"] != bridge.handoff_id
                             or command["payloadSha256"] != bridge.payload_sha256):
                         self._reply(409)
@@ -382,7 +385,7 @@ class BridgeServer:
                         return
                     email = result.get("destinationEmail") if isinstance(result, dict) else None
                     course = result.get("destinationCourse") if isinstance(result, dict) else None
-                    if (bridge.authority_paused or not isinstance(email, str) or len(email) > 254 or "@" not in email or
+                    if (bridge.authority_state != "current" or not isinstance(email, str) or len(email) > 254 or "@" not in email or
                             not isinstance(course, str) or not 0 < len(course) <= 160 or
                             any(ord(char) < 32 for char in email + course)):
                         self._reply(409)
@@ -413,7 +416,7 @@ class BridgeServer:
                     if bridge.closed or bridge.now() >= deadline:
                         self._reply(410)
                         return
-                    if bridge.authority_paused or bridge.connecting:
+                    if bridge.authority_state != "current" or bridge.connecting:
                         self._reply(409)
                         return
                     if (pending is None or bridge.destination_state not in ("approved", "released") or bridge.releasing or
@@ -443,7 +446,7 @@ class BridgeServer:
                     if bridge.closed or bridge.now() >= deadline:
                         self._reply(410)
                         return
-                    if bridge.authority_paused or not isinstance(result, dict) or result.get("consumed") is not True:
+                    if bridge.authority_state != "current" or not isinstance(result, dict) or result.get("consumed") is not True:
                         self._reply(409)
                         return
                     if bridge.token is None:
@@ -667,7 +670,7 @@ class BridgeServer:
                     ):
                         self._reply(403)
                         return
-                    if bridge.authority_paused:
+                    if bridge.authority_state != "current":
                         self._reply(409)
                         return
                     page_count = (len(bridge.payload) + PAGE_BYTES - 1) // PAGE_BYTES
@@ -706,9 +709,6 @@ class BridgeServer:
                     ):
                         self._reply(403)
                         return
-                    if bridge.authority_paused:
-                        self._reply(409)
-                        return
                     if bridge.source_dispositions[category] == "declined":
                         self._reply(410)
                         return
@@ -717,6 +717,20 @@ class BridgeServer:
                         return
                     page = bridge.transfer.page(category, cursor)
                     if page is None:
+                        self._reply(409)
+                        return
+                    bridge._expire_authority_refresh()
+                    if bridge.authority_state == "refreshing":
+                        self._reply(409, json.dumps({
+                            "code": "phone_run_authority_refreshing",
+                            "handoffId": bridge.handoff_id,
+                            "payloadSha256": bridge.payload_sha256,
+                            "category": category,
+                            "cursor": cursor,
+                            "retryAfterMs": AUTHORITY_REFRESH_RETRY_MS,
+                        }, separators=(",", ":")).encode("ascii"))
+                        return
+                    if bridge.authority_state != "current":
                         self._reply(409)
                         return
                     bridge.source_cursors[category] = max(bridge.source_cursors[category], cursor + 1)
@@ -759,19 +773,34 @@ class BridgeServer:
 
     def approve_destination(self, intent_id: str, approved: bool) -> bool:
         with self.lock:
-            if (self.closed or self.authority_paused or self.now() >= self.expires_at or self.destination_state != "pending"
+            if (self.closed or self.authority_state != "current" or self.now() >= self.expires_at or self.destination_state != "pending"
                     or self.destination is None or self.destination["intentId"] != intent_id):
                 return False
             self.destination_state = "approved" if approved else "denied"
             return True
 
     def set_run_authority(self, handoff_id: str, state: str) -> bool:
-        """Pause new delivery on uncertain authority without discarding a receipt."""
+        """Bound refresh retries to one current-authority window; retain receipts."""
         with self.lock:
-            if self.closed or handoff_id != self.handoff_id or state not in ("paused", "current"):
+            if self.closed or handoff_id != self.handoff_id or state not in ("paused", "current", "refreshing"):
                 return False
-            self.authority_paused = state == "paused"
+            self._expire_authority_refresh()
+            if state == "refreshing":
+                if self.authority_state == "paused":
+                    return False
+                if self.authority_state == "current":
+                    self.authority_refresh_expires_at = self.now() + AUTHORITY_REFRESH_SECONDS
+            else:
+                self.authority_refresh_expires_at = None
+            self.authority_state = state
             return True
+
+    def _expire_authority_refresh(self) -> None:
+        """Called with lock held; repeated refresh commands cannot renew the window."""
+        if (self.authority_state == "refreshing" and
+                (self.authority_refresh_expires_at is None or self.now() >= self.authority_refresh_expires_at)):
+            self.authority_state = "paused"
+            self.authority_refresh_expires_at = None
 
     def start(self) -> None:
         self.thread.start()
