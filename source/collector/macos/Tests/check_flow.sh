@@ -25,3 +25,5 @@ swiftc -parse-as-library -target "$native_arch-apple-macos14.0" \
     -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$native_root/collector/macos/Info.plist" \
     -o "$native_temp/CollectorFlowChecks"
 "$native_temp/CollectorFlowChecks"
+sh "$native_root/collector/macos/Tests/check_preparation_wire.sh"
+sh "$native_root/collector/macos/Tests/check_preparation_flow.sh"

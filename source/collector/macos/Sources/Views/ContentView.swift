@@ -305,7 +305,7 @@ struct ContentView: View {
             if showingFinderGuide {
                 FinderEncryptionGuide(model: model) { showingFinderGuide = false }
             } else if model.runApproval == .approved, let run = model.phoneRun {
-                // Re-evaluated as time passes so Start is never offered after its 10-minute window.
+                // Re-evaluate the negotiated preparation/Start deadline without renewing authority.
                 TimelineView(.periodic(from: .now, by: 5)) { context in
                     if run.collectionStarted || model.runStartWindowOpen(at: context.date) {
                         approvedRunContent(run, now: context.date)
@@ -382,8 +382,13 @@ struct ContentView: View {
             VerifiedStatusRow(verified: true, title: "Account: \(run.email)",
                               detail: "Course: \(run.course) · \(CollectorModel.approvedToSaveLabel(run.categories))")
             if !run.collectionStarted {
-                Text("Approval start window: about \(max(1, Int(ceil(run.startDeadline.timeIntervalSince(now) / 60)))) min remaining.")
-                    .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                if model.isPreparationRun {
+                    Text("Prepare your iPhone here, then choose Start collection. This approval expires at \(run.claim.expiresAt.formatted(date: .abbreviated, time: .shortened)).")
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                } else {
+                    Text("Approval start window: about \(max(1, Int(ceil(run.startDeadline.timeIntervalSince(now) / 60)))) min remaining.")
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                }
             }
             if !model.candidateNotice.isEmpty {
                 Text(model.candidateNotice).font(Brand.bodyFont(15)).foregroundStyle(Brand.muted)
@@ -421,7 +426,7 @@ struct ContentView: View {
         switch model.backupEncryptionStatus {
         case .checking:
             progressLine("Checking your iPhone…")
-            Text("No backup or collection has started.")
+            Text("Keep your iPhone unlocked. If it asks to Trust this computer, tap Trust and enter the iPhone passcode. No backup or collection has started.")
                 .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
             if model.backupSettingCheckInProgress {
                 Button("Cancel check") { model.cancelBackupEncryptionStatusCheck() }
@@ -447,14 +452,23 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 12) { startActions }
             }
         case .notChecked:
-            Text("We'll check backup encryption before collecting. Call history may be unavailable if it is off.")
+            Text("Connect and unlock your iPhone, then check it here. The check reads the backup setting without starting collection.")
                 .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { startActions }
-                VStack(alignment: .leading, spacing: 12) { startActions }
+                HStack(spacing: 12) { checkPhoneActions }
+                VStack(alignment: .leading, spacing: 12) { checkPhoneActions }
             }
             finderGuideAction
         }
+    }
+
+    @ViewBuilder private var checkPhoneActions: some View {
+        Button("Check connected iPhone") { model.checkBackupEncryptionStatus() }
+            .buttonStyle(LimeButton())
+            .disabled(!model.canPrepareCollection)
+        Button("Not now") { model.dismissRunApproval() }
+            .buttonStyle(SecondaryButton())
+            .keyboardShortcut(.cancelAction)
     }
 
     @ViewBuilder private var startActions: some View {
@@ -585,7 +599,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(["calls", "messages"], id: \.self) { category in
                     if model.missingSources.contains(category) {
-                        Label(category == "calls" ? "Calls unavailable" : "Messages unavailable",
+                        Label(category == "calls" ? "Calls unavailable" : "SMS activity unavailable",
                               systemImage: "exclamationmark.circle")
                             .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
                     }
@@ -656,7 +670,7 @@ struct ContentView: View {
                 .foregroundStyle(Brand.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if model.reviewPending {
-                Text("Reviewing selected metadata…").font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
+                Text("Reviewing selected contacts and activity…").font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
             if model.phoneRun != nil { accountStopAction }
         }
@@ -676,11 +690,15 @@ struct ContentView: View {
     private var contactActionHelp: String {
         if model.suggestionScanning { return "Selection is available after all contacts are checked." }
         if model.selectedIDs.isEmpty { return "Select at least one contact to continue." }
-        if model.accountSaveAwaitingBrowserReceipt { return "Saving is being finalized. Finish in the browser before changing contacts." }
+        if model.accountSaveAwaitingBrowserReceipt {
+            return model.isPreparationRun
+                ? "Waiting for the final account receipt. Keep your AMPLIFai account tab open."
+                : "Saving is being finalized. Finish in the browser before changing contacts."
+        }
         if model.selectionChangePending { return "Checking that changing contacts won’t interrupt a save… Your reviewed selection is still intact." }
         if !model.handoffID.isEmpty { return "This selection is linked to your AMPLIFai account in the browser." }
         if let run = model.phoneRun {
-            return "Continue saves \(model.selectedIDs.count.formatted()) contacts and their available metadata to \(run.email) · \(run.course)."
+            return "Continue saves \(model.selectedIDs.count.formatted()) contacts and their available activity to \(run.email) · \(run.course)."
         }
         return "\(model.selectedIDs.count.formatted()) contacts selected."
     }
@@ -691,7 +709,9 @@ struct ContentView: View {
         if model.workspace == nil { return "Contact review is not ready" }
         if model.accountSaveAwaitingBrowserReceipt { return "Waiting for account Save receipt" }
         if model.selectionChangePending { return "Checking the current transfer…" }
-        if !model.handoffID.isEmpty { return "Continue in your account browser" }
+        if !model.handoffID.isEmpty {
+            return model.isPreparationRun ? "Waiting for your account to save" : "Continue in your account browser"
+        }
         return "Local review is retained"
     }
 
@@ -750,7 +770,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Available history can be partial.")
                     Text("Observed calls: \(model.missingSources.contains("calls") ? "unavailable" : dateRange(model.observedCallEarliest, model.observedCallLatest)).")
-                    Text("Observed messages: \(model.missingSources.contains("messages") ? "unavailable" : dateRange(model.observedMessageEarliest, model.observedMessageLatest)).")
+                    Text("Observed SMS activity: \(model.missingSources.contains("messages") ? "unavailable" : dateRange(model.observedMessageEarliest, model.observedMessageLatest)).")
                     currentSourceDetails
                     privacyDetails
                     ViewThatFits(in: .horizontal) {
@@ -776,7 +796,9 @@ struct ContentView: View {
         if model.accountSaveAwaitingBrowserReceipt { return "Waiting for the final receipt" }
         if model.browserReceived { return "Waiting for account Save" }
         if model.canRetryDestinationVerification { return "Account verification needs a retry" }
-        if model.browserOwnsFlow { return "Continue in your browser" }
+        if model.browserOwnsFlow {
+            return model.isPreparationRun ? "Waiting for your account" : "Continue in your browser"
+        }
         return "Ready to save"
     }
 
@@ -793,6 +815,9 @@ struct ContentView: View {
         if model.canRetryDestinationVerification {
             return "The account check did not finish. Your selected data is retained; retry the same check."
         }
+        if model.isPreparationRun {
+            return "Keep your AMPLIFai account tab open so it can save your selected data. If the tab was closed, reopen it to resume this transfer. This Mac is waiting for confirmation."
+        }
         return "The browser handles transfer, saving and your report. This Mac is waiting for confirmation."
     }
 
@@ -804,15 +829,15 @@ struct ContentView: View {
                 metric(model.matchedCalls, "Matching calls", unavailable: model.missingSources.contains("calls"))
             }
             if model.phoneRun?.categories.contains("messages") != false {
-                metric(model.matchedMessages, "Matching messages", unavailable: model.missingSources.contains("messages"))
+                metric(model.matchedMessages, "Matching SMS activity", unavailable: model.missingSources.contains("messages"))
             }
         }
         .brandWell()
         .accessibilityLabel("Selected local data; saved totals are confirmed in your browser")
     }
 
-    /// One next action per state. After the handoff this is passive status only: the website owns the flow,
-    /// and the window shows this only when the owner reopens it.
+    /// The browser confirms persistence. Preparation mode keeps this window available with an explicit
+    /// account-reopen recovery action; completion never opens the browser automatically.
     @ViewBuilder private var shareNextStep: some View {
         VStack(alignment: .leading, spacing: 10) {
             if model.canRetryAccountCompletion {
@@ -825,10 +850,17 @@ struct ContentView: View {
                     Button("Retry account verification") { model.retryDestinationVerification() }
                         .buttonStyle(SecondaryButton())
                 }
-                Button("Continue in browser") {
-                    returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+                if model.isPreparationRun {
+                    Button("Reopen account to finish saving") {
+                        returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+                    }
+                    .buttonStyle(SecondaryButton())
+                } else {
+                    Button("Continue in browser") {
+                        returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+                    }
+                    .buttonStyle(LimeButton())
                 }
-                .buttonStyle(LimeButton())
                 if model.phoneRun != nil && !model.accountSaveAwaitingBrowserReceipt { accountStopAction }
             } else if model.runBinding == .binding || model.accountLinkPending {
                 progressLine("Confirming with your AMPLIFai account…")
@@ -857,12 +889,14 @@ struct ContentView: View {
             .buttonStyle(LimeButton())
     }
 
-    private var accountStopAction: some View {
-        Button("Stop in account…") {
-            returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+    @ViewBuilder private var accountStopAction: some View {
+        if let controlURL = model.accountControlURL {
+            Button("Stop in account…") {
+                returnToBrowser(controlURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+            }
+            .buttonStyle(QuietAction())
+            .help("Open your account's Stop control. Opening the account does not stop this collection by itself.")
         }
-        .buttonStyle(QuietAction())
-        .help("Open your account's Stop control. Opening the account does not stop this collection by itself.")
     }
 
     private func progressLine(_ text: String) -> some View {

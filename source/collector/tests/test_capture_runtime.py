@@ -40,6 +40,7 @@ async def collect():
         watchdog = BackupWatchdog()
         async def backup():
             watchdog.start()
+            watchdog.payload_received(1)
             try:
                 await asyncio.Event().wait()
             finally:

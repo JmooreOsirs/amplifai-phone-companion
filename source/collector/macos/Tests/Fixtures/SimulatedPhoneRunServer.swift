@@ -23,6 +23,9 @@ import Foundation
         var approvalCurrent = true
         var boundHandoffID: String?
         var boundPayloadSha256: String?
+        var preparationMode = false
+        var operationID: String?
+        var admittedAt: Date?
     }
     /// The destination a website connect intent recorded (the signed-in account and course).
     struct Intent {
@@ -49,6 +52,7 @@ import Foundation
     var faultsByPath: [String: [Fault]] = [:]
     /// Replaces the next successful reply object for a path (mismatch checks).
     var replyOverrides: [String: [String: Any]] = [:]
+    var replyTransforms: [String: ([String: Any]) -> [String: Any]] = [:]
     var now: () -> Date = Date.init
     /// When set, replies are held until `releaseHeldReplies()` (late and stale reply checks).
     var holdReplies = false
@@ -103,6 +107,10 @@ import Foundation
         runs[runID]?.boundHandoffID = handoffID
         runs[runID]?.boundPayloadSha256 = digest
     }
+    func forceOperation(_ runID: String, operationID: String) {
+        runs[runID]?.operationID = operationID
+        runs[runID]?.admittedAt = now()
+    }
 
     /// `keepingForReplay` injects a duplicate late transport callback for generation-fence checks.
     func releaseHeldReplies(path: String? = nil, keepingForReplay: Bool = false) {
@@ -130,6 +138,7 @@ import Foundation
         if case .dropRequest = fault { deliver(.failed); return }
         var (status, object) = handle(path, body)
         if status == 200, let override = replyOverrides.removeValue(forKey: path) { object = override }
+        if status == 200, let transform = replyTransforms.removeValue(forKey: path) { object = transform(object) }
         switch fault {
         case .loseReply: deliver(.failed)
         case .status(let code): deliver(.response(status: code, contentType: "application/json", body: Data("{}".utf8)))
@@ -156,18 +165,32 @@ import Foundation
 
     private func refusal(_ status: Int, _ code: String) -> (Int, [String: Any]) { (status, ["code": code]) }
 
+    private func preparationFields(_ run: Run) -> [String: Any] {
+        var fields = claimFields(run, includeStart: false)
+        fields["protocol"] = "phone-start-v1"
+        fields["state"] = run.revoked ? "revoked" : now() >= (run.expiresAt ?? now()) ? "expired" :
+            run.approvalCurrent ? "current" : "replacement_required"
+        fields["operation"] = run.operationID.map {
+            ["operationId": $0, "admittedAt": Self.timestamp(run.admittedAt!)]
+        } as Any? ?? NSNull()
+        return fields
+    }
+
     private func handle(_ path: String, _ body: Data) -> (Int, [String: Any]) {
         guard let fields = try? JSONSerialization.jsonObject(with: body) as? [String: String] else {
             return refusal(400, "phone_connect_invalid")
         }
         switch path {
-        case PhoneRunContract.claimPath:
+        case PhoneRunContract.claimPath, PhoneRunContract.preparationClaimPath:
             guard Set(fields.keys) == ["runId", "bootstrap", "capability"], let runID = fields["runId"],
                   let bootstrap = fields["bootstrap"], let capability = fields["capability"],
                   PhoneRunContract.isCapability(capability), capability != bootstrap else {
                 return refusal(400, "phone_connect_invalid")
             }
             guard var run = runs[runID] else { return refusal(404, "phone_run_unavailable") }
+            let preparation = path == PhoneRunContract.preparationClaimPath
+            guard run.capability == nil || run.preparationMode == preparation,
+                  !preparation || run.disclosureVersion == "phone-run-v2" else { return refusal(409, "phone_run_changed") }
             guard run.bootstrap == bootstrap, !run.revoked, run.approvalCurrent else { return refusal(409, "phone_run_changed") }
             if let claimed = run.capability {
                 // An exact retry reads the same claim back for ten minutes; anything else is refused.
@@ -179,22 +202,51 @@ import Foundation
                 run.capability = capability
                 run.claimedAt = now()
                 run.expiresAt = now().addingTimeInterval(PhoneRunContract.runLifetime)
+                run.preparationMode = preparation
                 runs[runID] = run
             }
-            return (200, claimFields(run, includeStart: run.disclosureVersion == "phone-run-v2"))
-        case PhoneRunContract.statusPath:
+            return (200, preparation ? preparationFields(run) : claimFields(run, includeStart: run.disclosureVersion == "phone-run-v2"))
+        case PhoneRunContract.statusPath, PhoneRunContract.preparationStatusPath:
             guard Set(fields.keys) == ["runId", "capability"], let runID = fields["runId"], let run = runs[runID],
                   run.capability == fields["capability"], let expires = run.expiresAt,
                   now() < expires.addingTimeInterval(24 * 60 * 60) else { return refusal(409, "phone_run_changed") }
+            guard run.preparationMode == (path == PhoneRunContract.preparationStatusPath) else { return refusal(409, "phone_run_changed") }
+            if run.preparationMode { return (200, preparationFields(run)) }
             var result = claimFields(run, includeStart: true)
             result["state"] = run.revoked ? "revoked" : now() >= expires ? "expired" :
                 run.approvalCurrent ? "current" : "replacement_required"
             return (200, result)
+        case PhoneRunContract.startPath:
+            guard Set(fields.keys) == ["runId", "capability", "expectedApprovalId", "operationId"],
+                  let runID = fields["runId"], var run = runs[runID], run.preparationMode,
+                  run.capability == fields["capability"], run.approvalID == fields["expectedApprovalId"],
+                  let operation = fields["operationId"], PhoneRunContract.isID(operation),
+                  !run.revoked, run.approvalCurrent, let expiry = run.expiresAt, now() < expiry,
+                  run.operationID == nil || run.operationID == operation else { return refusal(409, "phone_run_changed") }
+            if run.operationID == nil { run.operationID = operation; run.admittedAt = now(); runs[runID] = run }
+            return (200, preparationFields(run))
+        case PhoneRunContract.preparationBindPath:
+            guard Set(fields.keys) == ["runId", "capability", "expectedApprovalId", "operationId", "handoffId", "payloadSha256"],
+                  let runID = fields["runId"], var run = runs[runID], run.preparationMode,
+                  run.capability == fields["capability"], run.approvalID == fields["expectedApprovalId"],
+                  let operation = run.operationID, operation == fields["operationId"],
+                  let handoff = fields["handoffId"], let digest = fields["payloadSha256"],
+                  PhoneRunContract.isID(handoff), PhoneRunContract.isDigest(digest),
+                  !run.revoked, run.approvalCurrent, let expiry = run.expiresAt, now() < expiry,
+                  run.boundHandoffID == nil || (run.boundHandoffID == handoff && run.boundPayloadSha256 == digest) else {
+                return refusal(409, "phone_run_changed")
+            }
+            run.boundHandoffID = handoff
+            run.boundPayloadSha256 = digest
+            runs[runID] = run
+            return (200, ["protocol": "phone-start-v1", "operationId": operation, "approvalId": run.approvalID,
+                          "enrollmentId": run.enrollmentID, "destinationEmail": run.email, "destinationCourse": run.course,
+                          "categories": run.categories])
         case PhoneRunContract.bindPath:
             guard Set(fields.keys) == ["runId", "capability", "handoffId", "payloadSha256", "previousApprovalId"],
                   let previous = fields["previousApprovalId"], let previousScopes = approvalScopes[previous],
                   let runID = fields["runId"], let handoff = fields["handoffId"], let digest = fields["payloadSha256"],
-                  var run = runs[runID], run.capability == fields["capability"], !run.revoked, run.approvalCurrent,
+                  var run = runs[runID], !run.preparationMode, run.capability == fields["capability"], !run.revoked, run.approvalCurrent,
                   let expires = run.expiresAt, now() < expires else { return refusal(409, "phone_run_changed") }
             guard Set(run.categories).isSubset(of: Set(previousScopes)),
                   previous == run.approvalID || run.boundHandoffID != nil else { return refusal(409, "phone_run_changed") }
@@ -213,6 +265,7 @@ import Foundation
             guard Set(fields.keys) == ["runId", "capability", "intentId", "handoffId", "payloadSha256", "expectedApprovalId"],
                   let runID = fields["runId"], let intent = fields["intentId"], let run = runs[runID],
                   run.capability == fields["capability"], !run.revoked, run.approvalCurrent,
+                  !run.preparationMode || run.operationID != nil,
                   fields["expectedApprovalId"] == run.approvalID,
                   let expires = run.expiresAt, now() < expires,
                   run.boundHandoffID == fields["handoffId"], run.boundPayloadSha256 == fields["payloadSha256"] else {

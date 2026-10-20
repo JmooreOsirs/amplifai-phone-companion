@@ -138,7 +138,7 @@ struct CollectionStatusPanel: View {
     private var activityWidget: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let elapsed = max(0, Int(context.date.timeIntervalSince(model.collectionStartedAt ?? context.date)))
-            VStack(alignment: .leading, spacing: Brand.Space.section) {
+            VStack(alignment: .leading, spacing: Brand.Space.item) {
                 activityHeading(at: context.date)
                 if model.phase != .completing {
                     ViewThatFits(in: .horizontal) {
@@ -202,10 +202,18 @@ struct CollectionStatusPanel: View {
                          : "Average received rate: \(CollectorModel.byteDescription(Int64(model.transferBytesPerSecond)))/s")
                         .foregroundStyle(Brand.muted)
                 }
-                if model.phase == .transferring && !model.transferIsKnown {
-                    Text(model.collectionStartedAt == nil ? "No backup bytes measured yet."
-                         : "No backup bytes measured yet. The elapsed clock is not transfer progress.")
-                        .foregroundStyle(Brand.muted)
+                if model.phase == .connecting || model.phase == .transferring {
+                    if let estimate = model.backupRemainingEstimate() {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Estimated backup transfer remaining: \(estimate.lowerBound)–\(estimate.upperBound) min")
+                                .font(Brand.bodyFont(15).weight(.bold)).foregroundStyle(Brand.heading)
+                            Text("Based on recent iPhone progress. Reading sources and saving to your account take additional time.")
+                                .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
+                        }
+                    } else {
+                        Text("Time remaining is not available yet. An estimate needs steady, measured backup progress.")
+                            .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                    }
                 }
                 if model.phase == .processing && model.processedBytes == 0 {
                     Text("Waiting for the first local parsing measurement.").foregroundStyle(Brand.muted)
@@ -247,9 +255,9 @@ struct CollectionStatusPanel: View {
     @ViewBuilder private var stopActions: some View {
         Button("Stop on this Mac") { model.disconnect() }
             .buttonStyle(SecondaryButton()).frame(minHeight: 44)
-        if model.phoneRun != nil {
+        if let controlURL = model.accountControlURL {
             Button("Stop in account…") {
-                returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
+                returnToBrowser(controlURL, preferredBrowserBundleID: model.returnBrowserBundleID)
             }
             .buttonStyle(QuietAction())
             .help("Open your account's Stop control. Opening the account does not stop this collection by itself.")
@@ -271,7 +279,8 @@ struct CollectionStatusPanel: View {
     private func activityTitle(at date: Date) -> String {
         switch model.collectionAttention(at: date) {
         case .connectionUnconfirmed: return "Connection status unavailable"
-        case .backupWaiting, .backupStale: return "Needs attention"
+        case .backupWaiting: return "Waiting for backup data"
+        case .backupStale: return "Needs attention"
         case nil:
             return model.phase == .processing && model.processedBytes == 0
                 ? "Reading available sources" : model.statusTitle
@@ -284,7 +293,7 @@ struct CollectionStatusPanel: View {
         case .backupWaiting: return "No backup data measured yet"
         case .backupStale: return "No recent backup data measured"
         case nil:
-            if model.phase == .processing { return "Reading source metadata locally" }
+            if model.phase == .processing { return "Reading contacts and activity locally" }
             if model.phase == .connecting { return "Waiting for iPhone connection confirmation" }
             return model.lastBackupActivityAt != nil ? "Receiving measured backup data" : "Waiting for iPhone backup data"
         }
@@ -298,7 +307,7 @@ struct CollectionStatusPanel: View {
             let observed = model.connectionConfirmedAt != nil
                 ? "A \(model.connectionTransport) connection was confirmed; no backup data measured."
                 : "No backup data measured."
-            return "\(observed) Check for a phone passcode prompt. If Finder is backing up this iPhone, wait for its latest-backup date/time to update before another collection."
+            return "\(observed) Collection allows up to thirty minutes for initial readiness. Check for an iPhone passcode prompt. If Finder is backing up this iPhone, let it finish; its latest-backup date/time should update."
         case .backupStale:
             return "No new backup data has been measured for at least a minute. Check for an iPhone passcode prompt and inspect its current backup status in Finder."
         case nil: break
@@ -310,7 +319,7 @@ struct CollectionStatusPanel: View {
             : model.connectionConfirmedAt != nil
             ? "A \(model.connectionTransport) connection was confirmed. Waiting for backup data; respond to any iPhone passcode prompt."
             : "Keep the cable connected while waiting for backup data from your iPhone."
-        case .processing: return "Reading available metadata and cleaning up temporary backup files."
+        case .processing: return "Reading available contacts and activity, then cleaning up temporary backup files."
         default: return model.statusDetail
         }
     }
@@ -366,11 +375,15 @@ struct CollectionStatusPanel: View {
                 Button("Check temporary data") { model.inspectResidue() }.buttonStyle(SecondaryButton())
             }
             if model.phase == .completed {
-                // The report itself needs the account's course scope, so open the signed-in account page.
-                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+                Button("Continue to Signed in Account") {
+                    model.continueToSignedInAccount { url, browser in
+                        returnToBrowser(url, preferredBrowserBundleID: browser)
+                    }
+                }
                     .buttonStyle(LimeButton())
-                Link("View report in your account", destination: URL(string: "https://amplifai.satoris.ai/phone/account")!)
-                    .buttonStyle(QuietAction())
+                    .disabled(!model.canContinueToSignedInAccount)
+                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+                    .buttonStyle(SecondaryButton())
             }
         } else if model.phase == .selecting || model.phase == .reviewing {
             Button("Discard review…") { confirmingDiscard = true }.buttonStyle(SecondaryButton())

@@ -7,6 +7,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
+BACKUP_INITIAL_WAIT_SECONDS = 30 * 60
 BACKUP_IDLE_SECONDS = 15 * 60
 MAX_CONTROL_ONLY_SECONDS = 60 * 60
 CLEANUP_GRACE_SECONDS = 5
@@ -25,8 +26,11 @@ class BackupTimeLimit(TimeoutError):
 class BackupStalled(TimeoutError):
     code = "backup_stalled"
 
-    def __init__(self) -> None:
-        super().__init__("No backup bytes were received for fifteen minutes")
+    def __init__(self, *, initial_wait: bool = False) -> None:
+        super().__init__(
+            "No backup file data was exchanged during the thirty-minute initial readiness window"
+            if initial_wait else "No backup bytes were received for fifteen minutes"
+        )
 
 
 class BackupNoFileProgress(TimeoutError):
@@ -49,8 +53,10 @@ class BackupCleanupIncomplete(RuntimeError):
 class BackupWatchdog:
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
+        self._started_at: float | None = None
         self._last_received_at: float | None = None
         self._last_payload_at: float | None = None
+        self._file_started_at: float | None = None
         self._receiving_file = False
         self._wire_payload_accounting = False
         self._active = False
@@ -59,7 +65,8 @@ class BackupWatchdog:
 
     def start(self) -> None:
         self.raise_if_aborted()
-        self._last_received_at = self._last_payload_at = self._clock()
+        self._started_at = self._last_received_at = self._clock()
+        self._last_payload_at = self._file_started_at = None
         self._receiving_file = False
         self._active = True
         self.wake()
@@ -67,6 +74,7 @@ class BackupWatchdog:
     def received(self, byte_count: int) -> None:
         self.raise_if_aborted()
         if self._active and byte_count > 0:
+            self.raise_if_expired()
             self._last_received_at = self._clock()
             self.wake()
 
@@ -74,6 +82,7 @@ class BackupWatchdog:
         """Only real file bytes extend the slow-transfer budget, not framing."""
         self.raise_if_aborted()
         if self._active and byte_count > 0:
+            self.raise_if_expired()
             self._last_received_at = self._last_payload_at = self._clock()
             self.wake()
 
@@ -83,27 +92,39 @@ class BackupWatchdog:
         self.payload_received(byte_count)
 
     def file_transfer_started(self) -> None:
+        self.raise_if_expired()
         if not self._receiving_file:
-            self._last_payload_at = self._clock()
+            self._file_started_at = self._clock()
         self._receiving_file = True
         self.wake()
 
     def file_transfer_completed(self) -> None:
+        self.raise_if_expired()
         self._receiving_file = False
+        self._file_started_at = None
         self.wake()
 
     @property
     def wire_payload_accounting(self) -> bool:
         return self._wire_payload_accounting
 
-    def _activity_at(self) -> float:
-        return self._last_payload_at if self._receiving_file else self._last_received_at
+    def _idle_deadline(self) -> tuple[float, bool]:
+        initial_wait = self._last_payload_at is None
+        deadline = (
+            self._started_at + BACKUP_INITIAL_WAIT_SECONDS if initial_wait
+            else self._last_received_at + BACKUP_IDLE_SECONDS
+        )
+        if self._receiving_file:
+            file_activity = self._file_started_at
+            if self._last_payload_at is not None:
+                file_activity = max(file_activity, self._last_payload_at)
+            file_deadline = file_activity + BACKUP_IDLE_SECONDS
+            if not initial_wait or file_deadline <= deadline:
+                return file_deadline, False
+        return deadline, initial_wait
 
     def backup_completed(self) -> None:
-        self.raise_if_aborted()
-        error = self._expired()
-        if error is not None:
-            raise error
+        self.raise_if_expired()
         self._active = False
         self.wake()
 
@@ -115,6 +136,12 @@ class BackupWatchdog:
         if self._aborted:
             raise asyncio.CancelledError()
 
+    def raise_if_expired(self) -> None:
+        self.raise_if_aborted()
+        error = self._expired()
+        if error is not None:
+            raise error
+
     def wake(self) -> None:
         self._changed.set()
 
@@ -122,18 +149,22 @@ class BackupWatchdog:
         if not self._active:
             return None
         now = self._clock()
+        idle_deadline, _initial_wait = self._idle_deadline()
+        payload_activity = self._started_at if self._last_payload_at is None else self._last_payload_at
         return min(
-            self._activity_at() + BACKUP_IDLE_SECONDS - now,
-            self._last_payload_at + MAX_CONTROL_ONLY_SECONDS - now,
+            idle_deadline - now,
+            payload_activity + MAX_CONTROL_ONLY_SECONDS - now,
         )
 
     def _expired(self) -> BackupStalled | BackupNoFileProgress | None:
         if not self._active:
             return None
         now = self._clock()
-        if now - self._activity_at() >= BACKUP_IDLE_SECONDS:
-            return BackupStalled()
-        if now - self._last_payload_at >= MAX_CONTROL_ONLY_SECONDS:
+        idle_deadline, initial_wait = self._idle_deadline()
+        if now >= idle_deadline:
+            return BackupStalled(initial_wait=initial_wait)
+        payload_activity = self._started_at if self._last_payload_at is None else self._last_payload_at
+        if now - payload_activity >= MAX_CONTROL_ONLY_SECONDS:
             return BackupNoFileProgress()
         return None
 

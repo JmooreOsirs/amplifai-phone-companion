@@ -16,7 +16,8 @@ final class CollectorModel: ObservableObject {
     static let accountOrigin = "https://amplifai.satoris.ai"
     /// Timing, kept distinct (server values are enforced by the server; the app only stays truthful about them):
     /// - start-key bootstrap: one use, 10 minutes after the website issues it (the website's approval window is 1 hour);
-    /// - Start deadline: status returns the original ten-minute deadline; status/replay never renew it;
+    /// - legacy Start deadline: the original ten-minute deadline; status/replay never renew it;
+    /// - preparation Start admission: explicit action within the original durable run expiry;
     /// - durable run: 12 hours after the claim, covering a long collection, review and bind;
     /// - initial helper bridge: 5 minutes from `pair` (after review and Continue) to browser release;
     /// - website connect intent: 5 minutes from creation to consume;
@@ -32,6 +33,32 @@ final class CollectorModel: ObservableObject {
         components.queryItems = [URLQueryItem(name: "continue", value: "reviewed"),
                                  URLQueryItem(name: "enrollmentId", value: enrollmentID),
                                  URLQueryItem(name: "week", value: "phone")]
+        return components.url
+    }
+    /// Opens owner-scoped run controls without requesting handoff discovery or automatic saving.
+    static func accountControlURL(runID: String, enrollmentID: String) -> URL? {
+        guard PhoneRunContract.isID(runID), PhoneRunContract.isID(enrollmentID) else { return nil }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "amplifai.satoris.ai"
+        components.path = "/phone/account"
+        components.queryItems = [URLQueryItem(name: "phoneRunControl", value: runID),
+                                 URLQueryItem(name: "enrollmentId", value: enrollmentID),
+                                 URLQueryItem(name: "week", value: "phone")]
+        return components.url
+    }
+    /// A saved report return never re-enters the browser's reviewed-transfer continuation.
+    static func accountReportURL(enrollmentID: String, handoffID: String, payloadSha256: String) -> URL? {
+        guard PhoneRunContract.isID(enrollmentID), PhoneRunContract.isID(handoffID),
+              PhoneRunContract.isDigest(payloadSha256) else { return nil }
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "amplifai.satoris.ai"
+        components.path = "/phone/account"
+        components.queryItems = [URLQueryItem(name: "enrollmentId", value: enrollmentID),
+                                 URLQueryItem(name: "week", value: "phone"),
+                                 URLQueryItem(name: "completedHandoffId", value: handoffID),
+                                 URLQueryItem(name: "completedPayloadSha256", value: payloadSha256)]
         return components.url
     }
     static let runRefusedMessage = "This approval can no longer start a collection. Nothing was collected. Approve again in your AMPLIFai account."
@@ -84,9 +111,14 @@ final class CollectorModel: ObservableObject {
         var collectionStarted = false
         var boundHandoffID: String?
         var boundPayloadSha256: String?
+        var admissionProtocol: PhoneRunAdmissionProtocol = .legacy
+        var admittedOperation: PhoneRunOperation?
 
         /// Status supplies the original Start deadline. Legacy claim responses use a conservative local fallback.
-        var startDeadline: Date { claim.startExpiresAt ?? claimedAt.addingTimeInterval(CollectorModel.runStartWindow) }
+        var startDeadline: Date {
+            admissionProtocol == .preparation ? claim.expiresAt :
+                claim.startExpiresAt ?? claimedAt.addingTimeInterval(CollectorModel.runStartWindow)
+        }
         var email: String { claim.email }
         var enrollmentID: String { claim.enrollmentID }
     }
@@ -99,6 +131,14 @@ final class CollectorModel: ObservableObject {
         let id: UUID
         let url: URL
         let handoffID: String
+    }
+    /// Expected completion identity only; no capability, approval or source records.
+    /// The handoff payload digest is not the server's saved-snapshot digest.
+    private struct CompletedReportNavigation {
+        let enrollmentID: String
+        let handoffID: String
+        let payloadSha256: String
+        let returnBrowserBundleID: String?
     }
     enum Phase: Equatable {
         case idle, connecting, transferring, passwordRequired, processing
@@ -158,9 +198,13 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var accountSaveAwaitingBrowserReceipt = false
     private var closedDestinationIntentIDs: Set<String> = []
     @Published private(set) var accountNavigation: AccountNavigation?
+    @Published private var completedReportNavigation: CompletedReportNavigation?
     var accountNavigationID: UUID? { accountNavigation?.id }
     /// The one-approval run. A collection starts only from a verified, current, unstarted run.
     @Published private(set) var phoneRun: PhoneRun?
+    var isPreparationRun: Bool { phoneRun?.admissionProtocol == .preparation }
+    private var pendingStartRequest: PhoneRunStartRequest?
+    private var pendingPreparationBind: PhoneRunPreparationBindRequest?
     @Published private(set) var runApproval: RunApproval = .none
     @Published private(set) var runApprovalMessage = ""
     @Published private(set) var runBinding: RunBinding = .none
@@ -198,6 +242,7 @@ final class CollectorModel: ObservableObject {
     private let runAuthority: RunAuthority?
     /// Clock seam for checks; the server remains the authority for every expiry.
     var now: () -> Date = Date.init
+    var monotonicNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     /// Handoff status polling interval; checks shorten it.
     var handoffPollNanoseconds: UInt64 = 2_000_000_000
     /// Test seam: every helper event, in order, after it is applied.
@@ -316,7 +361,10 @@ final class CollectorModel: ObservableObject {
     private var lastErrorStage: String?
     private var lastDeviceStatus: Int64?
     private var attemptedDiagnosticCode: String?
-    private var backupProgressSamples: [(date: Date, percent: Double)] = []
+    private var backupProgressSamples: [(uptime: TimeInterval, percent: Double)] = []
+    private var lastBackupEstimateUptime: TimeInterval?
+    private var lastBackupPayloadUptime: TimeInterval?
+    private var lastBackupObservedPercent: Double?
     private let cancellationGraceNanoseconds: UInt64 = 15_000_000_000
     /// Without a `runAuthority` no approval can be claimed, bound or verified, so nothing can be collected or
     /// sent; the production app passes `PhoneRunAuthorityClient.production()`. Checks never reach the network.
@@ -344,10 +392,11 @@ final class CollectorModel: ObservableObject {
     /// A verified run for this collection that has not started and has not expired.
     var hasStartableRun: Bool { runStartWindowOpen(at: now()) }
 
-    /// Before Start, a run is startable only inside its original ten-minute Start window; once collection has
-    /// started, the run stays valid for its 12 hours.
+    /// Preparation can wait within its fixed run expiry. Legacy Start keeps its original ten-minute window;
+    /// neither window itself grants permission to launch the helper.
     func runStartWindowOpen(at date: Date) -> Bool {
         guard runApproval == .approved, let run = phoneRun else { return false }
+        if run.admissionProtocol == .preparation && [.replacementRequired, .revoked, .expired].contains(runStatus) { return false }
         return !run.collectionStarted && date < run.startDeadline && date < run.claim.expiresAt
     }
 
@@ -362,6 +411,9 @@ final class CollectorModel: ObservableObject {
 
     private var hasCurrentCollectionApproval: Bool {
         guard let approval = localCollectionApproval, hasStartableRun, runStatus == .current, let run = phoneRun else { return false }
+        guard run.admissionProtocol == .legacy ||
+                (run.admittedOperation?.operationID == pendingStartRequest?.operationID &&
+                 run.admittedOperation?.operationID == approval.runID.uuidString.lowercased()) else { return false }
         return approval.runID == collectionApprovalRunID &&
             approval.disclosureVersion == Self.collectionDisclosureVersion && approval.scopes == Self.localCollectionScopes &&
             approval.serverRunID == run.runID && approval.serverApprovalID == run.claim.approvalID &&
@@ -380,6 +432,13 @@ final class CollectorModel: ObservableObject {
               PhoneRunContract.supportedDisclosureVersions.contains(run.claim.disclosureVersion),
               backupEncryptionStatus != .notChecked, backupEncryptionStatus != .checking else { return false }
         if callHistoryPreparation == .confirmedEncryptedBackup && backupEncryptionStatus != .encrypted { return false }
+        if run.admissionProtocol == .preparation {
+            guard let operation = run.admittedOperation, let request = pendingStartRequest,
+                  operation.operationID == request.operationID, request.runID == run.runID,
+                  request.expectedApprovalID == run.claim.approvalID,
+                  let localID = UUID(uuidString: operation.operationID) else { return false }
+            collectionApprovalRunID = localID
+        }
         localCollectionApproval = LocalCollectionApproval(
             runID: collectionApprovalRunID, disclosureVersion: Self.collectionDisclosureVersion,
             approvedAt: now(), scopes: Self.localCollectionScopes,
@@ -454,6 +513,25 @@ final class CollectorModel: ObservableObject {
     /// capability can recover it through status; a new capability never recovers or extends the approval.
     private func claimWithRecovery(_ request: PhoneRunClaimRequest, authority: RunAuthority,
                                    completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void) {
+        if authority.admissionProtocol == .preparation {
+            func finish(_ outcome: PhoneRunOutcome<PhonePreparationStatus>) {
+                switch outcome {
+                case .accepted(let status) where status.state == .current && status.operation == nil:
+                    completion(.accepted(status.claim))
+                case .accepted: completion(.refused(status: 409, code: "phone_run_changed"))
+                case .refused(let status, let code): completion(.refused(status: status, code: code))
+                case .uncertain: completion(.uncertain)
+                case .malformed: completion(.malformed)
+                }
+            }
+            authority.preparationClaim(request) { outcome in
+                if case .refused(status: 409, code: _) = outcome,
+                   let status = PhoneRunStatusRequest(runID: request.runID, capability: request.capability) {
+                    authority.preparationStatus(status, completion: finish)
+                } else { finish(outcome) }
+            }
+            return
+        }
         authority.claim(request) { outcome in
             guard case .refused(status: 409, code: _) = outcome,
                   let statusRequest = PhoneRunStatusRequest(runID: request.runID, capability: request.capability) else {
@@ -484,7 +562,8 @@ final class CollectorModel: ObservableObject {
             runStatusMessage = ""
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
                                 returnBrowserBundleID: pendingClaimBrowser, course: claim.course,
-                                categories: claim.categories, claimedAt: pendingClaimStartedAt)
+                                categories: claim.categories, claimedAt: pendingClaimStartedAt,
+                                admissionProtocol: runAuthority?.admissionProtocol ?? .legacy)
             pendingClaim = nil
             runApprovalMessage = ""
             runApproval = .approved
@@ -501,7 +580,8 @@ final class CollectorModel: ObservableObject {
 
     private func claimIsCurrent(_ claim: PhoneRunClaim) -> Bool {
         PhoneRunContract.supportedDisclosureVersions.contains(claim.disclosureVersion) && claim.expiresAt > now() &&
-            claim.expiresAt <= now().addingTimeInterval(PhoneRunContract.runLifetime + 3600)
+            claim.expiresAt <= now().addingTimeInterval(PhoneRunContract.runLifetime +
+                (runAuthority?.admissionProtocol == .preparation ? 60 : 3600))
     }
 
     /// Try the newer link's claim again with its identical bytes; the current grant stays as it is.
@@ -534,12 +614,14 @@ final class CollectorModel: ObservableObject {
             startConfirmationToken = nil
             startConfirmation = .none
             startPreparation = nil
+            pendingStartRequest = nil
             cancelRunStatusCheck()
             runStatus = .unchecked
             runStatusMessage = ""
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
                                 returnBrowserBundleID: candidateClaimBrowser, course: claim.course,
-                                categories: claim.categories, claimedAt: candidateClaimStartedAt)
+                                categories: claim.categories, claimedAt: candidateClaimStartedAt,
+                                admissionProtocol: runAuthority?.admissionProtocol ?? .legacy)
             discardCandidate()
             candidateNotice = ""
             declineLocalCollection()
@@ -555,6 +637,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func refuseRun(_ message: String) {
+        pendingStartRequest = nil
+        pendingPreparationBind = nil
         cancelRunStatusCheck()
         phoneRun = nil
         pendingClaim = nil
@@ -574,6 +658,9 @@ final class CollectorModel: ObservableObject {
 
     /// Ends this app's use of the run: completion, discard, or a collection that stopped.
     private func endPhoneRun() {
+        pendingStartRequest = nil
+        pendingPreparationBind = nil
+        completedReportNavigation = nil
         runStatusPollTask?.cancel()
         runStatusPollTask = nil
         cancelRunStatusCheck()
@@ -585,6 +672,7 @@ final class CollectorModel: ObservableObject {
         pendingBind = nil
         pendingAdoption = nil
         approvalAdoptionPending = false
+        clearDestinationVerification()
         runApproval = .none
         runApprovalMessage = ""
         runBinding = .none
@@ -604,8 +692,8 @@ final class CollectorModel: ObservableObject {
         let names = PhoneRunContract.categories.filter(categories.contains).map { category -> String in
             switch category {
             case "contacts": return "chosen contacts"
-            case "calls": return "their call metadata"
-            default: return "their message metadata"
+            case "calls": return "their call activity"
+            default: return "their SMS activity"
             }
         }
         return "Approved to save: " + names.joined(separator: ", ")
@@ -621,6 +709,25 @@ final class CollectorModel: ObservableObject {
         phoneRun.flatMap { Self.accountContinueURL(enrollmentID: $0.enrollmentID) } ?? Self.accountStartURL
     }
 
+    var accountControlURL: URL? {
+        phoneRun.flatMap { Self.accountControlURL(runID: $0.runID, enrollmentID: $0.enrollmentID) }
+    }
+
+    var canContinueToSignedInAccount: Bool { completedReportReturnURL != nil }
+    var completedReportReturnURL: URL? {
+        guard canSafelyClose, let destination = completedReportNavigation else { return nil }
+        return Self.accountReportURL(enrollmentID: destination.enrollmentID,
+                                     handoffID: destination.handoffID, payloadSha256: destination.payloadSha256)
+    }
+
+    /// Only an explicit owner action opens the saved report; it cannot pair, save, or authorize collection.
+    @discardableResult
+    func continueToSignedInAccount(_ navigate: (URL, String?) -> Void) -> Bool {
+        guard let url = completedReportReturnURL, let destination = completedReportNavigation else { return false }
+        navigate(url, destination.returnBrowserBundleID)
+        return true
+    }
+
     /// Start collection is an action, not consent: it runs the read-only iPhone setting check and then starts.
     /// An unencrypted or unconfirmed setting stops here for Finder guidance or an explicit available-data choice.
     @discardableResult
@@ -629,6 +736,7 @@ final class CollectorModel: ObservableObject {
         guard hasStartableRun, canPrepareCollection, localCollectionApproval == nil,
               candidateClaim == nil, startConfirmation == .none else { return false }
         guard beginBackupEncryptionStatusCheck() else { return false }
+        guard prepareExplicitStartRequest() else { return false }
         startAfterSettingCheck = true
         launch(mode: "backup-encryption-status")
         return true
@@ -642,6 +750,7 @@ final class CollectorModel: ObservableObject {
         guard backupEncryptionStatus == .unencrypted || backupEncryptionStatus == .unknown,
               !helperRunning, process == nil, hasStartableRun,
               canPrepareCollection, candidateClaim == nil, startConfirmation == .none else { return false }
+        guard prepareExplicitStartRequest() else { return false }
         confirmRunThenStart(.continueWithoutConfirmedCoverage)
         return true
     }
@@ -665,6 +774,10 @@ final class CollectorModel: ObservableObject {
     /// It can recover a lost claim response without treating the twelve-hour run lifetime as a fresh Start.
     private func confirmRunThenStart(_ preparation: CallHistoryPreparation) {
         guard let run = phoneRun else { return }
+        if run.admissionProtocol == .preparation {
+            confirmPreparationStart(preparation)
+            return
+        }
         let token = UUID()
         startConfirmationToken = token
         startPreparation = preparation
@@ -684,6 +797,84 @@ final class CollectorModel: ObservableObject {
             guard self.canPrepareCollection, !self.helperRunning, self.process == nil,
                   self.composeRunCollectionApproval(callHistoryPreparation: preparation) else { return }
             self.connect()
+        }
+    }
+
+    /// Created only by an explicit Start action; rechecks and status observations never create an operation.
+    private func prepareExplicitStartRequest() -> Bool {
+        guard let run = phoneRun else { return false }
+        guard run.admissionProtocol == .preparation else { return true }
+        if let request = pendingStartRequest {
+            return request.runID == run.runID && request.expectedApprovalID == run.claim.approvalID
+        }
+        pendingStartRequest = PhoneRunStartRequest(runID: run.runID, capability: run.capability,
+            expectedApprovalID: run.claim.approvalID, operationID: UUID().uuidString.lowercased())
+        return pendingStartRequest != nil
+    }
+
+    private func confirmPreparationStart(_ preparation: CallHistoryPreparation) {
+        guard let run = phoneRun, run.admissionProtocol == .preparation, !run.collectionStarted,
+              let request = pendingStartRequest, request.runID == run.runID,
+              request.expectedApprovalID == run.claim.approvalID, let authority = runAuthority,
+              hasStartableRun else { return }
+        let token = UUID()
+        startConfirmationToken = token
+        startPreparation = preparation
+        startConfirmation = .confirming
+        authority.start(request) { [weak self] outcome in
+            guard let self, self.startConfirmationToken == token, self.pendingStartRequest == request,
+                  self.phoneRun?.runID == request.runID else { return }
+            switch outcome {
+            case .uncertain, .malformed:
+                guard let status = PhoneRunStatusRequest(runID: run.runID, capability: run.capability) else { return }
+                authority.preparationStatus(status) { [weak self] recovered in
+                    self?.preparationStartFinished(request, token: token, preparation: preparation, outcome: recovered)
+                }
+            default:
+                self.preparationStartFinished(request, token: token, preparation: preparation, outcome: outcome)
+            }
+        }
+    }
+
+    private func preparationStartFinished(_ request: PhoneRunStartRequest, token: UUID,
+                                          preparation: CallHistoryPreparation,
+                                          outcome: PhoneRunOutcome<PhonePreparationStatus>) {
+        guard pendingStartRequest == request, startConfirmationToken == token, startConfirmation == .confirming,
+              var run = phoneRun, run.admissionProtocol == .preparation, !run.collectionStarted,
+              run.runID == request.runID, run.claim.approvalID == request.expectedApprovalID else { return }
+        startConfirmationToken = nil
+        guard now() < run.claim.expiresAt else { stopForRunStatus(.expired); return }
+        switch outcome {
+        case .accepted(let status):
+            guard status.state == .current else {
+                startConfirmation = .none
+                stopForRunStatus(status.state)
+                return
+            }
+            guard status.claim == run.claim else { refuseRun(Self.runRefusedMessage); return }
+            guard let operation = status.operation else { startConfirmation = .uncertain; return }
+            guard operation.operationID == request.operationID,
+                  operation.admittedAt >= run.claim.expiresAt.addingTimeInterval(-PhoneRunContract.runLifetime),
+                  operation.admittedAt < run.claim.expiresAt,
+                  operation.admittedAt <= now().addingTimeInterval(60),
+                  run.admittedOperation == nil || run.admittedOperation == operation else {
+                refuseRun(Self.runRefusedMessage)
+                return
+            }
+            cancelRunStatusCheck()
+            run.admittedOperation = operation
+            phoneRun = run
+            runStatus = .current
+            runStatusMessage = ""
+            startConfirmation = .none
+            startPreparation = nil
+            guard canPrepareCollection, !helperRunning, process == nil,
+                  composeRunCollectionApproval(callHistoryPreparation: preparation) else { return }
+            connect()
+        case .refused:
+            refuseRun(Self.runRefusedMessage)
+        case .uncertain, .malformed:
+            startConfirmation = .uncertain
         }
     }
 
@@ -773,7 +964,7 @@ final class CollectorModel: ObservableObject {
             do { try await Task.sleep(nanoseconds: timeout) } catch { return }
             self?.timeoutRunStatusCheck(token)
         }
-        authority.status(request) { [weak self] outcome in
+        let receiveStatus: @MainActor (PhoneRunOutcome<PhoneRunStatus>) -> Void = { [weak self] outcome in
             guard let self, self.runStatusToken == token else { return }
             guard var active = self.phoneRun,
                   active.runID == run.runID, active.capability == run.capability,
@@ -838,6 +1029,29 @@ final class CollectorModel: ObservableObject {
                 self.finishRunStatusCheck(token, current: false)
             }
         }
+        if run.admissionProtocol == .preparation {
+            authority.preparationStatus(request) { [weak self] outcome in
+                switch outcome {
+                case .accepted(let status):
+                    if status.state == .current, let self, let active = self.phoneRun,
+                       status.operation != active.admittedOperation {
+                        let pendingAction = self.startConfirmation == .confirming || self.startConfirmation == .uncertain
+                        guard !active.collectionStarted, active.admittedOperation == nil, pendingAction,
+                              let operation = status.operation,
+                              self.pendingStartRequest?.runID == active.runID,
+                              self.pendingStartRequest?.operationID == operation.operationID else {
+                            receiveStatus(.refused(status: 409, code: "phone_run_changed"))
+                            return
+                        }
+                    }
+                    // Observation alone never installs an admitted operation or launches collection.
+                    receiveStatus(.accepted(PhoneRunStatus(claim: status.claim, state: status.state)))
+                case .refused(let status, let code): receiveStatus(.refused(status: status, code: code))
+                case .uncertain: receiveStatus(.uncertain)
+                case .malformed: receiveStatus(.malformed)
+                }
+            }
+        } else { authority.status(request, completion: receiveStatus) }
     }
 
     private func synchronizeBridgeAuthority(paused: Bool) {
@@ -854,6 +1068,17 @@ final class CollectorModel: ObservableObject {
 
     private func stopForRunStatus(_ state: PhoneRunStatus.State) {
         if state == .replacementRequired || state == .current {
+            if isPreparationRun {
+                // A newer authority fence outranks an older in-flight Start or bind response.
+                startConfirmationToken = nil
+                startConfirmation = .none
+                startPreparation = nil
+                declineLocalCollection()
+                if runBinding == .binding {
+                    runBinding = .uncertain
+                    errorMessage = Self.bindUncertainMessage
+                }
+            }
             runStatus = .replacementRequired
             runStatusMessage = "This connection is paused. Check the approval in your AMPLIFai account; this Mac keeps your collection."
             synchronizeBridgeAuthority(paused: true)
@@ -1136,16 +1361,19 @@ final class CollectorModel: ObservableObject {
         return lastBackupActivityAt == nil ? .backupWaiting : .backupStale
     }
 
-    func backupRemainingEstimate(at now: Date) -> ClosedRange<Int>? {
+    /// Backup transfer only. Percentage samples require recent measured payload bytes; they cannot estimate saving.
+    func backupRemainingEstimate() -> ClosedRange<Int>? {
         guard phase == .transferring, progressIsKnown, progress >= 15, progress < 90,
+              let uptime = backupEstimateUptime(), let payloadUptime = lastBackupPayloadUptime,
+              (0..<Self.collectionAttentionDelay).contains(uptime - payloadUptime),
               backupProgressSamples.count >= 3, let first = backupProgressSamples.first,
               let last = backupProgressSamples.last,
-              (0...60).contains(now.timeIntervalSince(last.date)) else { return nil }
-        let span = last.date.timeIntervalSince(first.date)
+              (0...60).contains(uptime - last.uptime) else { return nil }
+        let span = last.uptime - first.uptime
         let gain = last.percent - first.percent
         guard span >= 120, gain >= 5, abs(last.percent - progress) < 0.1 else { return nil }
         let rates = zip(backupProgressSamples, backupProgressSamples.dropFirst()).compactMap { earlier, later -> Double? in
-            let seconds = later.date.timeIntervalSince(earlier.date)
+            let seconds = later.uptime - earlier.uptime
             let percentage = later.percent - earlier.percent
             return seconds >= 30 && percentage > 0 ? percentage / seconds : nil
         }
@@ -1158,13 +1386,52 @@ final class CollectorModel: ObservableObject {
         return max(1, lower)...max(2, upper)
     }
 
-    func observeBackupProgress(_ value: Double, at date: Date) {
-        guard value.isFinite, (0..<100).contains(value) else { return }
-        if let previous = backupProgressSamples.last {
-            if value < previous.percent { backupProgressSamples = [] }
-            else if value <= previous.percent || date.timeIntervalSince(previous.date) < 30 { return }
+    private func resetBackupEstimateProgress() {
+        backupProgressSamples = []
+        lastBackupObservedPercent = nil
+    }
+
+    private func resetBackupEstimate() {
+        resetBackupEstimateProgress()
+        lastBackupEstimateUptime = nil
+        lastBackupPayloadUptime = nil
+    }
+
+    private func backupEstimateUptime() -> TimeInterval? {
+        let uptime = monotonicNow()
+        guard uptime.isFinite, uptime >= 0,
+              lastBackupEstimateUptime.map({ uptime >= $0 }) ?? true else {
+            resetBackupEstimate()
+            return nil
         }
-        backupProgressSamples.append((date, value))
+        lastBackupEstimateUptime = uptime
+        return uptime
+    }
+
+    private func observeBackupPayloadProgress() {
+        guard let uptime = backupEstimateUptime() else { return }
+        if let previous = lastBackupPayloadUptime, uptime - previous >= Self.collectionAttentionDelay {
+            // The first bytes after a stall cannot reuse the pre-stall rate.
+            resetBackupEstimateProgress()
+        }
+        lastBackupPayloadUptime = uptime
+    }
+
+    private func observeBackupProgress(_ value: Double) {
+        guard value.isFinite, (0..<100).contains(value), let uptime = backupEstimateUptime(),
+              let payloadUptime = lastBackupPayloadUptime,
+              (0..<Self.collectionAttentionDelay).contains(uptime - payloadUptime) else {
+            resetBackupEstimateProgress()
+            return
+        }
+        if let previous = lastBackupObservedPercent, value < previous {
+            resetBackupEstimateProgress()
+            return
+        }
+        lastBackupObservedPercent = value
+        if let previous = backupProgressSamples.last,
+           value <= previous.percent || uptime - previous.uptime < 30 { return }
+        backupProgressSamples.append((uptime, value))
         if backupProgressSamples.count > 8 { backupProgressSamples.removeFirst() }
     }
 
@@ -1300,7 +1567,7 @@ final class CollectorModel: ObservableObject {
         connectionConfirmedAt = nil
         lastBackupActivityAt = nil
         lastParsingActivityAt = nil
-        backupProgressSamples = []
+        resetBackupEstimate()
         collectionStartedAt = now()
         resetHandoff()
         lastErrorCode = nil
@@ -1833,7 +2100,7 @@ final class CollectorModel: ObservableObject {
         // An account receipt can race this command and cause the helper to
         // reject replacement while the original browser ACK remains live.
         pairingRequested = true
-        navigateOnPairing = automaticAccountNavigation
+        navigateOnPairing = automaticAccountNavigation && !isPreparationRun
         send(["action": "pair"])
     }
 
@@ -1844,6 +2111,7 @@ final class CollectorModel: ObservableObject {
 
     /// After the helper's pairing: associate this handoff and its digest with the run, once.
     private func bindHandoff() {
+        if isPreparationRun { bindPreparationHandoff(); return }
         guard let run = phoneRun, run.collectionStarted, let authority = runAuthority,
               let request = PhoneRunBindRequest(runID: run.runID, capability: run.capability, handoffID: handoffID,
                                                 payloadSha256: pairingPayloadSha256, previousApprovalID: run.claim.approvalID) else {
@@ -1861,6 +2129,11 @@ final class CollectorModel: ObservableObject {
 
     /// Try again after an uncertain bind: the identical request for the same handoff.
     func retryRunBinding() {
+        if isPreparationRun {
+            guard runBinding == .uncertain else { return }
+            bindPreparationHandoff()
+            return
+        }
         guard runBinding == .uncertain, let request = pendingBind, request.handoffID == handoffID,
               let authority = runAuthority else { return }
         runBinding = .binding
@@ -1869,6 +2142,58 @@ final class CollectorModel: ObservableObject {
             guard let self, self.pendingBind == request, self.runBinding == .binding else { return }
             guard current else { self.runBinding = .uncertain; self.errorMessage = Self.bindUncertainMessage; return }
             authority.bind(request) { [weak self] outcome in self?.bindFinished(request, outcome) }
+        }
+    }
+
+    private func bindPreparationHandoff() {
+        guard let run = phoneRun, run.admissionProtocol == .preparation, run.collectionStarted,
+              let operation = run.admittedOperation, let authority = runAuthority else { return }
+        if pendingPreparationBind == nil {
+            pendingPreparationBind = PhoneRunPreparationBindRequest(runID: run.runID, capability: run.capability,
+                expectedApprovalID: run.claim.approvalID, operationID: operation.operationID,
+                handoffID: handoffID, payloadSha256: pairingPayloadSha256)
+        }
+        guard let request = pendingPreparationBind, request.runID == run.runID,
+              request.expectedApprovalID == run.claim.approvalID, request.operationID == operation.operationID,
+              request.handoffID == handoffID, request.payloadSha256 == pairingPayloadSha256 else { return }
+        runBinding = .binding
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.pendingPreparationBind == request, self.runBinding == .binding else { return }
+            guard current else { self.runBinding = .uncertain; self.errorMessage = Self.bindUncertainMessage; return }
+            authority.preparationBind(request) { [weak self] outcome in
+                self?.preparationBindFinished(request, outcome)
+            }
+        }
+    }
+
+    private func preparationBindFinished(_ request: PhoneRunPreparationBindRequest,
+                                         _ outcome: PhoneRunOutcome<PhonePreparationBinding>) {
+        guard pendingPreparationBind == request, runBinding == .binding, var run = phoneRun,
+              run.admissionProtocol == .preparation, run.runID == request.runID,
+              run.admittedOperation?.operationID == request.operationID,
+              handoffID == request.handoffID, pairingPayloadSha256 == request.payloadSha256,
+              phase == .reviewing else { return }
+        switch outcome {
+        case .accepted(let binding):
+            let destination = binding.destination
+            guard binding.operationID == request.operationID, destination.approvalID == request.expectedApprovalID,
+                  destination.approvalID == run.claim.approvalID, destination.enrollmentID == run.enrollmentID,
+                  destination.email == run.email, destination.course == run.claim.course,
+                  destination.categories == run.claim.categories, now() < run.claim.expiresAt else {
+                refuseBinding(Self.bindRefusedMessage)
+                return
+            }
+            run.boundHandoffID = request.handoffID
+            run.boundPayloadSha256 = request.payloadSha256
+            phoneRun = run
+            pendingPreparationBind = nil
+            runBinding = .bound
+            // The waiting account tab consumes this binding; native stays visible until the owner returns explicitly.
+            if !destinationIntentID.isEmpty { verifyDestination() }
+        case .refused: refuseBinding(Self.bindRefusedMessage)
+        case .uncertain, .malformed:
+            runBinding = .uncertain
+            errorMessage = Self.bindUncertainMessage
         }
     }
 
@@ -1915,7 +2240,7 @@ final class CollectorModel: ObservableObject {
     /// Existing captured handoffs can adopt a separately approved website replacement. This action itself
     /// never creates approval, changes the handoff, extends deadlines or infers authority from status fields.
     var canRetryApprovalAdoption: Bool {
-        phoneRun?.collectionStarted == true && phoneRun?.boundHandoffID == handoffID &&
+        !isPreparationRun && phoneRun?.collectionStarted == true && phoneRun?.boundHandoffID == handoffID &&
             !handoffID.isEmpty && !approvalAdoptionPending &&
             (phase == .reviewing || phase == .completing) &&
             (runStatus == .replacementRequired || pendingAdoption != nil)
@@ -2122,7 +2447,7 @@ final class CollectorModel: ObservableObject {
         startConfirmationToken = nil
         if startConfirmation != .none { startConfirmation = .none; startPreparation = nil }
         // Discarding or cancelling a started collection ends its run; cancelling the pre-start check does not.
-        if phoneRun?.collectionStarted == true { endPhoneRun() }
+        if phoneRun?.collectionStarted == true || isPreparationRun { endPhoneRun() }
         guard let process else {
             if commandReady { send(["action": "disconnect"]) }
             // Explicit owner discard remains usable after an unexpected helper exit.
@@ -2146,6 +2471,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func clearPrivateReview() {
+        resetBackupEstimate()
         password = ""
         contacts = []
         totalContacts = 0
@@ -2179,6 +2505,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func resetHandoff() {
+        completedReportNavigation = nil
+        pendingPreparationBind = nil
         cancelRunStatusCheck()
         if runStatus == .refreshing || runStatus == .checking { runStatus = .unchecked }
         pendingAdoption = nil
@@ -2506,11 +2834,15 @@ final class CollectorModel: ObservableObject {
             }
         case "progress":
             if let value = event.value, value.isFinite, (0...100).contains(value) {
-                observeBackupProgress(value, at: Date())
+                observeBackupProgress(value)
                 progress = value
                 progressIsKnown = true
                 phase = value == 100 ? .processing : .transferring
-            } else { progressIsKnown = false; phase = .transferring }
+            } else {
+                resetBackupEstimateProgress()
+                progressIsKnown = false
+                phase = .transferring
+            }
         case "transfer":
             guard phase == .connecting || phase == .transferring || phase == .processing else { return }
             if event.stage == "backup" {
@@ -2522,6 +2854,7 @@ final class CollectorModel: ObservableObject {
                       discarded == received - retained, files >= transferFileCount,
                       rate.isFinite, rate >= 0, rate <= 1_099_511_627_776,
                       elapsed.isFinite, elapsed > 0 else { return }
+                if received > transferBytes { observeBackupPayloadProgress() }
                 if received > transferBytes || files > transferFileCount { lastBackupActivityAt = now() }
                 transferBytes = received
                 retainedBytes = retained
@@ -2779,7 +3112,7 @@ final class CollectorModel: ObservableObject {
             pairingPayloadSha256 = digest
             synchronizeBridgeAuthority(paused: true)
             pollHandoff()
-            // Nothing opens until the run accepts this handoff; then the account owns the flow.
+            // The account can receive only after this run accepts the handoff.
             bindHandoff()
         case "destination":
             guard !handoffID.isEmpty, event.handoffId?.lowercased() == handoffID,
@@ -2997,8 +3330,24 @@ final class CollectorModel: ObservableObject {
         handoffPollTask?.cancel()
         handoffPollTask = nil
         if mode == "connect" && code == 0 && handoffAcknowledged && !needsStorageReview {
+            let destination: CompletedReportNavigation?
+            if let run = phoneRun, run.collectionStarted, handoffBound,
+               let boundHandoff = run.boundHandoffID, let boundDigest = run.boundPayloadSha256,
+               boundDigest == pairingPayloadSha256,
+               destinationApproved, !destinationIntentID.isEmpty,
+               approvedDestinationIntentID == destinationIntentID,
+               !cancellationRequested, residues.isEmpty,
+               Self.accountReportURL(enrollmentID: run.enrollmentID, handoffID: boundHandoff,
+                                     payloadSha256: boundDigest) != nil {
+                destination = CompletedReportNavigation(enrollmentID: run.enrollmentID, handoffID: boundHandoff,
+                                                        payloadSha256: boundDigest,
+                                                        returnBrowserBundleID: run.returnBrowserBundleID)
+            } else {
+                destination = nil
+            }
             clearPrivateReview()
             endPhoneRun()
+            completedReportNavigation = destination
             phase = .completed
         }
         if mode == "connect" && code != 0 && phase != .error && phase != .idle {
@@ -3014,6 +3363,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        completedReportNavigation = nil
         let failedSettingCheck = backupEncryptionStatus == .checking && statusCheckFailureActive
         if !failedSettingCheck { settingCheckAfterCollectionFailure = false }
         declineLocalCollection()
@@ -3052,7 +3402,7 @@ final class CollectorModel: ObservableObject {
         case .processing: return "Finishing local collection"
         case .selecting: return "Choose the people to review"
         case .reviewing:
-            if browserOwnsFlow { return "Saving in your AMPLIFai account" }
+            if browserOwnsFlow { return isPreparationRun ? "Waiting for your account to save" : "Saving in your AMPLIFai account" }
             return "Your local review is ready"
         case .completing: return "Saved — finishing on this Mac"
         case .completed: return "Saved — your report is in your account"
@@ -3074,13 +3424,13 @@ final class CollectorModel: ObservableObject {
                 ? "The error below is from the earlier attempt. The setting check below shows the most recent read; it did not start a backup."
                 : "This collection did not produce a verified completion. Review the failure and last observed transfer below before starting a new approved attempt."
         case .transferring:
-            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the cable connected and respond to any phone prompts. Data-aware guards allow larger active transfers; 15 minutes without any device response or sustained very slow progress can stop the session."
+            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the cable connected and respond to any phone prompts. Initial backup readiness can wait up to 30 minutes. Once actual file data begins, 15 minutes without new activity or a stalled file transfer can stop the session. Active transfers have no fixed total-time limit."
         case .passwordRequired:
             return "Use the existing password for this iPhone's encrypted computer backup. It is not your phone passcode. This app does not enable, disable or reset encryption."
         case .processing:
-            return "The helper is finishing metadata reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
+            return "The helper is finishing contact and activity reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
         case .selecting:
-            return "\(totalContacts) contacts, \(availableCalls) calls and \(availableMessages) messages were observed in available sources. Choose contacts, then Continue: only those are saved to the account you approved."
+            return "\(totalContacts) contacts, \(availableCalls) call activity records and \(availableMessages) SMS activity records were observed in available sources. Choose contacts, then Continue: only those are saved to the account you approved."
         case .reviewing:
             // Only what the helper has reported; nothing here claims pages received or saved early.
             if accountSaveAwaitingBrowserReceipt {
@@ -3090,6 +3440,9 @@ final class CollectorModel: ObservableObject {
                 return "Your browser has every selected page. This Mac keeps its private copy until your account confirms the save."
             }
             if browserOwnsFlow {
+                if isPreparationRun {
+                    return "Keep your AMPLIFai account tab open to receive and save this selection. If it is closed, reopen your account to resume this same transfer. This Mac is waiting for confirmation."
+                }
                 return "Your AMPLIFai account in your browser is saving the contacts you chose. You can keep this window minimized."
             }
             return "Review the counts and observed dates. Continue saves the contacts you chose to the account you approved."
@@ -3165,7 +3518,7 @@ final class CollectorModel: ObservableObject {
         case "connection_timeout", "timeout": return "The iPhone connection timed out. Keep it unlocked, check the cable or trusted Wi-Fi connection, then retry."
         case "connection_lost": return "The iPhone connection ended before backup completion. No metadata was saved. Check the cable and port, then reconnect after the helper stops."
         case "device_backup_failed": return "The iPhone reported a backup failure. No metadata was saved."
-        case "backup_stalled": return "No backup data arrived for 15 minutes. Collection stopped without saving metadata."
+        case "backup_stalled": return "The backup reached its waiting limit without new data. Collection stopped without saving metadata."
         case "backup_no_file_progress": return "The iPhone kept responding but no backup file data arrived for one hour. Collection stopped without saving metadata. Check the phone's normal backup status before retrying."
         case "backup_time_limit": return "The backup made too little file-data progress within its data-aware time budget. Collection stopped. Use a direct USB cable and retry; if it repeats, contact support."
         case "cancelled": return "Collection was cancelled. No metadata was saved."

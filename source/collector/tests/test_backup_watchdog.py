@@ -62,6 +62,56 @@ class ByteReader:
 
 
 class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_silence_past_fifteen_minutes_can_then_transfer(self) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+
+        async def backup() -> str:
+            watchdog.start()
+            clock.now = 20 * 60
+            self.assertIsNone(watchdog._expired())
+            await checkpoint()
+            watchdog.file_transfer_started()
+            watchdog.payload_received(1024)
+            watchdog.file_transfer_completed()
+            watchdog.backup_completed()
+            return "completed"
+
+        self.assertEqual(
+            await run_backup_session(backup(), watchdog, lambda: self.fail("no residue")),
+            "completed",
+        )
+
+    async def test_initial_control_traffic_cannot_extend_thirty_minute_limit(self) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+        watchdog.start()
+        for minute in range(1, 30):
+            clock.now = minute * 60
+            watchdog.received(1)
+            self.assertIsNone(watchdog._expired())
+        clock.now = 30 * 60
+        with self.assertRaisesRegex(BackupStalled, "thirty-minute initial readiness"):
+            watchdog.received(1)
+
+    async def test_first_file_frame_keeps_fifteen_minute_stall_limit(self) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+        watchdog.start()
+        clock.now = 60
+        watchdog.file_transfer_started()
+        clock.now += BACKUP_IDLE_SECONDS
+        self.assertIsInstance(watchdog._expired(), BackupStalled)
+
+    async def test_late_first_payload_cannot_revive_expired_readiness(self) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+        watchdog.start()
+        clock.now = 30 * 60
+        with self.assertRaises(BackupStalled):
+            watchdog.payload_received(1024)
+        self.assertIsInstance(watchdog._expired(), BackupStalled)
+
     async def test_discarded_upload_bytes_survive_old_hour_cap_without_new_percent(
         self,
     ) -> None:
@@ -125,13 +175,14 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
             local_socket.close()
             peer_socket.close()
 
-    async def test_no_receive_bytes_stalls_and_finishes_cleanup(self) -> None:
+    async def test_no_new_receive_bytes_stalls_and_finishes_cleanup(self) -> None:
         clock = Clock()
         watchdog = BackupWatchdog(clock=clock)
         started, cleanup = asyncio.Event(), asyncio.Event()
 
         async def backup() -> None:
             watchdog.start()
+            watchdog.payload_received(1)
             started.set()
             try:
                 await asyncio.Event().wait()
@@ -227,6 +278,7 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
 
         async def backup() -> None:
             watchdog.start()
+            watchdog.payload_received(1)
             started.set()
             try:
                 await asyncio.Event().wait()
@@ -268,6 +320,113 @@ class BackupWatchdogTest(unittest.IsolatedAsyncioTestCase):
 
 
 class CollectionAbortTest(unittest.IsolatedAsyncioTestCase):
+    async def test_initial_deadline_covers_each_setup_await(self) -> None:
+        for stage in ("discovery", "pairing", "service", "encryption", "reader"):
+            with self.subTest(stage=stage):
+                await self._stop_setup(stage, cancel=False)
+
+    async def test_cancel_during_pairing_cleans_owned_session(self) -> None:
+        await self._stop_setup("pairing", cancel=True)
+
+    async def test_pairing_result_after_cancel_cannot_confirm_or_start_backup(self) -> None:
+        started, teardown, release, closed = (asyncio.Event() for _ in range(4))
+        device = SimpleNamespace(is_usb=True, is_network=False, connection_type="USB", serial="SYNTHETIC-UDID")
+        lockdown = MagicMock(udid=device.serial)
+        lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+
+        async def close(*_args):
+            closed.set()
+            return False
+
+        lockdown.__aexit__ = AsyncMock(side_effect=close)
+
+        async def late_pairing(**_kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                teardown.set()
+                await release.wait()
+                return lockdown
+
+        connections = []
+        with (
+            tempfile.TemporaryDirectory(prefix="amplifai-late-pairing-") as temporary,
+            patch("pymobiledevice3.usbmux.list_devices", AsyncMock(return_value=[device])),
+            patch("pymobiledevice3.lockdown.create_using_usbmux", AsyncMock(side_effect=late_pairing)),
+            patch("pymobiledevice3.services.mobilebackup2.Mobilebackup2Service") as service,
+            patch("amplifai_phone.backup_watchdog.CLEANUP_GRACE_SECONDS", 0),
+        ):
+            root = Path(temporary) / "sessions"
+            task = asyncio.create_task(collect_iphone(
+                password_provider=lambda: self.fail("no password"),
+                connection_callback=connections.append, sessions_root=root,
+            ))
+            await asyncio.wait_for(started.wait(), 1)
+            task.cancel()
+            with self.assertRaises(BackupCleanupIncomplete) as stopped:
+                await asyncio.wait_for(task, 1)
+            self.assertEqual(stopped.exception.reason, "cancelled")
+            await teardown.wait()
+            sessions = list(root.glob("session-*"))
+            self.assertEqual(len(sessions), 1)
+            self.assertTrue((sessions[0] / SESSION_MARKER).is_file())
+            release.set()
+            await asyncio.wait_for(closed.wait(), 1)
+            self.assertEqual(connections, [])
+            service.assert_not_called()
+
+    async def _stop_setup(self, stage: str, *, cancel: bool) -> None:
+        clock = Clock()
+        watchdog = BackupWatchdog(clock=clock)
+        started, cleaned = asyncio.Event(), asyncio.Event()
+
+        async def wait_at_boundary(*_args, **_kwargs):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaned.set()
+
+        device = SimpleNamespace(is_usb=True, is_network=False, connection_type="USB", serial="SYNTHETIC-UDID")
+        lockdown = MagicMock(udid=device.serial)
+        lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+        lockdown.__aexit__ = AsyncMock(return_value=False)
+        lockdown.get_value = AsyncMock(return_value=True)
+        service = MagicMock()
+        service.__aenter__ = AsyncMock(return_value=service)
+        service.__aexit__ = AsyncMock(return_value=False)
+        service.backup = AsyncMock()
+        service.service._ensure_started = AsyncMock(return_value=(asyncio.StreamReader(), MagicMock()))
+        discovery = AsyncMock(return_value=[device])
+        pairing = AsyncMock(return_value=lockdown)
+        boundary = {"discovery": discovery, "pairing": pairing, "service": service.__aenter__,
+                    "encryption": lockdown.get_value, "reader": service.service._ensure_started}[stage]
+        boundary.side_effect = wait_at_boundary
+        with (
+            tempfile.TemporaryDirectory(prefix="amplifai-setup-deadline-") as temporary,
+            patch("pymobiledevice3.usbmux.list_devices", discovery),
+            patch("pymobiledevice3.lockdown.create_using_usbmux", pairing),
+            patch("pymobiledevice3.services.mobilebackup2.Mobilebackup2Service", return_value=service),
+            patch("amplifai_phone.ios_backup.BackupWatchdog", return_value=watchdog),
+        ):
+            root = Path(temporary) / "sessions"
+            task = asyncio.create_task(collect_iphone(
+                password_provider=lambda: self.fail("no password"),
+                require_encrypted_backup=True, sessions_root=root,
+            ))
+            await asyncio.wait_for(started.wait(), 1)
+            if cancel:
+                task.cancel()
+            else:
+                clock.now = 30 * 60
+                watchdog.wake()
+            with self.assertRaises(asyncio.CancelledError if cancel else BackupStalled):
+                await asyncio.wait_for(task, 1)
+            self.assertTrue(cleaned.is_set())
+            self.assertEqual(list(root.glob("session-*")), [])
+            service.backup.assert_not_awaited()
+
     async def test_startup_storage_failure_is_reported_without_waiting(self) -> None:
         with (
             patch(

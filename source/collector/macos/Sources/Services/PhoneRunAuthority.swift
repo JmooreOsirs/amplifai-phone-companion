@@ -20,7 +20,13 @@ enum PhoneRunContract {
     static let statusPath = "/api/v1/phone-run-approvals/status"
     static let bindPath = "/api/v1/phone-run-approvals/bind"
     static let verifyIntentPath = "/api/v1/phone-run-approvals/verify-intent"
-    static let paths: Set<String> = [claimPath, statusPath, bindPath, verifyIntentPath]
+    static let preparationClaimPath = "/api/v1/phone-run-approvals/preparation/claim"
+    static let preparationStatusPath = "/api/v1/phone-run-approvals/preparation/status"
+    static let startPath = "/api/v1/phone-run-approvals/preparation/start"
+    static let preparationBindPath = "/api/v1/phone-run-approvals/preparation/bind"
+    static let paths: Set<String> = [claimPath, statusPath, bindPath, verifyIntentPath,
+                                    preparationClaimPath, preparationStatusPath, startPath, preparationBindPath]
+    static let preparationProtocol = "phone-start-v1"
     /// The website's combined collection-and-save disclosure. Older collection-only receipts never stand in for it.
     static let disclosureVersion = "phone-run-v2"
     static let supportedDisclosureVersions: Set<String> = ["phone-run-v1", "phone-run-v2"]
@@ -128,8 +134,13 @@ enum PhoneRunContract {
     }
 
     static func destination(_ body: Data?) -> PhoneRunDestination? {
-        guard let object = object(body, keys: ["approvalId", "enrollmentId", "destinationEmail", "destinationCourse", "categories"]),
-              let approval = object["approvalId"] as? String, isID(approval),
+        guard let object = object(body, keys: ["approvalId", "enrollmentId", "destinationEmail", "destinationCourse", "categories"])
+        else { return nil }
+        return destinationFields(object)
+    }
+
+    private static func destinationFields(_ object: [String: Any]) -> PhoneRunDestination? {
+        guard let approval = object["approvalId"] as? String, isID(approval),
               let enrollment = object["enrollmentId"] as? String, isID(enrollment),
               let email = object["destinationEmail"] as? String, isEmail(email),
               let course = object["destinationCourse"] as? String, isCourse(course),
@@ -142,6 +153,57 @@ enum PhoneRunContract {
               let previous = fields["previousApprovalId"] as? String, isID(previous),
               let claim = claimFields(fields, startRequired: false) else { return nil }
         return PhoneRunBoundApproval(previousApprovalID: previous, claim: claim)
+    }
+
+    static func preparationStatus(_ body: Data?) -> PhonePreparationStatus? {
+        guard let fields = object(body, keys: claimKeys.union(["protocol", "state", "operation"])),
+              fields["protocol"] as? String == preparationProtocol,
+              fields["disclosureVersion"] as? String == disclosureVersion,
+              let stateName = fields["state"] as? String, let state = PhoneRunStatus.State(rawValue: stateName),
+              preparationDate(fields["expiresAt"]) != nil,
+              let claim = claimFields(fields, startRequired: false) else { return nil }
+        let operation: PhoneRunOperation?
+        if fields["operation"] is NSNull {
+            operation = nil
+        } else {
+            guard let raw = fields["operation"] as? [String: Any],
+                  Set(raw.keys) == ["operationId", "admittedAt"],
+                  let id = raw["operationId"] as? String, isID(id),
+                  let admittedAt = preparationDate(raw["admittedAt"]), admittedAt < claim.expiresAt else { return nil }
+            operation = PhoneRunOperation(operationID: id, admittedAt: admittedAt)
+        }
+        return PhonePreparationStatus(claim: claim, state: state, operation: operation)
+    }
+
+    private static func preparationDate(_ raw: Any?) -> Date? {
+        guard let text = raw as? String, text.utf8.count <= 40,
+              text.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])\z"#,
+                         options: .regularExpression) != nil,
+              let parsed = date(text) else { return nil }
+        let offset = text.hasSuffix("Z") ? "+00:00" : String(text.suffix(6))
+        guard let hours = Int(offset.dropFirst().prefix(2)), let minutes = Int(offset.suffix(2)),
+              let zone = TimeZone(secondsFromGMT: (hours * 60 + minutes) * 60 * (offset.hasPrefix("-") ? -1 : 1))
+        else { return nil }
+        // Foundation normalizes impossible days and accepts trailing text; the new wire must do neither.
+        let canonical = ISO8601DateFormatter()
+        canonical.formatOptions = [.withInternetDateTime]
+        canonical.timeZone = zone
+        guard canonical.string(from: parsed).prefix(19) == text.prefix(19) else { return nil }
+        return parsed
+    }
+
+    static func startedPreparation(_ body: Data?) -> PhonePreparationStatus? {
+        guard let status = preparationStatus(body), status.operation != nil else { return nil }
+        return status
+    }
+
+    static func preparationBinding(_ body: Data?) -> PhonePreparationBinding? {
+        guard let fields = object(body, keys: ["protocol", "operationId", "approvalId", "enrollmentId",
+                                               "destinationEmail", "destinationCourse", "categories"]),
+              fields["protocol"] as? String == preparationProtocol,
+              let operationID = fields["operationId"] as? String, isID(operationID),
+              let destination = destinationFields(fields) else { return nil }
+        return PhonePreparationBinding(operationID: operationID, destination: destination)
     }
 
     /// Fixed request bytes: prepared once, then sent unchanged on every attempt.
@@ -168,6 +230,24 @@ struct PhoneRunStatus: Equatable {
     enum State: String { case current, replacementRequired = "replacement_required", expired, revoked }
     let claim: PhoneRunClaim
     let state: State
+}
+
+enum PhoneRunAdmissionProtocol { case legacy, preparation }
+
+struct PhoneRunOperation: Equatable {
+    let operationID: String
+    let admittedAt: Date
+}
+
+struct PhonePreparationStatus: Equatable {
+    let claim: PhoneRunClaim
+    let state: PhoneRunStatus.State
+    let operation: PhoneRunOperation?
+}
+
+struct PhonePreparationBinding: Equatable {
+    let operationID: String
+    let destination: PhoneRunDestination
 }
 
 struct PhoneRunStatusRequest: Equatable {
@@ -232,6 +312,50 @@ struct PhoneRunBindRequest: Equatable {
     }
 }
 
+struct PhoneRunStartRequest: Equatable {
+    let runID: String
+    let expectedApprovalID: String
+    let operationID: String
+    let body: Data
+
+    init?(runID: String, capability: String, expectedApprovalID: String, operationID: String) {
+        guard PhoneRunContract.isID(runID), PhoneRunContract.isCapability(capability),
+              PhoneRunContract.isID(expectedApprovalID), PhoneRunContract.isID(operationID),
+              let body = PhoneRunContract.body(["runId": runID, "capability": capability,
+                                                "expectedApprovalId": expectedApprovalID, "operationId": operationID])
+        else { return nil }
+        self.runID = runID
+        self.expectedApprovalID = expectedApprovalID
+        self.operationID = operationID
+        self.body = body
+    }
+}
+
+struct PhoneRunPreparationBindRequest: Equatable {
+    let runID: String
+    let expectedApprovalID: String
+    let operationID: String
+    let handoffID: String
+    let payloadSha256: String
+    let body: Data
+
+    init?(runID: String, capability: String, expectedApprovalID: String, operationID: String,
+          handoffID: String, payloadSha256: String) {
+        guard PhoneRunContract.isID(runID), PhoneRunContract.isCapability(capability),
+              PhoneRunContract.isID(expectedApprovalID), PhoneRunContract.isID(operationID),
+              PhoneRunContract.isID(handoffID), PhoneRunContract.isDigest(payloadSha256),
+              let body = PhoneRunContract.body(["runId": runID, "capability": capability,
+                                                "expectedApprovalId": expectedApprovalID, "operationId": operationID,
+                                                "handoffId": handoffID, "payloadSha256": payloadSha256]) else { return nil }
+        self.runID = runID
+        self.expectedApprovalID = expectedApprovalID
+        self.operationID = operationID
+        self.handoffID = handoffID
+        self.payloadSha256 = payloadSha256
+        self.body = body
+    }
+}
+
 struct PhoneRunVerifyRequest: Equatable {
     let expectedApprovalID: String
     let runID: String
@@ -279,11 +403,40 @@ enum PhoneRunTransportResult: Equatable {
 
 /// The injectable run authority the model uses. Production: `PhoneRunAuthorityClient.production()`.
 @MainActor protocol RunAuthority: AnyObject {
+    var admissionProtocol: PhoneRunAdmissionProtocol { get }
     func claim(_ request: PhoneRunClaimRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void)
     func status(_ request: PhoneRunStatusRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunStatus>) -> Void)
     func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunBoundApproval>) -> Void)
     func verifyIntent(_ request: PhoneRunVerifyRequest,
                       completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void)
+    func preparationClaim(_ request: PhoneRunClaimRequest,
+                          completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void)
+    func preparationStatus(_ request: PhoneRunStatusRequest,
+                           completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void)
+    func start(_ request: PhoneRunStartRequest,
+               completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void)
+    func preparationBind(_ request: PhoneRunPreparationBindRequest,
+                         completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationBinding>) -> Void)
+}
+
+extension RunAuthority {
+    var admissionProtocol: PhoneRunAdmissionProtocol { .legacy }
+    func preparationClaim(_ request: PhoneRunClaimRequest,
+                          completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
+        completion(.refused(status: 404, code: "phone_run_unavailable"))
+    }
+    func preparationStatus(_ request: PhoneRunStatusRequest,
+                           completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
+        completion(.refused(status: 404, code: "phone_run_unavailable"))
+    }
+    func start(_ request: PhoneRunStartRequest,
+               completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
+        completion(.refused(status: 404, code: "phone_run_unavailable"))
+    }
+    func preparationBind(_ request: PhoneRunPreparationBindRequest,
+                         completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationBinding>) -> Void) {
+        completion(.refused(status: 404, code: "phone_run_unavailable"))
+    }
 }
 
 /// Sends fixed request bytes until there is a definite answer. A transport failure, a 5xx, or a 200 whose body is
@@ -294,16 +447,21 @@ enum PhoneRunTransportResult: Equatable {
 
     let transport: PhoneRunTransport
     let attempts: Int
+    let admissionProtocol: PhoneRunAdmissionProtocol
     private let schedule: Schedule
 
     /// `schedule` nil: a short main-queue backoff between exact retries.
-    init(transport: PhoneRunTransport, attempts: Int = 3, schedule: Schedule? = nil) {
+    init(transport: PhoneRunTransport, attempts: Int = 3, schedule: Schedule? = nil,
+         admissionProtocol: PhoneRunAdmissionProtocol = .legacy) {
         self.transport = transport
         self.attempts = max(1, attempts)
         self.schedule = schedule ?? Self.backoff
+        self.admissionProtocol = admissionProtocol
     }
 
-    static func production() -> PhoneRunAuthorityClient { PhoneRunAuthorityClient(transport: URLSessionPhoneRunTransport()) }
+    static func production() -> PhoneRunAuthorityClient {
+        PhoneRunAuthorityClient(transport: URLSessionPhoneRunTransport(), admissionProtocol: .preparation)
+    }
 
     static let backoff: Schedule = { attempt, work in
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75 * Double(attempt)) { MainActor.assumeIsolated { work() } }
@@ -327,6 +485,30 @@ enum PhoneRunTransportResult: Equatable {
                       completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunDestination>) -> Void) {
         send(PhoneRunContract.verifyIntentPath, request.body, parse: PhoneRunContract.destination, attempt: 1,
              completion: completion)
+    }
+
+    func preparationClaim(_ request: PhoneRunClaimRequest,
+                          completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
+        send(PhoneRunContract.preparationClaimPath, request.body, parse: PhoneRunContract.preparationStatus,
+             attempt: 1, completion: completion)
+    }
+
+    func preparationStatus(_ request: PhoneRunStatusRequest,
+                           completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
+        send(PhoneRunContract.preparationStatusPath, request.body, parse: PhoneRunContract.preparationStatus,
+             attempt: 1, completion: completion)
+    }
+
+    func start(_ request: PhoneRunStartRequest,
+               completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
+        send(PhoneRunContract.startPath, request.body, parse: PhoneRunContract.startedPreparation,
+             attempt: 1, completion: completion)
+    }
+
+    func preparationBind(_ request: PhoneRunPreparationBindRequest,
+                         completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationBinding>) -> Void) {
+        send(PhoneRunContract.preparationBindPath, request.body, parse: PhoneRunContract.preparationBinding,
+             attempt: 1, completion: completion)
     }
 
     private func send<Value>(_ path: String, _ body: Data, parse: @escaping (Data?) -> Value?, attempt: Int,
@@ -392,7 +574,7 @@ enum PhoneRunTransportResult: Equatable {
         return configuration
     }
 
-    /// Only the three fixed paths on the fixed host can ever be requested.
+    /// Only the allowlisted paths on the fixed host can ever be requested.
     nonisolated static func request(path: String, body: Data) -> URLRequest? {
         guard PhoneRunContract.paths.contains(path), body.count <= PhoneRunContract.maximumRequestBytes else { return nil }
         var components = URLComponents()
