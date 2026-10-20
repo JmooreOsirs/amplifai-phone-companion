@@ -1,5 +1,11 @@
 # Protected Mac release proposal — October 16
 
+> Historical native-source copy. The pending milestones below describe the
+> original October 16 proposal. Current control authority and execution
+> instructions live on protected `main`; use that checkout for signing and
+> publication. See [RELEASE-DELIVERY-CONTRACT.md](RELEASE-DELIVERY-CONTRACT.md) for
+> the current candidate and published RC29 baseline.
+
 **Review candidate; activation is disabled.** Brian already has write access to the public distribution repository, `JmooreOsirs/amplifai-phone-companion`. No access elevation, Apple invitation, credential transfer, source migration, signing run, public release or feed change is part of this milestone.
 
 Jeff's approved authority on October 16 is **“Brian releases reviewed commits independently (Recommended)”**. This supersedes the earlier per-run reviewer proposal. Source, workflow, policy/source authorization and CODEOWNERS changes require enforced protected PR review. Brian may then build, qualify, sign, notarize and publish that authorized immutable source without another human approving the run or its generated artifact hashes. Native producer/source-closure/finalizer/feed/publisher helpers are implemented in the pending integration PRs. Historical ARM and Intel candidates have qualification evidence. The new RC28 source still needs exact-candidate qualification; protected integration, credential provisioning and final signed-byte website promotion remain incomplete.

@@ -1,5 +1,11 @@
 # Intel Mac support — RC24 integration
 
+> Historical RC24 integration record. Its pending release and updater steps
+> describe that original milestone. For the current candidate, published RC29
+> baseline, qualification, and signing/publication procedure, use
+> [RELEASE-DELIVERY-CONTRACT.md](RELEASE-DELIVERY-CONTRACT.md) and the protected
+> `main` release-control checkout.
+
 ## What this changes
 
 This branch starts from Jeff's published `macos-2026.10.13-rc24-release` source ZIP (SHA-256 `171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3`) and applies the two focused commits from [Brian's Intel PR](https://github.com/Osirs-io/amplifai-phone-companion/pull/1). `INTEL-RC24-BASELINE.json` records every imported authored-source hash. Brian's RC23 native Intel run proves that earlier candidate only; this integration needs its own native build and receipts. The current Apple Silicon rc24 release remains untouched.
