@@ -133,7 +133,8 @@ class QualificationProfileTests(unittest.TestCase):
 
     def test_shared_runner_executes_both_bridge_modules_model_and_appkit(self):
         self.files()
-        with patch.object(subprocess, "run") as run:
+        with patch.dict(producer.os.environ, {"AMPLIFAI_TEST_PYTHON": "/untrusted/python"}), \
+                patch.object(subprocess, "run") as run:
             producer.run_phone_run_checks(self.root)
         calls = run.call_args_list
         self.assertEqual(calls[0].args[0], [sys.executable, "-m", "unittest", "test_bridge_run_timing", "test_bridge_recovery", "-v"])
@@ -142,6 +143,7 @@ class QualificationProfileTests(unittest.TestCase):
             self.assertTrue(call.kwargs["check"])
             self.assertEqual(call.kwargs["cwd"], self.root)
             self.assertEqual(call.kwargs["env"]["PYTHONNOUSERSITE"], "1")
+            self.assertEqual(call.kwargs["env"]["AMPLIFAI_TEST_PYTHON"], sys.executable)
 
     def test_each_command_failure_propagates_without_running_later_commands(self):
         self.files()
