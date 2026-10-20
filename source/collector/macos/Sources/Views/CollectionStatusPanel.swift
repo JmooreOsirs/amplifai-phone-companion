@@ -138,6 +138,7 @@ struct CollectionStatusPanel: View {
     private var activityWidget: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let elapsed = max(0, Int(context.date.timeIntervalSince(model.collectionStartedAt ?? context.date)))
+            let estimate = model.backupRemainingEstimate()
             VStack(alignment: .leading, spacing: Brand.Space.item) {
                 activityHeading(at: context.date)
                 if model.phase != .completing {
@@ -159,10 +160,11 @@ struct CollectionStatusPanel: View {
                 if model.collectionStartedAt != nil || (model.transferIsKnown && model.phase != .completing) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Brand.Space.item)],
                               alignment: .leading, spacing: Brand.Space.item) {
-                        if model.collectionStartedAt != nil { elapsedClock(elapsed) }
+                        if let estimate {
+                            metric("Estimated backup transfer left", "\(estimate.lowerBound)–\(estimate.upperBound) min", emphasized: true)
+                        } else if model.collectionStartedAt != nil { elapsedClock(elapsed) }
                         if model.transferIsKnown && model.phase != .completing {
                             metric("Received", CollectorModel.byteDescription(model.transferBytes))
-                            metric("Retained locally", CollectorModel.byteDescription(model.retainedBytes))
                         }
                     }
                     .brandWell()
@@ -197,19 +199,25 @@ struct CollectionStatusPanel: View {
                     .accessibilityLabel(activityLabel(at: context.date))
                 }
                 if model.transferIsKnown && model.phase != .completing {
-                    Text(model.phase == .processing
-                         ? "Parsing copies: \(CollectorModel.byteDescription(model.processedBytes))"
-                         : "Average received rate: \(CollectorModel.byteDescription(Int64(model.transferBytesPerSecond)))/s")
-                        .foregroundStyle(Brand.muted)
+                    DisclosureGroup("Transfer details") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Retained locally: \(CollectorModel.byteDescription(model.retainedBytes))")
+                            Text(model.phase == .processing
+                                 ? "Parsing copies: \(CollectorModel.byteDescription(model.processedBytes))"
+                                 : "Average received rate: \(CollectorModel.byteDescription(Int64(model.transferBytesPerSecond)))/s")
+                        }
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                        .padding(.top, 4)
+                    }
+                    .foregroundStyle(Brand.muted)
                 }
                 if model.phase == .connecting || model.phase == .transferring {
-                    if let estimate = model.backupRemainingEstimate() {
+                    if estimate != nil {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Estimated backup transfer remaining: \(estimate.lowerBound)–\(estimate.upperBound) min")
-                                .font(Brand.bodyFont(15).weight(.bold)).foregroundStyle(Brand.heading)
-                            Text("Based on recent iPhone progress. Reading sources and saving to your account take additional time.")
-                                .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
+                            Text("Elapsed: \(clock(elapsed))")
+                            Text("Estimate covers backup transfer only. Reading sources and saving to your account take additional time.")
                         }
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
                     } else {
                         Text("Time remaining is not available yet. An estimate needs steady, measured backup progress.")
                             .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
@@ -341,9 +349,10 @@ struct CollectionStatusPanel: View {
         .accessibilityLabel("Observed elapsed time \(seconds / 60) minutes, \(seconds % 60) seconds")
     }
 
-    private func metric(_ label: String, _ value: String) -> some View {
+    private func metric(_ label: String, _ value: String, emphasized: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(value).font(Brand.headingFont(28)).monospacedDigit().foregroundStyle(Brand.heading)
+            Text(value).font(Brand.headingFont(28)).monospacedDigit()
+                .foregroundStyle(emphasized ? Brand.lime : Brand.heading)
                 .minimumScaleFactor(0.8).lineLimit(1)
             Text(label.uppercased()).font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
         }
