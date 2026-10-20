@@ -16,7 +16,7 @@ import release
 
 MAX_SOURCE = 4 * 1024**3
 APPEND_PATHS = ["release-evidence/final-signed-app-inventory.json", "release-evidence/source-finalization.json"]
-PHONE_RUN_MODULES = ("test_bridge_run_timing", "test_bridge_recovery")
+PHONE_RUN_MODULES = ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh")
 PHONE_RUN_SCRIPTS = ("check_model.sh", "check_window_lifecycle.sh")
 
 
@@ -34,7 +34,7 @@ def run_phone_run_checks(checkout: Path) -> None:
         if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(checkout.resolve()):
             raise ValueError("required phone-run qualification file missing or unsafe: " + path.name)
     env = dict(os.environ, PYTHONPATH=str(checkout / "source/collector") + ":" + str(checkout / "source/collector/tests"),
-               PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1")
+               PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", AMPLIFAI_TEST_PYTHON=sys.executable)
     subprocess.run([sys.executable, "-m", "unittest", *PHONE_RUN_MODULES, "-v"],
                    cwd=checkout, env=env, check=True, timeout=1200)
     for script in PHONE_RUN_SCRIPTS:

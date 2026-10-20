@@ -21,6 +21,13 @@ struct CollectorModelChecks {
             try runChecks()
             try await approvedLaunchUsesExactRun()
             print("20 macOS recovery, progress, run-approval and update-deferral checks passed")
+            if CommandLine.arguments.dropFirst().first != "--quick-only" {
+                guard CommandLine.arguments.count == 3 else {
+                    throw RecoveryCheckError.failed("Default checks require the pinned Python interpreter and collector source path")
+                }
+                try await AuthorityRefreshIntegrationChecks.run(python: CommandLine.arguments[1],
+                    collector: URL(fileURLWithPath: CommandLine.arguments[2]).resolvingSymlinksInPath())
+            }
         } catch {
             FileHandle.standardError.write(Data("macOS recovery check failed: \(error)\n".utf8))
             Darwin.exit(1)

@@ -916,11 +916,12 @@ class AgentProtocolTest(unittest.TestCase):
         bridge = MagicMock()
         bridge.code, bridge.port = "1234567890", 48751
         bridge.handoff_id, bridge.payload_sha256 = run_id, "a" * 64
-        bridge.set_run_authority.side_effect = lambda handoff, state: handoff == run_id and state in ("paused", "current")
+        bridge.set_run_authority.side_effect = lambda handoff, state: handoff == run_id and state in ("paused", "current", "refreshing")
         commands = [{"action": "review", "ids": [1]}, {"action": "pair"},
                     {"action": "run-authority", "handoffId": "wrong", "state": "paused"},
                     {"action": "run-authority", "handoffId": run_id, "state": "revoked"},
                     {"action": "run-authority", "handoffId": run_id, "state": "paused", "extra": True},
+                    {"action": "run-authority", "handoffId": run_id, "state": "refreshing"},
                     {"action": "run-authority", "handoffId": run_id, "state": "paused"},
                     {"action": "run-authority", "handoffId": run_id, "state": "current"},
                     {"action": "disconnect"}]
@@ -930,7 +931,8 @@ class AgentProtocolTest(unittest.TestCase):
             self.assertEqual(run_connect(source, sink, fake_collector), 0)
         events = [json.loads(line) for line in sink.getvalue().splitlines()]
         self.assertEqual(sum(event.get("code") == "handoff_unconfirmed" for event in events), 3)
-        self.assertEqual(bridge.set_run_authority.call_count, 4)
+        self.assertEqual(bridge.set_run_authority.call_count, 5)
+        bridge.set_run_authority.assert_any_call(run_id, "refreshing")
         self.assertEqual(events[-1], {"kind": "state", "state": "disconnected"})
         bridge.close.assert_called_once()
 

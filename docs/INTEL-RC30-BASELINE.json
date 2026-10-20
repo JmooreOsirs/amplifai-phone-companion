@@ -1,12 +1,12 @@
 {
-  "build": "261019291",
+  "build": "261020301",
   "bundle_id": "ai.satoris.amplifai.phone.intel-candidate",
   "channel": "macos-intel-test",
   "historical_dependency_source": {
     "archive_sha256": "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3",
     "archive_url": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/macos-2026.10.13-rc24-release/AMPLIFai-Phone-macOS-Source-2026.10.13-rc24.zip",
     "release": "macos-2026.10.13-rc24-release",
-    "scope": "Historical unchanged dependency source provenance only; current authored/source closure must qualify independently for rc29."
+    "scope": "Historical unchanged dependency source provenance only; current authored/source closure must qualify independently for rc30."
   },
   "minimum_macos": "14.0",
   "pinned_inputs": {
@@ -15,8 +15,8 @@
     "source/collector/macos/Package.resolved": "b54984d191725eec8c4ac9f36daffef75244287b408d143509e7d681364d49cb",
     "source/collector/portable-requirements.lock": "d71549960142e50b1a35bb5ffddb26f5a3f0ff4fb7c1648f166a2c212e62c067"
   },
-  "release": "macos-2026.10.19-rc29-intel1-test",
+  "release": "macos-2026.10.20-rc30-intel1-test",
   "schema": 1,
   "source_policy": "Exact clean approved Git commit plus reproducible authored-source receipt; no mutable-file exceptions.",
-  "version": "2026.10.19-rc29-intel1"
+  "version": "2026.10.20-rc30-intel1"
 }
