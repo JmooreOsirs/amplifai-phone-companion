@@ -52,7 +52,10 @@ import Foundation
     var now: () -> Date = Date.init
     /// When set, replies are held until `releaseHeldReplies()` (late and stale reply checks).
     var holdReplies = false
-    private var held: [() -> Void] = []
+    var holdPaths: Set<String> = []
+    var replyObserver: ((String) -> Void)?
+    private var held: [(path: String, deliver: () -> Void)] = []
+    func heldReplyCount(for path: String) -> Int { held.filter { $0.path == path }.count }
 
     var claimCount: Int { requests.filter { $0.path == PhoneRunContract.claimPath }.count }
     var statusCount: Int { requests.filter { $0.path == PhoneRunContract.statusPath }.count }
@@ -101,11 +104,12 @@ import Foundation
         runs[runID]?.boundPayloadSha256 = digest
     }
 
-    func releaseHeldReplies() {
-        let replies = held
-        held = []
-        holdReplies = false
-        for reply in replies { reply() }
+    func releaseHeldReplies(path: String? = nil) {
+        let replies = held.filter { path == nil || $0.path == path }
+        held.removeAll { path == nil || $0.path == path }
+        if let path { holdPaths.remove(path) }
+        else { holdReplies = false; holdPaths = [] }
+        for reply in replies { reply.deliver() }
     }
 
     func post(path: String, body: Data, completion: @escaping @MainActor (PhoneRunTransportResult) -> Void) {
@@ -117,7 +121,10 @@ import Foundation
         } else { fault = faults.isEmpty ? nil : faults.removeFirst() }
         let deliver: (PhoneRunTransportResult) -> Void = { [weak self] result in
             guard let self else { return }
-            if self.holdReplies { self.held.append { completion(result) } } else { completion(result) }
+            if self.holdReplies || self.holdPaths.contains(path) {
+                self.held.append((path, { completion(result) }))
+            } else { completion(result) }
+            self.replyObserver?(path)
         }
         if case .dropRequest = fault { deliver(.failed); return }
         var (status, object) = handle(path, body)

@@ -92,7 +92,7 @@ final class CollectorModel: ObservableObject {
     }
     enum RunApproval: Equatable { case none, claiming, uncertain, refused, approved }
     enum RunBinding: Equatable { case none, binding, bound, uncertain, refused }
-    enum RunStatus: Equatable { case unchecked, checking, current, uncertain, replacementRequired, expired, revoked }
+    enum RunStatus: Equatable { case unchecked, checking, current, refreshing, uncertain, replacementRequired, expired, revoked }
     /// Revalidation of the run immediately before the helper launches.
     enum StartConfirmation: Equatable { case none, confirming, uncertain }
     struct AccountNavigation: Equatable {
@@ -165,6 +165,12 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var runStatus: RunStatus = .unchecked
     @Published private(set) var runStatusMessage = ""
     private var runStatusToken: UUID?
+    private var runStatusRequest: PhoneRunStatusRequest?
+    private var runStatusCompletions: [@MainActor (Bool) -> Void] = []
+    private var runStatusWatchdog: Task<Void, Never>?
+    private var runStatusDeadline: ContinuousClock.Instant?
+    /// Separate from transport timeouts: a stalled callback cannot retain transient authority indefinitely.
+    var runStatusTimeoutNanoseconds: UInt64 = 65_000_000_000
     private var lastBridgeAuthority: String?
     private var runStatusPollTask: Task<Void, Never>?
     var runStatusPollNanoseconds: UInt64 = 30_000_000_000
@@ -471,7 +477,7 @@ final class CollectorModel: ObservableObject {
                 refuseRun(Self.runRefusedMessage)
                 return
             }
-            runStatusToken = nil
+            cancelRunStatusCheck()
             runStatus = .unchecked
             runStatusMessage = ""
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
@@ -526,7 +532,7 @@ final class CollectorModel: ObservableObject {
             startConfirmationToken = nil
             startConfirmation = .none
             startPreparation = nil
-            runStatusToken = nil
+            cancelRunStatusCheck()
             runStatus = .unchecked
             runStatusMessage = ""
             phoneRun = PhoneRun(runID: request.runID, capability: request.capability, claimRequest: request, claim: claim,
@@ -547,7 +553,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func refuseRun(_ message: String) {
-        runStatusToken = nil
+        cancelRunStatusCheck()
         phoneRun = nil
         pendingClaim = nil
         startConfirmation = .none
@@ -568,7 +574,7 @@ final class CollectorModel: ObservableObject {
     private func endPhoneRun() {
         runStatusPollTask?.cancel()
         runStatusPollTask = nil
-        runStatusToken = nil
+        cancelRunStatusCheck()
         runStatus = .unchecked
         runStatusMessage = ""
         phoneRun = nil
@@ -689,38 +695,106 @@ final class CollectorModel: ObservableObject {
         phoneRun.flatMap { PhoneRunContract.privacyURL(disclosureVersion: $0.claim.disclosureVersion) }
     }
 
-    var canRefreshRunStatus: Bool { phoneRun != nil && runStatus != .checking }
+    var canRefreshRunStatus: Bool { phoneRun != nil && runStatusToken == nil }
 
     /// A bounded explicit recheck. Existing collection/review is retained while transport is uncertain.
     func refreshRunStatus() {
         revalidateCurrentRun { _ in }
     }
 
+    private func cancelRunStatusCheck() {
+        runStatusToken = nil
+        runStatusRequest = nil
+        runStatusDeadline = nil
+        runStatusWatchdog?.cancel()
+        runStatusWatchdog = nil
+        let completions = runStatusCompletions
+        runStatusCompletions = []
+        for completion in completions { completion(false) }
+    }
+
+    private func finishRunStatusCheck(_ token: UUID, current: Bool) {
+        guard runStatusToken == token else { return }
+        runStatusToken = nil
+        runStatusRequest = nil
+        runStatusDeadline = nil
+        runStatusWatchdog?.cancel()
+        runStatusWatchdog = nil
+        let completions = runStatusCompletions
+        runStatusCompletions = []
+        for completion in completions { completion(current) }
+    }
+
+    private func timeoutRunStatusCheck(_ token: UUID) {
+        guard runStatusToken == token else { return }
+        if (phoneRun?.claim.expiresAt ?? .distantPast) <= now() {
+            stopForRunStatus(.expired)
+        } else {
+            runStatus = .uncertain
+            runStatusMessage = "Approval could not be checked. New connections and saving wait for a successful recheck."
+            synchronizeBridgeAuthority(paused: true)
+        }
+        finishRunStatusCheck(token, current: false)
+    }
+
     private func revalidateCurrentRun(_ completion: @escaping @MainActor (Bool) -> Void) {
-        guard let run = phoneRun, let authority = runAuthority, runStatus != .checking,
+        guard let run = phoneRun, let authority = runAuthority,
               let request = PhoneRunStatusRequest(runID: run.runID, capability: run.capability) else {
             completion(false)
             return
         }
+        guard run.claim.expiresAt > now() else {
+            stopForRunStatus(.expired)
+            completion(false)
+            return
+        }
+        if runStatusToken != nil {
+            if runStatusRequest == request { runStatusCompletions.append(completion) }
+            else { completion(false) }
+            return
+        }
         let token = UUID()
         runStatusToken = token
-        runStatus = .checking
-        synchronizeBridgeAuthority(paused: true)
+        runStatusRequest = request
+        runStatusCompletions = [completion]
+        // A new handoff starts paused. Only this handoff's previously current authority may use
+        // the bounded transient state; retrying uncertainty never makes it transient again.
+        let canRefresh = runStatus == .current &&
+            (handoffID.isEmpty || lastBridgeAuthority == handoffID + ":current")
+        if canRefresh { runStatus = .refreshing }
+        else if runStatus == .unchecked || runStatus == .current { runStatus = .checking }
+        synchronizeBridgeAuthority(state: canRefresh ? "refreshing" : "paused")
+        let remaining = max(0, run.claim.expiresAt.timeIntervalSince(now()))
+        let timeout = min(runStatusTimeoutNanoseconds, UInt64(min(remaining, 65) * 1_000_000_000))
+        runStatusDeadline = ContinuousClock.now.advanced(by: .nanoseconds(Int64(timeout)))
+        runStatusWatchdog = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: timeout) } catch { return }
+            self?.timeoutRunStatusCheck(token)
+        }
         authority.status(request) { [weak self] outcome in
             guard let self, self.runStatusToken == token, var active = self.phoneRun,
-                  active.runID == run.runID, active.capability == run.capability else { return }
-            self.runStatusToken = nil
+                  active.runID == run.runID, active.capability == run.capability,
+                  active.claim == run.claim else { return }
+            guard let deadline = self.runStatusDeadline, ContinuousClock.now < deadline else {
+                self.timeoutRunStatusCheck(token)
+                return
+            }
+            guard active.claim.expiresAt > self.now() else {
+                self.stopForRunStatus(.expired)
+                self.finishRunStatusCheck(token, current: false)
+                return
+            }
             switch outcome {
             case .accepted(let status):
                 guard status.state == .current else {
                     self.stopForRunStatus(status.state)
-                    completion(false)
+                    self.finishRunStatusCheck(token, current: false)
                     if status.state == .replacementRequired { self.retryApprovalAdoption() }
                     return
                 }
                 guard status.claim.expiresAt > self.now() else {
                     self.stopForRunStatus(.expired)
-                    completion(false)
+                    self.finishRunStatusCheck(token, current: false)
                     return
                 }
                 guard status.claim.expiresAt == active.claim.expiresAt,
@@ -728,7 +802,7 @@ final class CollectorModel: ObservableObject {
                     self.runStatus = .uncertain
                     self.runStatusMessage = "Approval deadlines could not be reconciled. This connection stays paused."
                     self.synchronizeBridgeAuthority(paused: true)
-                    completion(false)
+                    self.finishRunStatusCheck(token, current: false)
                     return
                 }
                 let same = status.claim.approvalID == active.claim.approvalID &&
@@ -737,9 +811,8 @@ final class CollectorModel: ObservableObject {
                     status.claim.disclosureVersion == active.claim.disclosureVersion
                 guard same else {
                     self.stopForRunStatus(.replacementRequired)
-                    completion(false)
-                    // Status is observation only. The separate bind transition proves the owner's explicit
-                    // replacement, starting from the approval already persisted by this Mac.
+                    self.finishRunStatusCheck(token, current: false)
+                    // Status only observes. Explicit bind proves replacement from the persisted approval.
                     self.retryApprovalAdoption()
                     return
                 }
@@ -748,22 +821,25 @@ final class CollectorModel: ObservableObject {
                 self.runStatus = .current
                 self.runStatusMessage = ""
                 self.synchronizeBridgeAuthority(paused: false)
-                completion(true)
+                self.finishRunStatusCheck(token, current: true)
             case .refused:
                 self.stopForRunStatus(.replacementRequired)
-                completion(false)
+                self.finishRunStatusCheck(token, current: false)
             case .uncertain, .malformed:
                 self.runStatus = .uncertain
                 self.synchronizeBridgeAuthority(paused: true)
                 self.runStatusMessage = "Approval could not be checked. New connections and saving wait for a successful recheck."
-                completion(false)
+                self.finishRunStatusCheck(token, current: false)
             }
         }
     }
 
     private func synchronizeBridgeAuthority(paused: Bool) {
+        synchronizeBridgeAuthority(state: paused ? "paused" : "current")
+    }
+
+    private func synchronizeBridgeAuthority(state: String) {
         guard commandReady, !handoffID.isEmpty else { return }
-        let state = paused ? "paused" : "current"
         let identity = handoffID + ":" + state
         guard lastBridgeAuthority != identity else { return }
         lastBridgeAuthority = identity
@@ -802,7 +878,7 @@ final class CollectorModel: ObservableObject {
                 do { try await Task.sleep(nanoseconds: self?.runStatusPollNanoseconds ?? 30_000_000_000) }
                 catch { return }
                 guard let self, self.phoneRun?.runID == runID, self.phoneRun?.collectionStarted == true else { return }
-                if self.runStatus != .checking { self.refreshRunStatus() }
+                if self.runStatusToken == nil { self.refreshRunStatus() }
             }
         }
     }
@@ -1836,6 +1912,7 @@ final class CollectorModel: ObservableObject {
         guard let request = pendingAdoption, request.runID == run.runID,
               request.previousApprovalID == run.claim.approvalID, request.handoffID == handoffID,
               request.payloadSha256 == digest else { return }
+        cancelRunStatusCheck()
         approvalAdoptionPending = true
         synchronizeBridgeAuthority(paused: true)
         authority.bind(request) { [weak self] outcome in self?.approvalAdoptionFinished(request, outcome) }
@@ -2009,8 +2086,8 @@ final class CollectorModel: ObservableObject {
     }
 
     func disconnect() {
-        runStatusToken = nil
-        if runStatus == .checking { runStatus = .unchecked }
+        cancelRunStatusCheck()
+        if runStatus == .checking || runStatus == .refreshing { runStatus = .unchecked }
         declineLocalCollection()
         startAfterSettingCheck = false
         startConfirmationToken = nil
@@ -2073,6 +2150,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func resetHandoff() {
+        cancelRunStatusCheck()
+        if runStatus == .refreshing || runStatus == .checking { runStatus = .unchecked }
         pendingAdoption = nil
         approvalAdoptionPending = false
         lastBridgeAuthority = nil
@@ -2665,6 +2744,7 @@ final class CollectorModel: ObservableObject {
             pairPort = event.port ?? 0
             handoffID = handoff
             pairingPayloadSha256 = digest
+            synchronizeBridgeAuthority(paused: true)
             pollHandoff()
             // Nothing opens until the run accepts this handoff; then the account owns the flow.
             bindHandoff()
