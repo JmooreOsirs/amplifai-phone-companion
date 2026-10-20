@@ -174,6 +174,8 @@ class ReleaseBoundaryTests(unittest.TestCase):
             return result
 
     def test_brian_can_release_two_ci_runs_of_same_reviewed_source_without_new_policy_approval(self):
+        # The synthetic RC29 candidate stays paired with its fixed RC28 publication floor.
+        self.policy["releasedBuilds"]["macos-arm64"] = "26101628"
         self.policy["activationApproved"] = True
         self.policy["approvedSources"] = [self.source]
         unchanged = copy.deepcopy(self.policy)
