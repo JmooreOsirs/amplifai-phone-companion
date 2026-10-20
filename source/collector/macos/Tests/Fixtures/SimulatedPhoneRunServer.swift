@@ -104,9 +104,10 @@ import Foundation
         runs[runID]?.boundPayloadSha256 = digest
     }
 
-    func releaseHeldReplies(path: String? = nil) {
+    /// `keepingForReplay` injects a duplicate late transport callback for generation-fence checks.
+    func releaseHeldReplies(path: String? = nil, keepingForReplay: Bool = false) {
         let replies = held.filter { path == nil || $0.path == path }
-        held.removeAll { path == nil || $0.path == path }
+        if !keepingForReplay { held.removeAll { path == nil || $0.path == path } }
         if let path { holdPaths.remove(path) }
         else { holdReplies = false; holdPaths = [] }
         for reply in replies { reply.deliver() }

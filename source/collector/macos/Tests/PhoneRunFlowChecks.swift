@@ -137,6 +137,8 @@ enum PhoneRunFlowChecks {
         try currentStatusRecoveryAndVersionFences()
         try currentStatusPausesAndStopsAdmission()
         try healthyRefreshSharesAuthority()
+        try acceptedVerificationWaitsForRefresh()
+        try adoptionCannotOrphanStatusWatchdog()
         try authenticatedPendingSupersession()
         try explicitApprovalAdoption()
         try replacementCannotBroadenOrRewriteSameApproval()
@@ -1052,7 +1054,7 @@ enum PhoneRunFlowChecks {
         try require(server.statusCount == before + 1 && model.destinationVerificationPending &&
                     !model.destinationVerificationUncertain && server.verifyCount == 0,
                     "Destination verification joins the exact in-flight status request")
-        server.releaseHeldReplies(path: PhoneRunContract.statusPath)
+        server.releaseHeldReplies(path: PhoneRunContract.statusPath, keepingForReplay: true)
         try require(server.verifyCount == 1 && wire.decisions.count == 1 &&
                     wire.decisions[0]["approved"] as? Bool == true && model.phoneRun == original,
                     "The joined verification proceeds once after current authority without changing the handoff")
@@ -1066,6 +1068,42 @@ enum PhoneRunFlowChecks {
         server.releaseHeldReplies()
         try require(model.phoneRun == nil && wire.last?["action"] as? String == "disconnect",
                     "A late current reply after Stop cannot resume a retired handoff")
+    }
+
+    static func acceptedVerificationWaitsForRefresh() throws {
+        let (model, server, wire, _) = try boundModel()
+        server.holdPaths = [PhoneRunContract.verifyIntentPath]
+        try pending(model)
+        server.holdPaths.insert(PhoneRunContract.statusPath)
+        model.refreshRunStatus()
+        server.releaseHeldReplies(path: PhoneRunContract.verifyIntentPath)
+        try require(wire.decisions.isEmpty && model.destinationVerificationPending &&
+                    server.verifyCount == 1 && model.runStatus == .refreshing,
+                    "A verified destination waits for a concurrent refresh before writing to the paused helper")
+        server.releaseHeldReplies()
+        try require(wire.decisions.count == 1 && wire.decisions[0]["approved"] as? Bool == true &&
+                    server.verifyCount == 1 && !model.destinationVerificationPending,
+                    "Current authority releases the retained verified proof once without spending another attempt")
+    }
+
+    static func adoptionCannotOrphanStatusWatchdog() throws {
+        let (model, server, wire, run) = try boundModel()
+        server.replace(run.runID, course: "Updated synthetic course", categories: ["contacts"])
+        server.holdPaths = [PhoneRunContract.bindPath]
+        model.refreshRunStatus()
+        try require(model.approvalAdoptionPending, "Changed authority waits for explicit bind adoption")
+        let statusCount = server.statusCount
+        server.holdPaths.insert(PhoneRunContract.statusPath)
+        model.refreshRunStatus()
+        try require(server.statusCount == statusCount && !model.canRefreshRunStatus &&
+                    wire.last?["state"] as? String == "paused",
+                    "A pending explicit adoption cannot start an obsolete-claim status watchdog")
+        server.releaseHeldReplies(path: PhoneRunContract.bindPath)
+        server.releaseHeldReplies(path: PhoneRunContract.statusPath)
+        try require(model.runStatus == .current && model.canRefreshRunStatus &&
+                    model.phoneRun?.claim.course == "Updated synthetic course" &&
+                    !model.approvalAdoptionPending && wire.last?["state"] as? String == "current",
+                    "Adoption installs current authority with no orphaned status request or watchdog")
     }
 
     static func authenticatedPendingSupersession() throws {

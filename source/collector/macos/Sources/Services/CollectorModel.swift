@@ -695,7 +695,7 @@ final class CollectorModel: ObservableObject {
         phoneRun.flatMap { PhoneRunContract.privacyURL(disclosureVersion: $0.claim.disclosureVersion) }
     }
 
-    var canRefreshRunStatus: Bool { phoneRun != nil && runStatusToken == nil }
+    var canRefreshRunStatus: Bool { phoneRun != nil && runStatusToken == nil && !approvalAdoptionPending }
 
     /// A bounded explicit recheck. Existing collection/review is retained while transport is uncertain.
     func refreshRunStatus() {
@@ -738,7 +738,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func revalidateCurrentRun(_ completion: @escaping @MainActor (Bool) -> Void) {
-        guard let run = phoneRun, let authority = runAuthority,
+        guard !approvalAdoptionPending, let run = phoneRun, let authority = runAuthority,
               let request = PhoneRunStatusRequest(runID: run.runID, capability: run.capability) else {
             completion(false)
             return
@@ -772,9 +772,13 @@ final class CollectorModel: ObservableObject {
             self?.timeoutRunStatusCheck(token)
         }
         authority.status(request) { [weak self] outcome in
-            guard let self, self.runStatusToken == token, var active = self.phoneRun,
+            guard let self, self.runStatusToken == token else { return }
+            guard var active = self.phoneRun,
                   active.runID == run.runID, active.capability == run.capability,
-                  active.claim == run.claim else { return }
+                  active.claim == run.claim else {
+                self.cancelRunStatusCheck()
+                return
+            }
             guard let deadline = self.runStatusDeadline, ContinuousClock.now < deadline else {
                 self.timeoutRunStatusCheck(token)
                 return
@@ -878,7 +882,7 @@ final class CollectorModel: ObservableObject {
                 do { try await Task.sleep(nanoseconds: self?.runStatusPollNanoseconds ?? 30_000_000_000) }
                 catch { return }
                 guard let self, self.phoneRun?.runID == runID, self.phoneRun?.collectionStarted == true else { return }
-                if self.runStatusToken == nil { self.refreshRunStatus() }
+                if self.runStatusToken == nil && !self.approvalAdoptionPending { self.refreshRunStatus() }
             }
         }
     }
@@ -1941,6 +1945,7 @@ final class CollectorModel: ObservableObject {
                 return
             }
             let changed = next.approvalID != run.claim.approvalID
+            cancelRunStatusCheck()
             run.claim = PhoneRunClaim(approvalID: next.approvalID, enrollmentID: next.enrollmentID,
                 email: next.email, course: next.course, categories: next.categories,
                 disclosureVersion: next.disclosureVersion, expiresAt: next.expiresAt,
@@ -2049,6 +2054,15 @@ final class CollectorModel: ObservableObject {
               destinationEmail == pendingEmail, destinationCourse == pendingCourse,
               !destinationApproved, submittedDestinationDecision == nil, var run = phoneRun,
               run.runID == request.runID else { return }
+        if case .accepted = outcome, runStatus != .current {
+            // Verification can finish during a later periodic status check. Keep its exact proof
+            // until current authority resumes; the helper deliberately rejects decisions while paused.
+            revalidateCurrentRun { [weak self] current in
+                self?.verifyFinished(request, pendingEmail: pendingEmail, pendingCourse: pendingCourse,
+                                     current ? outcome : .uncertain)
+            }
+            return
+        }
         destinationVerificationPending = false
         switch outcome {
         case .accepted(let verified):
