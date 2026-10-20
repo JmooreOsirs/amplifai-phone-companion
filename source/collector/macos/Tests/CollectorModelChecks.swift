@@ -53,6 +53,7 @@ struct CollectorModelChecks {
         try emptyResidueClearsGate()
         try inspectedResidueBlocksConnection()
         try cancellationClearsPrivateReview()
+        try backupEstimateRejectsPercentageOnly()
         try backupEstimateNeedsStableMeasuredProgress()
         try activityTimestampNeedsRealDataProgress()
         try confirmedConnectionAdvancesToBackupWait()
@@ -178,24 +179,103 @@ struct CollectorModelChecks {
                     "After explicit discard and cleanup, a settled app may install")
     }
 
-    private static func backupEstimateNeedsStableMeasuredProgress() throws {
+    @MainActor private final class BackupEstimateFixture {
         let model = CollectorModel()
-        let now = Date()
-        model.observeBackupProgress(20, at: now.addingTimeInterval(-180))
-        model.observeBackupProgress(25, at: now.addingTimeInterval(-90))
-        try require(model.backupRemainingEstimate(at: now) == nil, "Two observed samples cannot create an ETA")
-        model.receive(try event(#"{"kind":"progress","value":30}"#))
-        let observedAt = Date()
-        guard let range = model.backupRemainingEstimate(at: observedAt) else {
-            throw RecoveryCheckError.failed("Three stable, spaced iPhone samples should qualify a bounded backup-only estimate")
+        var uptime: TimeInterval = 1000
+        var wall = Date(timeIntervalSince1970: 1_800_000_000)
+        var bytes: Int64 = 0
+        init() {
+            model.phase = .transferring
+            model.monotonicNow = { [weak self] in self?.uptime ?? 0 }
+            model.now = { [weak self] in self?.wall ?? Date() }
+        }
+        func pulse(at time: TimeInterval, percent: Double? = nil, addBytes: Bool = true, filesOnly: Bool = false) throws {
+            uptime = time
+            if addBytes { bytes += 1024 }
+            let files = filesOnly ? Int(time) : Int(bytes / 1024)
+            model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":\#(bytes),"retainedBytes":0,"discardedBytes":\#(bytes),"filesReceived":\#(files),"elapsedSeconds":1,"bytesPerSecond":0}"#))
+            if let percent { model.receive(try event(#"{"kind":"progress","value":\#(percent)}"#)) }
+        }
+        func steady() throws {
+            let start = uptime
+            for step in 0...4 {
+                try pulse(at: start + Double(step) * 30, percent: step.isMultiple(of: 2) ? 20 + Double(step) * 2.5 : nil)
+                if step < 4 {
+                    try require(model.backupRemainingEstimate() == nil, "Early or fewer than three samples cannot create an ETA")
+                }
+            }
+        }
+    }
+
+    private static func backupEstimateRejectsPercentageOnly() throws {
+        for mode in ["percentage-only", "zero-bytes", "files-only"] {
+            let fixture = BackupEstimateFixture()
+            for step in 0...2 {
+                fixture.uptime = 1000 + Double(step) * 60
+                if mode != "percentage-only" {
+                    try fixture.pulse(at: fixture.uptime, addBytes: false, filesOnly: mode == "files-only")
+                }
+                fixture.model.receive(try event(#"{"kind":"progress","value":\#(20 + step * 5)}"#))
+            }
+            try require(fixture.model.backupRemainingEstimate() == nil,
+                        "\(mode) cannot fabricate an estimate without measured payload bytes")
+        }
+    }
+
+    private static func backupEstimateNeedsStableMeasuredProgress() throws {
+        let fixture = BackupEstimateFixture()
+        try fixture.steady()
+        guard let range = fixture.model.backupRemainingEstimate() else {
+            throw RecoveryCheckError.failed("Three stable samples spanning 120 seconds with continuous payload bytes qualify a backup-only estimate")
         }
         try require(range.lowerBound > 0 && range.upperBound > range.lowerBound,
                     "A measured backup estimate must have a positive, visible range")
-        try require(model.backupRemainingEstimate(at: observedAt.addingTimeInterval(61)) == nil,
-                    "Stale backup percentage must withdraw the estimate")
-        model.receive(try event(#"{"kind":"progress","value":10}"#))
-        try require(model.backupRemainingEstimate(at: Date()) == nil,
-                    "A regressed device percentage must withdraw the estimate")
+        for jump in [-86_400.0, 172_800.0] {
+            fixture.wall = fixture.wall.addingTimeInterval(jump)
+            try require(fixture.model.backupRemainingEstimate() == range, "Wall-clock changes cannot alter the measured rate")
+        }
+        fixture.uptime += 59.999
+        try require(fixture.model.backupRemainingEstimate() == range, "Recent measured data permits the existing bounded range")
+        fixture.uptime = 1180
+        try require(fixture.model.backupRemainingEstimate() == nil, "Exactly sixty seconds without payload bytes withdraws the estimate")
+        try fixture.pulse(at: 1180, percent: 35)
+        try require(fixture.model.backupRemainingEstimate() == nil, "Resumed bytes cannot revive the pre-stall rate")
+        try fixture.pulse(at: 1210)
+        try fixture.pulse(at: 1240, percent: 40)
+        try fixture.pulse(at: 1270)
+        try require(fixture.model.backupRemainingEstimate() == nil, "Two fresh samples after a stall are insufficient")
+        try fixture.pulse(at: 1300, percent: 45)
+        try require(fixture.model.backupRemainingEstimate() != nil, "A new measured 120-second window can qualify after resume")
+
+        for interruption in ["unknown", "regression", "clock-reset", "clock-invalid", "clock-forward-back", "disconnect"] {
+            let check = BackupEstimateFixture()
+            try check.steady()
+            if interruption == "unknown" { check.model.receive(try event(#"{"kind":"progress"}"#)) }
+            if interruption == "regression" { check.model.receive(try event(#"{"kind":"progress","value":25}"#)) }
+            if interruption == "clock-reset" { check.uptime = 0 }
+            if interruption == "clock-invalid" { check.uptime = .nan }
+            if interruption == "clock-forward-back" { check.uptime += 86_400 }
+            if interruption == "disconnect" { check.model.disconnect() }
+            try require(check.model.backupRemainingEstimate() == nil, "\(interruption) withdraws the old estimate")
+            check.uptime = 1120
+            check.model.phase = .transferring
+            check.model.receive(try event(#"{"kind":"progress","value":30}"#))
+            try require(check.model.backupRemainingEstimate() == nil, "\(interruption) cannot restore the former rate from one percentage")
+        }
+        for percentages in [[20.0, 21, 40], [20, 21, 23], [5, 10, 14], [80, 85, 90]] {
+            let check = BackupEstimateFixture()
+            for step in 0...4 {
+                try check.pulse(at: 1000 + Double(step) * 30,
+                                percent: step.isMultiple(of: 2) ? percentages[step / 2] : nil)
+            }
+            try require(check.model.backupRemainingEstimate() == nil,
+                        "Unstable rates, low gain, early progress and final-tail uncertainty cannot create an estimate")
+        }
+        for phase: CollectorModel.Phase in [.processing, .reviewing, .completing, .completed, .cancelling] {
+            fixture.model.phase = phase
+            try require(fixture.model.backupRemainingEstimate() == nil,
+                        "Backup estimates do not claim remaining processing, saving or Stop time")
+        }
     }
 
     private static func activityTimestampNeedsRealDataProgress() throws {
@@ -563,8 +643,14 @@ struct CollectorModelChecks {
         for obsoleteLimit in ["one hour", "1 hour", "1h"] {
             try require(!connection.contains(obsoleteLimit), "Connection timeout cannot claim a one-hour backup")
         }
-        try require(stalled.range(of: #"15\s*min"#, options: .regularExpression) != nil, "Stall recovery must name the 15-minute policy")
+        try require(stalled.contains("waiting limit") && !stalled.contains("15 minutes") && !stalled.contains("30 minutes"),
+                    "The shared stall code cannot distinguish initial readiness from active-transfer inactivity")
         let stoppedModel = CollectorModel()
+        stoppedModel.phase = .transferring
+        try require(stoppedModel.statusDetail.contains("up to 30 minutes") &&
+                    stoppedModel.statusDetail.contains("15 minutes without new activity") &&
+                    !stoppedModel.statusDetail.contains("very slow"),
+                    "Transfer guidance distinguishes initial readiness from later inactivity without a generic slow-speed cutoff")
         stoppedModel.receive(try event(#"{"kind":"error","code":"backup_stalled","stage":"backup"}"#))
         let stalledGuidance = ([stoppedModel.errorMessage] + stoppedModel.recoverySteps).joined(separator: " ").lowercased()
         try require(stalled.contains("stopped without saving metadata") &&

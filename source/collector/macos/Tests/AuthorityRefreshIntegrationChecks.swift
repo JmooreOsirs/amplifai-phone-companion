@@ -48,8 +48,12 @@ enum AuthorityRefreshIntegrationChecks {
         var handoffEvents = 0
         var observation: AnyCancellable?
         let runID: String
-        init() throws {
-            model = CollectorModel(runAuthority: PhoneRunAuthorityClient(transport: server))
+        let statusPath: String
+        var statusCount: Int { server.requests.filter { $0.path == statusPath }.count }
+        init(admissionProtocol: PhoneRunAdmissionProtocol = .legacy) throws {
+            statusPath = admissionProtocol == .preparation ? PhoneRunContract.preparationStatusPath : PhoneRunContract.statusPath
+            model = CollectorModel(runAuthority: PhoneRunAuthorityClient(transport: server,
+                                                                        admissionProtocol: admissionProtocol))
             let run = server.createRun()
             runID = run.runID
             try require(model.admitRunLink(PendingRunLink(link: PhoneRunLink(url: server.appLink(run))!,
@@ -149,12 +153,12 @@ enum AuthorityRefreshIntegrationChecks {
             try? FileManager.default.removeItem(at: resources.appendingPathComponent("helper"))
         }
         try installHelper(resources: resources, python: python, collector: collector, small: false)
-        let fixture = try Fixture()
+        let fixture = try Fixture(admissionProtocol: .preparation)
         do { try await fullTransfer(fixture) }
         catch { try? await fixture.stop(); throw error }
         try installHelper(resources: resources, python: python, collector: collector, small: true)
         try await terminalCallbacks()
-        print("Real 30-second refresh integration passed: 2 periodic cycles, 65-second watchdog, 311149 rows/3114 pages, exact retries, receipt gates and terminal callbacks")
+        print("Preparation-mode real 30-second refresh integration passed: 2 periodic cycles, 65-second watchdog, 311149 rows/3114 pages, exact operation/retries, receipt gates; legacy terminal callbacks passed")
     }
 
     static func pair(_ fixture: Fixture, contacts: Int) async throws -> (String, [String: Any]) {
@@ -203,6 +207,10 @@ enum AuthorityRefreshIntegrationChecks {
         }
         print("Volume: observed=5134 contacts/3711 calls/302304 messages; transported=311149 records in 3114 pages (52/38/3024)")
         let original = model.phoneRun!
+        try require(original.admissionProtocol == .preparation && original.admittedOperation != nil &&
+                    original.admittedOperation?.operationID == model.operationID?.uuidString.lowercased() &&
+                    original.admittedOperation?.operationID == fixture.server.run(fixture.runID)?.operationID,
+                    "Full transfer retains the exact preparation Start admitted by the server and launched by the helper")
         let selection = model.selectedIDs
         let binding: [String: Any] = ["handoffId": model.handoffID, "payloadSha256": original.boundPayloadSha256!]
         let premature = try await request("POST", "/v1/complete", token: token)
@@ -238,15 +246,15 @@ enum AuthorityRefreshIntegrationChecks {
         for cycle in 0..<2 {
             let end = cycle == 0 ? 100 : 200
             while cursor < end { lastPage = try await readPage("messages", cursor); cursor += 1 }
-            let count = fixture.server.statusCount
-            fixture.server.holdPaths = [PhoneRunContract.statusPath]
+            let count = fixture.statusCount
+            fixture.server.holdPaths = [fixture.statusPath]
             try await fixture.signals.until("production 30-second status tick \(cycle + 1)", seconds: 36) {
-                fixture.server.heldReplyCount(for: PhoneRunContract.statusPath) == 1
+                fixture.server.heldReplyCount(for: fixture.statusPath) == 1
             }
             periodicTimes.append(Date())
             try require(String(describing: model.runStatus) == "refreshing", "Previously current exact authority enters refreshing")
             model.refreshRunStatus() // A second consumer joins; it cannot start another request or extend the deadline.
-            try require(fixture.server.statusCount == count + 1, "Same-run concurrent consumers share one request")
+            try require(fixture.statusCount == count + 1, "Same-run concurrent consumers share one request")
             try await fixture.throughPipe()
             let path = "/v2/source/messages?cursor=\(cursor)"
             let denied = try await request("GET", path, token: token)
@@ -262,21 +270,21 @@ enum AuthorityRefreshIntegrationChecks {
             let badAuth = try await request("GET", path, token: "wrong")
             try require(skipped.status == 409 && skipped.object["code"] == nil && badAuth.status == 403,
                         "Refresh never hides a bad cursor or invalid credential")
-            fixture.server.releaseHeldReplies(path: PhoneRunContract.statusPath)
+            fixture.server.releaseHeldReplies(path: fixture.statusPath)
             try await fixture.throughPipe()
             let replay = try await request("GET", "/v2/source/messages?cursor=\(cursor - 1)", token: token)
             try require(replay.status == 200 && replay.data == lastPage, "Exact previous page replay is byte-identical after refresh")
             _ = try await readPage("messages", cursor)
             cursor += 1
             try require(model.phoneRun == original && model.selectedIDs == selection && model.runStatus == .current,
-                        "Refresh preserves generation, handoff, selection and every approval field")
+                        "Refresh preserves generation, admitted operation, handoff, selection and every approval field")
             print("Production periodic cycle \(cycle + 1): typed denial, unchanged cursor, exact replay, current recovery")
         }
         try require(periodicTimes[1].timeIntervalSince(periodicTimes[0]) >= 29,
                     "Two periodic checks must be separated by the real 30-second scheduler")
 
         // Hold a successful response beyond the independent watchdog. No shortened clock or mock timer.
-        fixture.server.holdPaths = [PhoneRunContract.statusPath]
+        fixture.server.holdPaths = [fixture.statusPath]
         let watchdogStart = Date()
         model.refreshRunStatus()
         try await fixture.throughPipe()
@@ -289,7 +297,8 @@ enum AuthorityRefreshIntegrationChecks {
         try require(model.runStatus == .uncertain, "Late successful response cannot restore expired transient authority")
         model.refreshRunStatus()
         try await fixture.throughPipe()
-        try require(model.runStatus == .current, "A new exact status check can recover paused authority")
+        try require(model.runStatus == .current && model.phoneRun == original,
+                    "A new exact preparation status check recovers the same operation and paused authority")
         while cursor < expected["messages"]!.1 { _ = try await readPage("messages", cursor); cursor += 1 }
         for category in expected.keys {
             try require(chains[category] == sources[category]?["chainSha256"] as? String,
@@ -306,12 +315,22 @@ enum AuthorityRefreshIntegrationChecks {
                                      body: binding.merging(["saved": true]) { _, new in new })
         try require(save.status == 200, "Synthetic account save acknowledgement accepted")
         try await fixture.throughPipe()
-        try require(model.accountSaveAwaitingBrowserReceipt && model.phase != .completed && model.helperRunning,
-                    "Native remains open until the final browser receipt")
+        try require(model.accountSaveAwaitingBrowserReceipt && model.phase != .completed && model.helperRunning &&
+                    !model.canContinueToSignedInAccount,
+                    "Native remains open and completed-report navigation unavailable until the final browser receipt")
         let receipt = try await request("POST", "/v1/confirm-ack-received", token: token,
                                         body: binding.merging(["received": true]) { _, new in new })
         try require(receipt.status == 200, "Final receipt reached the real bridge")
         try await fixture.signals.until("real helper finish after final receipt") { model.phase == .completed && !model.helperRunning }
+        let expectedReport = CollectorModel.accountReportURL(enrollmentID: original.enrollmentID,
+            handoffID: original.boundHandoffID!, payloadSha256: original.boundPayloadSha256!)
+        try require(expectedReport != nil && model.completedReportReturnURL == expectedReport &&
+                    model.phoneRun == nil && model.localCollectionApproval == nil,
+                    "Clean real-helper completion retains only the exact report route after retiring run authority")
+        let legacyPaths = [PhoneRunContract.claimPath, PhoneRunContract.statusPath, PhoneRunContract.bindPath]
+        try require(!fixture.server.requests.contains { legacyPaths.contains($0.path) } &&
+                    fixture.server.requests.filter { $0.path == PhoneRunContract.startPath }.count == 1,
+                    "Preparation integration never falls back to legacy or admits a second operation")
     }
 
     static func terminalCallbacks() async throws {

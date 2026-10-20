@@ -1,13 +1,36 @@
 # AMPLIFai phone collectors
 
-The public `/phone` and `/phone/account` setup links offer signed Android
-`2026.10.09-rc9` and signed, notarized Mac `2026.10.11-rc19`. Mac rc17 and
-earlier releases remain rollback artifacts. Neither platform has
-universal physical-device and authenticated account acceptance. Exact public
-source, notices, checksums and release receipts are in `PROJECT_PLAN.md`;
-Android-specific behavior is in [`android/README.md`](android/README.md).
+Published versions, platform qualification, notices, checksums and release
+receipts are recorded in `PROJECT_PLAN.md` and the protected release manifests.
+Source changes described here need matching qualified packages before the website
+advertises their capabilities. Android-specific behavior is in
+[`android/README.md`](android/README.md).
 `/pilot` is a secondary manual-file importer, not the normal direct-phone path.
-Windows has a private unsigned rc14 MSI; customer download remains disabled.
+
+## Current Mac preparation and account handoff
+
+The website's combined `phone-run-v2` approval covers collection and automatic
+saving of the contacts later chosen in the companion. New Mac clients use the
+additive `phone-start-v1` protocol: claim the bootstrap promptly, prepare the
+iPhone locally, then obtain operation-bound admission only when the owner
+explicitly starts collection. Preparation and retries do not extend the original
+12-hour claimed-run expiry. Legacy clients retain their original ten-minute
+Start deadline and strict wire formats.
+
+The native read-only setting check, connection illustration and manual Finder
+walkthrough do not start collection or prove that Trust, encryption or a Finder
+backup is complete. Backup progress uses measured evidence; any remaining-time
+range estimates the backup transfer alone and is unavailable without steady
+progress. It does not predict parsing or account Save time.
+
+After the owner chooses contacts and continues, the waiting account page saves
+the exact bound selection under the prior approval. Completion navigation is
+available only after matching Save/ACK and clean helper/storage teardown. It
+retains only enrollment, handoff, payload digest and browser preference; the
+website verifies that identity against the current saved report. The browser
+must be available for Save, and browser profile/tab reuse is not guaranteed.
+
+## Historical qualification notes
 
 October 1 Windows software qualification used a standard public-repository
 Windows Server 2025 x64 VM, Python 3.12.10 and the exact hash-pinned Windows
@@ -46,6 +69,8 @@ without a second raw copy. Distinct safe capacity codes identify a future
 guard without phone content. This is synthetic repair evidence, not a proven
 fix for that exact owner run or complete-history/device-to-account success.
 
+## Local development and packaging
+
 Build the host-specific macOS app without opening or connecting to a phone:
 
 ```sh
@@ -54,14 +79,15 @@ Build the host-specific macOS app without opening or connecting to a phone:
 
 The result is `dist/AmplifaiPhone.app`. It is unsigned and relies on this
 Mac's installed `uv` Python/package cache; copying it to another Mac is not
-a supported installation. The app's **Connect iPhone** button is the only
-collection trigger. It uses a connected USB iPhone first with the owner's
+a supported installation. Collection requires the approved run and an explicit
+native **Start collection** action. It uses a connected USB iPhone first with the owner's
 Apple Trust prompt. If no cable is present, it can use a phone this Mac already
 exposes over an existing Wi-Fi pairing, without initiating new network pairing.
 If USB Trust fails, it stops rather than silently switching to Wi-Fi.
 The app provides local progress/cancel, contact selection, retained-history
 metadata review, disconnect, and explicit inspection/cleanup of app-created
-temporary data remaining after a crash. It does not save or upload the review.
+temporary data remaining after a crash. The helper does not upload the review;
+the authorized browser handoff performs account saving.
 Post-rc7 source changes page the contact-picker preview and search locally in
 the companion; the published rc7 still uses its original single capture-preview
 event. Source changes need a new matching Mac app/helper package and device test.
@@ -167,11 +193,16 @@ marked, abandoned sessions and requires an explicit cleanup action before
 another collection. The helper itself makes no cloud upload. The browser can
 save selected metadata only after separate per-source account consent.
 
-Capacity-candidate recovery policy: received file or protocol bytes refresh a
-15-minute inactivity watchdog, including discarded payload bytes and live
-finalization responses with a flat percentage. During an active file frame,
-control bytes cannot hide a 15-minute file stall. Between file frames,
-control-only liveness is bounded to one hour since the last file bytes.
+Backup readiness has an absolute 30-minute allowance from the start of device
+discovery/setup until the first actual inbound or outbound file payload.
+Control traffic does not extend that initial deadline. Once file data begins,
+received file or protocol bytes refresh the existing 15-minute inactivity
+watchdog, including discarded payload bytes and live finalization responses
+with a flat percentage. During an active file frame, including one whose first
+payload has not arrived, control bytes cannot hide a 15-minute file stall.
+Between file frames, control-only liveness is bounded to one hour since the
+last file bytes. The readiness deadline includes discovery, pairing and service
+setup; cancellation retains the bounded cleanup and residue-recovery behavior.
 There is no total elapsed-time cutoff for an actively receiving file transfer.
 An owner can cancel a slow transfer; the 15-minute no-byte and one-hour
 control-only guards still stop a genuinely stalled session.

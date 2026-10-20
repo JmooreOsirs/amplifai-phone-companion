@@ -1,18 +1,13 @@
+import AppKit
 import SwiftUI
 
 /// Instructions, not a device-status meter. Only the model's read result can confirm readiness.
 struct PhoneConnectionGuide: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
-            HStack(spacing: 12) {
-                Image(systemName: "iphone.gen3").font(.system(size: 38))
-                Image(systemName: "cable.connector.horizontal")
-                    .font(.system(size: 36)).frame(maxWidth: .infinity)
-                Image(systemName: "laptopcomputer").font(.system(size: 44))
-            }
-            .foregroundStyle(Brand.blue)
-            .padding(.horizontal, 24)
-            .accessibilityHidden(true)
+            PhoneConnectionIllustration(reduceMotion: reduceMotion)
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: Brand.Space.section) { instructions }
                 VStack(alignment: .leading, spacing: Brand.Space.item) { instructions }
@@ -24,7 +19,7 @@ struct PhoneConnectionGuide: View {
     @ViewBuilder private var instructions: some View {
         instruction(1, "Connect", "Use a data-capable USB cable.")
         instruction(2, "Unlock", "Keep your iPhone unlocked to connect.")
-        instruction(3, "Trust", "If asked, tap Trust on your iPhone.")
+        instruction(3, "Trust when asked", "Tap Trust if your iPhone asks.")
     }
 
     private func instruction(_ number: Int, _ title: String, _ detail: String) -> some View {
@@ -38,10 +33,63 @@ struct PhoneConnectionGuide: View {
     }
 }
 
+/// A bounded instructional animation, separate from measured connection status.
+struct PhoneConnectionIllustration: View {
+    let reduceMotion: Bool
+    @State private var demonstrationStep = 3
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 3) {
+                Image(systemName: "laptopcomputer").font(.system(size: 28))
+                Image(systemName: "cable.connector.horizontal").font(.system(size: 20))
+                    .offset(y: demonstrationStep == 0 ? 12 : 0)
+                    .opacity(demonstrationStep == 0 ? 0.45 : 1)
+                Image(systemName: "iphone.gen3").font(.system(size: 28))
+            }
+            .frame(maxWidth: .infinity)
+            HStack(spacing: 4) {
+                Image(systemName: "iphone.gen3").font(.system(size: 36))
+                ZStack {
+                    Image(systemName: "lock").opacity(demonstrationStep < 2 ? 1 : 0)
+                    Image(systemName: "lock.open").opacity(demonstrationStep >= 2 ? 1 : 0)
+                }
+                .font(.system(size: 25))
+            }
+            .frame(maxWidth: .infinity)
+            ZStack(alignment: .bottomTrailing) {
+                Image(systemName: "checkmark.shield").font(.system(size: 40))
+                Image(systemName: "hand.tap").font(.system(size: 23))
+                    .foregroundStyle(Brand.lime)
+                    .offset(x: demonstrationStep < 3 ? 15 : 5, y: demonstrationStep < 3 ? 15 : 5)
+                    .opacity(demonstrationStep < 3 ? 0.3 : 1)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .foregroundStyle(Brand.blue)
+        .frame(height: 60)
+        .accessibilityHidden(true)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.55), value: demonstrationStep)
+        .task(id: reduceMotion) {
+            // One short instructional sequence, then a static frame; never a readiness signal.
+            demonstrationStep = reduceMotion ? 3 : 0
+            guard !reduceMotion else { return }
+            do {
+                for step in 1...3 {
+                    try await Task.sleep(for: .milliseconds(1100))
+                    try Task.checkCancellation()
+                    demonstrationStep = step
+                }
+            } catch { /* Leaving the guide cancels its illustration. */ }
+        }
+    }
+}
+
 struct FinderEncryptionGuide: View {
     @ObservedObject var model: CollectorModel
     let onClose: () -> Void
     @State private var step: Int
+    @State private var finderOpenFailed = false
     @AccessibilityFocusState private var headingFocused: Bool
 
     init(model: CollectorModel, initialStep: Int = 0, onClose: @escaping () -> Void) {
@@ -64,6 +112,16 @@ struct FinderEncryptionGuide: View {
             Text(steps[step].detail)
                 .font(Brand.bodyFont(16)).foregroundStyle(Brand.body)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            if step < 2 {
+                Button("Open Finder") {
+                    finderOpenFailed = !NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: NSHomeDirectory())
+                }
+                .buttonStyle(SecondaryButton())
+                if finderOpenFailed {
+                    Text("Open Finder from the Dock, then choose your iPhone under Locations.")
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
+                }
+            }
             if step == 2 {
                 Text("This starts a Finder backup and overwrites and encrypts earlier local backups. Keep the password: AMPLIFai cannot recover it. Finder needs its own free storage.")
                     .font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
@@ -97,10 +155,11 @@ struct FinderEncryptionGuide: View {
             Button("Back") { step -= 1 }.buttonStyle(SecondaryButton())
         }
         if step < 3 {
-            Button("Next") { step += 1 }.buttonStyle(LimeButton())
+            Button(step == 0 ? "Next: select your iPhone" : step == 1 ? "Next: backup setting" : "Next: finish and recheck") { step += 1 }
+                .buttonStyle(LimeButton())
         }
         if step != 3 || model.backupEncryptionStatus != .encrypted {
-            Button("Back to collection", action: onClose).buttonStyle(QuietAction())
+            Button("Back to preparation", action: onClose).buttonStyle(QuietAction())
         }
     }
 
@@ -114,8 +173,8 @@ struct FinderEncryptionGuide: View {
                 .buttonStyle(SecondaryButton()).disabled(!model.backupSettingCheckInProgress)
         case .encrypted:
             VerifiedStatusRow(verified: true, title: "Encrypted backup is on",
-                              detail: "Call history may be available. Full history is not guaranteed.")
-            Button("Back to collection", action: onClose).buttonStyle(LimeButton())
+                              detail: "The setting is confirmed. Check that Finder has finished before collecting. Call history may be available; full history is not guaranteed.")
+            Button("Back to preparation", action: onClose).buttonStyle(LimeButton())
         default:
             if model.backupEncryptionStatus == .unencrypted {
                 Text("Last check: encryption off").font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
@@ -130,16 +189,16 @@ struct FinderEncryptionGuide: View {
 
     private var steps: [(title: String, detail: String)] {
         [
-            ("Connect, unlock and trust", "Connect your iPhone to this Mac. Unlock it and tap Trust if asked, then open Finder."),
-            ("Select your iPhone", "Choose your iPhone under Locations in Finder's sidebar. The AMPLIFai Phone installer disk is a different item."),
+            ("Connect, unlock and open Finder", "Connect your iPhone to this Mac with a data-capable USB cable and unlock it. Open Finder below, then choose Next. You do not need to wait for a Trust prompt first."),
+            ("Select your iPhone and allow access", "Choose your iPhone under Locations in Finder's sidebar. If Finder asks, click Trust. On your iPhone, tap Trust and enter its passcode if prompted. The AMPLIFai Phone installer disk is a different item."),
             ("Choose Encrypt local backup", "On the General tab, find Backups and select Encrypt local backup. Create a password you can keep; this changes the setting in Finder."),
-            ("Let Finder finish, then recheck", "Return here after the Finder backup finishes. Recheck reads the setting without collecting. Even encrypted backups may not contain every call.")
+            ("Let Finder finish, then recheck", "Wait for the backup progress in Finder to finish and its latest-backup date/time to update. Return here and recheck. This reads the encryption setting; it cannot confirm Finder's backup has finished.")
         ]
     }
 
     private var illustration: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
-            Text("ILLUSTRATION · USE FINDER TO CHANGE THE SETTING")
+            Text("EXAMPLE ONLY · FOLLOW THE STEPS BELOW IN FINDER")
                 .font(Brand.headingFont(11)).foregroundStyle(Brand.muted)
             switch step {
             case 0:
@@ -150,7 +209,6 @@ struct FinderEncryptionGuide: View {
                         Text("Locations").font(Brand.headingFont(14)).foregroundStyle(Brand.muted)
                         Label("Your iPhone", systemImage: "iphone.gen3")
                             .font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
-                            .padding(10).background(Brand.blue.opacity(0.2), in: RoundedRectangle(cornerRadius: Brand.Radius.control))
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "iphone.gen3").font(.system(size: 54)).foregroundStyle(Brand.blue)
@@ -160,7 +218,7 @@ struct FinderEncryptionGuide: View {
                     Text("General").font(Brand.headingFont(15)).foregroundStyle(Brand.heading)
                     Rectangle().fill(Brand.border).frame(height: 1)
                     Text("Backups").font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
-                    Label("Encrypt local backup", systemImage: "square")
+                    Label("Find “Encrypt local backup”", systemImage: "lock")
                         .font(Brand.bodyFont(16)).foregroundStyle(Brand.body)
                 }
             default:

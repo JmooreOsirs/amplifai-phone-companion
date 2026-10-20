@@ -111,6 +111,7 @@ enum PhoneRunFlowChecks {
     static func run() throws {
         try linkParsing()
         try returnBrowserChoice()
+        try accountControlRoute()
         try coldStartBufferAndIdleAdmission()
         try claimSuccessAndRefusals()
         try lostClaimReplyRetriesExactBody()
@@ -146,6 +147,10 @@ enum PhoneRunFlowChecks {
         try handoffAfterBindWithoutReceived()
         try finalAcknowledgementRetryKeepsHandoff()
         try noFocusBounceAfterHandoff()
+        try completedReportRouteValidation()
+        try completedReportRequiresConfirmedCleanSave()
+        try completedReportReturnIsExplicitAndRetired()
+        try completedRunReleasesVerificationRequest()
         try lateBrowserOpenAnswersChangeNothing()
         try expiryBeforeAndAfterReleaseSpendsTheRun()
         try approvedToSaveLabel()
@@ -1254,6 +1259,142 @@ enum PhoneRunFlowChecks {
                     "Errors and an unexpected helper exit after the handoff leave the window minimized")
     }
 
+    static func accountControlRoute() throws {
+        try require(CollectorModel().accountControlURL == nil, "No current run means no account control pin")
+        let (model, server, wire, run) = try startedModel()
+        let enrollment = model.phoneRun!.enrollmentID
+        let expected = URL(string: "https://amplifai.satoris.ai/phone/account?phoneRunControl=\(run.runID)&enrollmentId=\(enrollment)&week=phone")!
+        let requests = server.requests.count
+        let commands = wire.commands.count
+        try require(model.accountControlURL == expected && server.requests.count == requests && wire.commands.count == commands,
+                    "Account Stop navigation contains only exact run/enrollment lookup pins and performs no authority or helper action")
+        for invalid in ["", handoff.uppercased(), String(run.runID.dropLast()), run.runID + "&continue=reviewed", "https://other.invalid"] {
+            try require(CollectorModel.accountControlURL(runID: invalid, enrollmentID: enrollment) == nil &&
+                        CollectorModel.accountControlURL(runID: run.runID, enrollmentID: invalid) == nil,
+                        "Account control rejects unvalidated run or enrollment values")
+        }
+        try require(model.accountContinueURL.query?.contains("continue=reviewed") == true,
+                    "Explicit pending-save recovery keeps its separate reviewed-transfer route")
+        model.disconnect()
+        try require(model.accountControlURL == nil, "Ending the current run retires its account control route")
+    }
+
+    static func completedReportRouteValidation() throws {
+        let enrollment = "00000000-0000-4000-8000-0000000000ee"
+        let expected = URL(string: "https://amplifai.satoris.ai/phone/account?enrollmentId=\(enrollment)&week=phone&completedHandoffId=\(handoff)&completedPayloadSha256=\(digest)")!
+        try require(CollectorModel.accountReportURL(enrollmentID: enrollment, handoffID: handoff,
+                                                    payloadSha256: digest) == expected,
+                    "Final return has only the fixed account route and non-authorizing completion identity")
+        for invalid in ["", enrollment.uppercased(), enrollment + "&continue=reviewed", "https://other.invalid"] {
+            try require(CollectorModel.accountReportURL(enrollmentID: invalid, handoffID: handoff,
+                                                        payloadSha256: digest) == nil,
+                        "Unvalidated enrollment cannot construct a completed report route")
+            try require(CollectorModel.accountReportURL(enrollmentID: enrollment, handoffID: invalid,
+                                                        payloadSha256: digest) == nil,
+                        "Unvalidated handoff cannot construct a completed report route")
+        }
+        for invalid in ["", digest.uppercased(), String(digest.dropLast()), digest + "&continue=reviewed"] {
+            try require(CollectorModel.accountReportURL(enrollmentID: enrollment, handoffID: handoff,
+                                                        payloadSha256: invalid) == nil,
+                        "Unvalidated payload digest cannot construct a completed report route")
+        }
+    }
+
+    static func completedReportRequiresConfirmedCleanSave() throws {
+        for failure in ["no-receipt", "wrong-handoff", "wrong-account", "revoked", "cleanup", "helper-exit"] {
+            let (model, server, _, run) = try boundModel()
+            var opens = 0
+            try require(!model.continueToSignedInAccount { _, _ in opens += 1 },
+                        "A bound handoff alone cannot open a completed report")
+            if failure == "wrong-account" {
+                server.intents[intent] = .init(email: "other.owner@example.invalid", course: course)
+            }
+            try pending(model)
+            if failure == "revoked" {
+                server.revoke(run.runID)
+                model.refreshRunStatus()
+            }
+            if failure != "no-receipt" {
+                model.receive(try handoffEvent("saved", failure == "wrong-handoff" ? otherHandoff : handoff))
+            }
+            if failure == "cleanup" {
+                model.receive(try event(#"{"kind":"error","code":"cleanup_failed","cleanupRequired":true}"#))
+            }
+            model.finished(mode: "connect", code: failure == "helper-exit" ? 1 : 0)
+            try require(!model.canContinueToSignedInAccount && model.completedReportReturnURL == nil &&
+                        !model.continueToSignedInAccount { _, _ in opens += 1 } && opens == 0,
+                        "A completed report is unavailable after \(failure)")
+        }
+    }
+
+    static func completedReportReturnIsExplicitAndRetired() throws {
+        for retirement in ["disconnect", "new-account"] {
+            let (model, server, wire, _) = try boundModel()
+            let enrollment = model.phoneRun!.enrollmentID
+            let expectedURL = URL(string: "https://amplifai.satoris.ai/phone/account?enrollmentId=\(enrollment)&week=phone&completedHandoffId=\(handoff)&completedPayloadSha256=\(digest)")!
+            let surface = RecordingCompanionSurface()
+            let director = CompanionWindowDirector()
+            director.update(model: model, surface: surface)
+            try pending(model)
+            for state in ["received", "saved_pending_browser_receipt", "saved"] {
+                model.receive(try handoffEvent(state))
+                try require(!model.canContinueToSignedInAccount && model.completedReportReturnURL == nil,
+                            "Receiving and receipt confirmation wait for successful helper cleanup")
+            }
+            model.finished(mode: "connect", code: 0)
+            director.update(model: model, surface: surface)
+            try require(model.canContinueToSignedInAccount && model.completedReportReturnURL == expectedURL &&
+                        model.phoneRun == nil && model.localCollectionApproval == nil,
+                        "A confirmed clean save retains its exact enrollment, handoff and payload route after retiring collection authority")
+            try require(surface.openedURLs.count == 1 && surface.miniaturizeCount == 1,
+                        "Completion itself never opens the browser or minimizes again")
+            let commands = wire.commands.count
+            let requests = server.requests.count
+            var returned: [(URL, String?)] = []
+            for _ in 0..<2 {
+                try require(model.continueToSignedInAccount { returned.append(($0, $1)) },
+                            "An explicit owner click may reopen the saved report")
+            }
+            try require(returned.count == 2 && returned.allSatisfy {
+                $0.0 == expectedURL && $0.1 == "com.example.synthetic-browser"
+            } && wire.commands.count == commands && server.requests.count == requests,
+                        "Report navigation preserves the return browser without helper commands or authority requests")
+            if retirement == "disconnect" {
+                model.disconnect()
+            } else {
+                let next = server.createRun(email: "new.owner@example.invalid", course: "New course")
+                try require(!model.admitRunLink(link(server, next)) && model.completedReportReturnURL == expectedURL,
+                            "A completed handoff keeps its existing admission guard until explicit reset")
+                model.disconnect()
+                try require(model.admitRunLink(link(server, next)), "A new account run can replace the completed screen")
+            }
+            model.receive(try handoffEvent("saved"))
+            try require(!model.canContinueToSignedInAccount && model.completedReportReturnURL == nil &&
+                        !model.continueToSignedInAccount { returned.append(($0, $1)) } && returned.count == 2,
+                        "\(retirement) invalidates the prior report route and late receipts cannot restore it")
+        }
+    }
+
+    static func completedRunReleasesVerificationRequest() throws {
+        let (model, server, wire, _) = try boundModel()
+        server.holdPaths = [PhoneRunContract.verifyIntentPath]
+        try pending(model)
+        server.releaseHeldReplies(path: PhoneRunContract.verifyIntentPath, keepingForReplay: true)
+        // Check request retention without exposing a capability or adding a production test-only accessor.
+        func retainsVerificationRequest() -> Bool {
+            Mirror(reflecting: model).children.contains { $0.value as? PhoneRunVerifyRequest != nil }
+        }
+        try require(retainsVerificationRequest(), "The live destination verification keeps its exact retry request")
+        model.receive(try handoffEvent("saved"))
+        model.finished(mode: "connect", code: 0)
+        try require(model.canContinueToSignedInAccount && !retainsVerificationRequest(),
+                    "Successful teardown releases the capability-bearing verification request")
+        let commands = wire.commands.count
+        server.releaseHeldReplies()
+        try require(model.canContinueToSignedInAccount && model.phoneRun == nil && wire.commands.count == commands,
+                    "A replayed verification callback cannot restore authority after completion")
+    }
+
     static func lateBrowserOpenAnswersChangeNothing() throws {
         for opened in [true, false] {
             let (model, _, _, _) = try boundModel()
@@ -1320,8 +1461,8 @@ enum PhoneRunFlowChecks {
     }
 
     static func approvedToSaveLabel() throws {
-        try require(CollectorModel.approvedToSaveLabel(["messages", "contacts"]) == "Approved to save: chosen contacts, their message metadata" &&
-                    CollectorModel.approvedToSaveLabel(["contacts", "calls", "messages"]).hasPrefix("Approved to save: "),
+        try require(CollectorModel.approvedToSaveLabel(["messages", "contacts"]) == "Approved to save: chosen contacts, their SMS activity" &&
+                    CollectorModel.approvedToSaveLabel(["contacts", "calls", "messages"]) == "Approved to save: chosen contacts, their call activity, their SMS activity",
                     "Run categories are labelled as what may be saved")
     }
 

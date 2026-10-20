@@ -631,8 +631,9 @@ class TransferDeadlineTest(unittest.TestCase):
         clock = [0.0]
         watchdog = BackupWatchdog(clock=lambda: clock[0])
         watchdog.start()
-        clock[0] = 4 * 60 * 60 + 1
-        watchdog.payload_received(1024**3)
+        for minute in range(1, 4 * 60 + 2):
+            clock[0] = minute * 60
+            watchdog.payload_received(128 * 1024)
         self.assertIsNone(watchdog._expired())
         clock[0] += BACKUP_IDLE_SECONDS
         self.assertIsInstance(watchdog._expired(), BackupStalled)
@@ -644,7 +645,8 @@ class TransferDeadlineTest(unittest.TestCase):
         watchdog.payload_received(128 * 1024)
         watchdog.file_transfer_started()
         clock[0] = BACKUP_IDLE_SECONDS
-        watchdog.received(4)
+        with self.assertRaises(BackupStalled):
+            watchdog.received(4)
         self.assertIsInstance(watchdog._expired(), BackupStalled)
 
     def test_completed_file_allows_bounded_live_control_finalization(self) -> None:
@@ -654,10 +656,11 @@ class TransferDeadlineTest(unittest.TestCase):
         watchdog.file_transfer_started()
         watchdog.payload_received(128 * 1024)
         watchdog.file_transfer_completed()
-        for minute in range(1, 31):
+        for minute in range(1, 60):
             clock[0] = minute * 60
             watchdog.received(4)
             self.assertIsNone(watchdog._expired())
         clock[0] = MAX_CONTROL_ONLY_SECONDS
-        watchdog.received(4)
+        with self.assertRaises(BackupNoFileProgress):
+            watchdog.received(4)
         self.assertIsInstance(watchdog._expired(), BackupNoFileProgress)

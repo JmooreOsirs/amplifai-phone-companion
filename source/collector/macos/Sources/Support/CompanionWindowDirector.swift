@@ -21,9 +21,10 @@ import Foundation
     func openInBrowser(_ url: URL, preferredBrowserBundleID: String?, completion: @escaping @MainActor (Bool) -> Void)
 }
 
-/// One active surface. After the run's handoff is bound, the Mac opens the account in the return browser and
-/// minimizes its window once. From then on nothing here restores, activates or raises the window, or presents
-/// a sheet, for any status, receipt, save, helper exit, completion or error. The owner may reopen it themselves.
+/// One active surface. A legacy run's explicit navigation request opens the bound account in the return browser
+/// and minimizes once. Preparation runs emit no automatic navigation and stay visible. After navigation, nothing
+/// here restores, activates or raises the window, or presents a sheet for status, receipt, completion or error.
+/// The owner controls explicit browser returns and reopening the native window.
 @MainActor final class CompanionWindowDirector {
     private(set) var handedOffHandoffID = ""
     private var openedNavigationID: UUID?
