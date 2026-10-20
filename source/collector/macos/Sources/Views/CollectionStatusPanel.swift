@@ -139,7 +139,7 @@ struct CollectionStatusPanel: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let elapsed = max(0, Int(context.date.timeIntervalSince(model.collectionStartedAt ?? context.date)))
             VStack(alignment: .leading, spacing: Brand.Space.section) {
-                activityHeading
+                activityHeading(at: context.date)
                 if model.phase != .completing {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: Brand.Space.item) { stopActions }
@@ -190,15 +190,11 @@ struct CollectionStatusPanel: View {
                                           ? Brand.lime : Brand.blue.opacity(0.45))
                                 .frame(width: 7, height: 7)
                         }
-                        Text(model.phase == .processing ? "Reading source metadata locally"
-                             : model.phase == .connecting ? "Waiting for iPhone connection"
-                             : model.transferIsKnown ? "Receiving measured backup bytes" : "Waiting for first received byte")
+                        Text(activityLabel(at: context.date))
                             .foregroundStyle(Brand.muted)
                     }
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(model.phase == .processing ? "Reading source metadata locally"
-                                        : model.phase == .connecting ? "Waiting for iPhone connection"
-                                        : model.transferIsKnown ? "Receiving measured backup bytes" : "Waiting for first received byte")
+                    .accessibilityLabel(activityLabel(at: context.date))
                 }
                 if model.transferIsKnown && model.phase != .completing {
                     Text(model.phase == .processing
@@ -260,25 +256,59 @@ struct CollectionStatusPanel: View {
         }
     }
 
-    private var activityHeading: some View {
+    private func activityHeading(at date: Date) -> some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
             Text("ON THIS MAC · STAGE \(activeStage + 1) OF \(stages.count)")
                 .font(Brand.bodyFont(13).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
-            Text(model.phase == .transferring && !model.transferIsKnown
-                 ? "Waiting for the first received byte" : model.phase == .processing && model.processedBytes == 0
-                 ? "Reading available sources" : model.statusTitle)
+            Text(activityTitle(at: date))
                 .font(Brand.headingFont(23)).foregroundStyle(Brand.heading)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
-            Text(activityDetail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+            Text(activityDetail(at: date)).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
         }
     }
 
-    private var activityDetail: String {
+    private func activityTitle(at date: Date) -> String {
+        switch model.collectionAttention(at: date) {
+        case .connectionUnconfirmed: return "Connection status unavailable"
+        case .backupWaiting, .backupStale: return "Needs attention"
+        case nil:
+            return model.phase == .processing && model.processedBytes == 0
+                ? "Reading available sources" : model.statusTitle
+        }
+    }
+
+    private func activityLabel(at date: Date) -> String {
+        switch model.collectionAttention(at: date) {
+        case .connectionUnconfirmed: return "No connection confirmation received"
+        case .backupWaiting: return "No backup data measured yet"
+        case .backupStale: return "No recent backup data measured"
+        case nil:
+            if model.phase == .processing { return "Reading source metadata locally" }
+            if model.phase == .connecting { return "Waiting for iPhone connection confirmation" }
+            return model.lastBackupActivityAt != nil ? "Receiving measured backup data" : "Waiting for iPhone backup data"
+        }
+    }
+
+    private func activityDetail(at date: Date) -> String {
+        switch model.collectionAttention(at: date) {
+        case .connectionUnconfirmed:
+            return "No iPhone connection has been confirmed in this attempt. Check the phone for a Trust/passcode prompt and look for the iPhone in Finder."
+        case .backupWaiting:
+            let observed = model.connectionConfirmedAt != nil
+                ? "A \(model.connectionTransport) connection was confirmed; no backup data measured."
+                : "No backup data measured."
+            return "\(observed) Check for a phone passcode prompt. If Finder is backing up this iPhone, wait for its latest-backup date/time to update before another collection."
+        case .backupStale:
+            return "No new backup data has been measured for at least a minute. Check for an iPhone passcode prompt and inspect its current backup status in Finder."
+        case nil: break
+        }
         switch model.phase {
         case .connecting: return "Connect by USB, unlock your iPhone and tap Trust if asked."
-        case .transferring: return model.transferIsKnown
+        case .transferring: return model.lastBackupActivityAt != nil
             ? "Keep the cable connected. The backup is being read on this Mac."
+            : model.connectionConfirmedAt != nil
+            ? "A \(model.connectionTransport) connection was confirmed. Waiting for backup data; respond to any iPhone passcode prompt."
             : "Keep the cable connected while waiting for backup data from your iPhone."
         case .processing: return "Reading available metadata and cleaning up temporary backup files."
         default: return model.statusDetail
@@ -313,10 +343,21 @@ struct CollectionStatusPanel: View {
     }
 
     private func activityAge(at now: Date) -> String {
-        guard let last = model.lastCollectionActivityAt else { return "Waiting for first measured data progress" }
-        let seconds = max(0, Int(now.timeIntervalSince(last)))
-        let age = seconds < 60 ? "\(seconds)s" : "\(seconds / 60)m \(seconds % 60)s"
-        return "Last measured data progress \(age) ago"
+        func age(since date: Date) -> String {
+            let seconds = max(0, Int(now.timeIntervalSince(date)))
+            return seconds < 60 ? "\(seconds)s" : "\(seconds / 60)m \(seconds % 60)s"
+        }
+        if let last = model.lastCollectionActivityAt {
+            return "Last measured data progress \(age(since: last)) ago"
+        }
+        if model.phase == .processing { return "Waiting for first measured data progress" }
+        if let confirmed = model.connectionConfirmedAt {
+            return "Connection confirmed \(age(since: confirmed)) ago · no backup data measured"
+        }
+        if let started = model.collectionStartedAt {
+            return "Connection check started \(age(since: started)) ago · no confirmation received"
+        }
+        return "Waiting for connection confirmation"
     }
 
     @ViewBuilder private var actions: some View {

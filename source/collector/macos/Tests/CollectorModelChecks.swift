@@ -20,7 +20,7 @@ struct CollectorModelChecks {
         do {
             try runChecks()
             try await approvedLaunchUsesExactRun()
-            print("20 macOS recovery, progress, run-approval and update-deferral checks passed")
+            print("macOS recovery, progress, connection freshness, run-approval and update-deferral checks passed")
             if CommandLine.arguments.dropFirst().first != "--quick-only" {
                 guard CommandLine.arguments.count == 3 else {
                     throw RecoveryCheckError.failed("Default checks require the pinned Python interpreter and collector source path")
@@ -55,7 +55,106 @@ struct CollectorModelChecks {
         try cancellationClearsPrivateReview()
         try backupEstimateNeedsStableMeasuredProgress()
         try activityTimestampNeedsRealDataProgress()
+        try confirmedConnectionAdvancesToBackupWait()
+        try connectionEvidenceRequiresCurrentKnownEvent()
+        try connectionAndBackupFreshnessRequireNewEvidence()
         try updaterCannotReplaceActiveOrUnsavedWork()
+    }
+
+    private static func confirmedConnectionAdvancesToBackupWait() throws {
+        let model = CollectorModel()
+        let connectedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        model.now = { connectedAt }
+        model.phase = .connecting
+        model.receive(try event(#"{"kind":"state","state":"connecting"}"#))
+        model.receive(try event(#"{"kind":"connection","transport":"usb"}"#))
+        try require(model.phase == .transferring && model.connectionTransport == "USB",
+                    "A confirmed USB connection must advance to Receive backup without waiting for file bytes")
+        try require(model.connectionConfirmedAt == connectedAt,
+                    "The connection confirmation needs its own timestamp")
+        try require(!model.transferIsKnown && !model.progressIsKnown && model.lastCollectionActivityAt == nil,
+                    "A connection confirmation must not invent backup progress")
+    }
+
+    private static func connectionEvidenceRequiresCurrentKnownEvent() throws {
+        for json in [#"{"kind":"connection"}"#, #"{"kind":"connection","transport":"unknown"}"#,
+                     #"{"kind":"connection","transport":"USB"}"#] {
+            let model = CollectorModel()
+            model.phase = .connecting
+            model.receive(try event(#"{"kind":"state","state":"connecting"}"#))
+            model.receive(try event(json))
+            try require(model.phase == .connecting && model.connectionTransport.isEmpty && model.connectionConfirmedAt == nil,
+                        "An absent or unknown transport cannot be presented as a confirmed USB connection")
+        }
+        for phase: CollectorModel.Phase in [.idle, .error, .cancelling, .processing, .reviewing] {
+            let model = CollectorModel()
+            model.phase = phase
+            model.receive(try event(#"{"kind":"connection","transport":"usb"}"#))
+            try require(model.phase == phase && model.connectionConfirmedAt == nil,
+                        "A late connection frame cannot advance a settled, stopping or later-stage model")
+        }
+        let model = CollectorModel()
+        model.phase = .connecting
+        model.receive(try event(#"{"kind":"state","state":"connecting"}"#))
+        model.handleHelperOutput(Data(#"{"kind":"connection","transport":"usb"}"#.utf8) + Data([10]),
+                                 operation: UUID(), mode: "connect")
+        try require(model.phase == .connecting && model.connectionConfirmedAt == nil,
+                    "An old helper operation cannot confirm the current phone connection")
+        model.receive(try event(#"{"kind":"connection","transport":"wifi"}"#))
+        try require(model.phase == .transferring && model.connectionTransport == "Wi-Fi",
+                    "A valid trusted Wi-Fi event must retain its actual transport")
+        try require(model.localCollectionApproval == nil && model.phoneRun == nil && !model.canConnect,
+                    "Connection presentation must not create collection or retry authority")
+    }
+
+    private static func connectionAndBackupFreshnessRequireNewEvidence() throws {
+        let model = CollectorModel()
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        model.now = { clock }
+        model.phase = .connecting
+        model.receive(try event(#"{"kind":"state","state":"connecting"}"#))
+        let started = clock
+        try require(model.collectionAttention(at: started.addingTimeInterval(59.999)) == nil,
+                    "A new connection attempt should have a bounded waiting interval")
+        clock = started.addingTimeInterval(60)
+        model.receive(try event(#"{"kind":"state","state":"connecting"}"#))
+        try require(model.collectionStartedAt == started &&
+                    model.collectionAttention(at: clock) == .connectionUnconfirmed,
+                    "Repeated connecting frames cannot renew the connection-check freshness")
+        model.receive(try event(#"{"kind":"connection","transport":"usb"}"#))
+        let confirmed = clock
+        try require(model.collectionAttention(at: confirmed.addingTimeInterval(59.999)) == nil,
+                    "A new confirmed connection starts the backup-wait observation interval")
+        clock = confirmed.addingTimeInterval(60)
+        model.receive(try event(#"{"kind":"connection","transport":"wifi"}"#))
+        model.receive(try event(#"{"kind":"state","state":"connecting"}"#))
+        try require(model.phase == .transferring && model.connectionConfirmedAt == confirmed &&
+                    model.connectionTransport == "USB" && model.collectionAttention(at: clock) == .backupWaiting,
+                    "Repeated connection/state frames cannot regress the stage, change transport or hide stale backup wait")
+        model.receive(try event(#"{"kind":"progress","value":10}"#))
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":0,"retainedBytes":0,"discardedBytes":0,"filesReceived":0,"elapsedSeconds":60,"bytesPerSecond":0}"#))
+        try require(model.lastBackupActivityAt == nil && model.collectionAttention(at: clock) == .backupWaiting,
+                    "A device percentage or zero counters cannot clear missing-file-data attention")
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":512,"discardedBytes":512,"filesReceived":1,"elapsedSeconds":61,"bytesPerSecond":16}"#))
+        let measured = clock
+        try require(model.lastBackupActivityAt == measured && model.connectionConfirmedAt == confirmed &&
+                    model.collectionAttention(at: measured.addingTimeInterval(59.999)) == nil,
+                    "Real backup progress clears backup attention without rewriting connection evidence")
+        clock = measured.addingTimeInterval(60)
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":1024,"retainedBytes":512,"discardedBytes":512,"filesReceived":1,"elapsedSeconds":121,"bytesPerSecond":8}"#))
+        model.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":512,"retainedBytes":256,"discardedBytes":256,"filesReceived":1,"elapsedSeconds":122,"bytesPerSecond":4}"#))
+        try require(model.lastBackupActivityAt == measured && model.collectionAttention(at: clock) == .backupStale,
+                    "Repeated or regressed counters cannot make stalled data progress look fresh")
+        model.phase = .passwordRequired
+        try require(model.collectionAttention(at: clock) == nil,
+                    "Backup attention must not override the explicit password-required state")
+        model.phase = .cancelling
+        try require(model.collectionAttention(at: clock) == nil &&
+                    model.statusTitle == "Stopping and checking temporary data",
+                    "Freshness presentation must not replace truthful pending Stop state")
+        model.phase = .error
+        try require(model.collectionAttention(at: clock) == nil,
+                    "A terminal failure keeps its specific recovery state")
     }
 
     private static func updaterCannotReplaceActiveOrUnsavedWork() throws {
@@ -384,7 +483,14 @@ struct CollectorModelChecks {
                     "After the check and current capability status, one Start launches the run and moves to Collect")
         try require(single.localCollectionApproval == nil && single.collectionApprovalRunID != singleRun,
                     "Starting consumes the one-run approval; nothing authorizes a later transfer")
+        single.receive(try event(#"{"kind":"connection","transport":"usb"}"#))
+        let connectionBeforeStop = single.connectionConfirmedAt
         single.disconnect()
+        single.receive(try event(#"{"kind":"connection","transport":"wifi"}"#))
+        try require(single.phase == .cancelling && single.helperRunning &&
+                    single.connectionConfirmedAt == connectionBeforeStop &&
+                    single.collectionAttention(at: Date().addingTimeInterval(600)) == nil,
+                    "Stop must stay pending until the owned helper exits; late connection events cannot revive collection")
         let singleDeadline = Date().addingTimeInterval(3)
         while single.helperRunning && Date() < singleDeadline { await Task.yield() }
         try require(!single.helperRunning, "The synthetic collection helper must stop on Cancel")
@@ -458,6 +564,13 @@ struct CollectorModelChecks {
             try require(!connection.contains(obsoleteLimit), "Connection timeout cannot claim a one-hour backup")
         }
         try require(stalled.range(of: #"15\s*min"#, options: .regularExpression) != nil, "Stall recovery must name the 15-minute policy")
+        let stoppedModel = CollectorModel()
+        stoppedModel.receive(try event(#"{"kind":"error","code":"backup_stalled","stage":"backup"}"#))
+        let stalledGuidance = ([stoppedModel.errorMessage] + stoppedModel.recoverySteps).joined(separator: " ").lowercased()
+        try require(stalled.contains("stopped without saving metadata") &&
+                    stalledGuidance.contains("finder") && stalledGuidance.contains("passcode") &&
+                    stalledGuidance.contains("latest-backup date/time") && !stalledGuidance.contains("check the cable"),
+                    "Backup silence needs a factual stopped result plus normal backup recovery guidance, without asserting a cable failure")
         try require(elapsed.contains("data-aware") && !elapsed.contains("four-hour safety limit"), "Active transfer must not claim an absolute four-hour ceiling")
         try require(controlOnly.contains("one hour") && controlOnly.contains("kept responding"), "Live control-only expiry must not claim wire silence")
     }

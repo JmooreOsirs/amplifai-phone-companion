@@ -116,6 +116,8 @@ final class CollectorModel: ObservableObject {
     @Published private(set) var processedBytes: Int64 = 0
     @Published private(set) var transferIsKnown = false
     @Published private(set) var collectionStartedAt: Date?
+    /// One successful helper connection, not a live connection check or measured backup progress.
+    @Published private(set) var connectionConfirmedAt: Date?
     @Published private(set) var lastBackupActivityAt: Date?
     @Published private(set) var lastParsingActivityAt: Date?
     @Published private(set) var transferElapsedSeconds = 0
@@ -1122,6 +1124,18 @@ final class CollectorModel: ObservableObject {
         phase == .processing ? lastParsingActivityAt ?? lastBackupActivityAt : lastBackupActivityAt
     }
 
+    enum CollectionAttention: Equatable { case connectionUnconfirmed, backupWaiting, backupStale }
+    static let collectionAttentionDelay: TimeInterval = 60
+
+    /// Presentation only: lack of measured progress does not prove disconnection or authorize a retry.
+    func collectionAttention(at date: Date) -> CollectionAttention? {
+        guard phase == .connecting || phase == .transferring,
+              let lastEvidence = lastBackupActivityAt ?? connectionConfirmedAt ?? collectionStartedAt,
+              date.timeIntervalSince(lastEvidence) >= Self.collectionAttentionDelay else { return nil }
+        if phase == .connecting { return .connectionUnconfirmed }
+        return lastBackupActivityAt == nil ? .backupWaiting : .backupStale
+    }
+
     func backupRemainingEstimate(at now: Date) -> ClosedRange<Int>? {
         guard phase == .transferring, progressIsKnown, progress >= 15, progress < 90,
               backupProgressSamples.count >= 3, let first = backupProgressSamples.first,
@@ -1283,10 +1297,11 @@ final class CollectorModel: ObservableObject {
         transferBytesPerSecond = 0
         processedBytes = 0
         transferIsKnown = false
+        connectionConfirmedAt = nil
         lastBackupActivityAt = nil
         lastParsingActivityAt = nil
         backupProgressSamples = []
-        collectionStartedAt = Date()
+        collectionStartedAt = now()
         resetHandoff()
         lastErrorCode = nil
         selectionNeedsReview = true
@@ -2465,9 +2480,9 @@ final class CollectorModel: ObservableObject {
         case "state":
             switch event.state {
             case "connecting":
-                collectionStartedAt = Date()
+                guard phase == .connecting else { return }
+                if collectionStartedAt == nil { collectionStartedAt = now() }
                 progressIsKnown = false
-                phase = .connecting
             case "password_required": phase = .passwordRequired
             case "processing": phase = .processing
             case "disconnected", "cancelled":
@@ -2507,7 +2522,7 @@ final class CollectorModel: ObservableObject {
                       discarded == received - retained, files >= transferFileCount,
                       rate.isFinite, rate >= 0, rate <= 1_099_511_627_776,
                       elapsed.isFinite, elapsed > 0 else { return }
-                if received > transferBytes || files > transferFileCount { lastBackupActivityAt = Date() }
+                if received > transferBytes || files > transferFileCount { lastBackupActivityAt = now() }
                 transferBytes = received
                 retainedBytes = retained
                 transferFileCount = files
@@ -2517,12 +2532,16 @@ final class CollectorModel: ObservableObject {
                 phase = .transferring
             } else if event.stage == "processing", let bytes = event.processedBytes,
                       bytes >= processedBytes, bytes <= 9_007_199_254_740_991 {
-                if bytes > processedBytes { lastParsingActivityAt = Date() }
+                if bytes > processedBytes { lastParsingActivityAt = now() }
                 processedBytes = bytes
                 phase = .processing
             }
         case "connection":
+            guard phase == .connecting, collectionStartedAt != nil, connectionConfirmedAt == nil,
+                  event.transport == "usb" || event.transport == "wifi" else { return }
             connectionTransport = event.transport == "wifi" ? "Wi-Fi" : "USB"
+            connectionConfirmedAt = now()
+            phase = .transferring
         case "selected-payload-diagnostic":
             guard phase == .processing || phase == .connecting,
                   let record = event.selectedSourceDiagnostic else { return }
@@ -3028,7 +3047,7 @@ final class CollectorModel: ObservableObject {
         switch phase {
         case .idle: return "Connect your iPhone"
         case .connecting: return "Unlock and trust your iPhone"
-        case .transferring: return "Receiving the local backup"
+        case .transferring: return lastBackupActivityAt == nil ? "Waiting for iPhone backup data" : "Receiving the local backup"
         case .passwordRequired: return "Existing backup password needed"
         case .processing: return "Finishing local collection"
         case .selecting: return "Choose the people to review"
@@ -3101,7 +3120,9 @@ final class CollectorModel: ObservableObject {
             return ["Share the safe support code and companion build with support before repeating a long collection.", "Do not reset backup encryption, remove other backups or treat the partial transfer as saved data."]
         case "workspace_unsafe": return ["Stop and contact support. Do not change permissions or delete an unverified folder."]
         case "workspace_unavailable", "workspace": return ["Reopen the signed companion and choose Check temporary data.", "If access still fails, reinstall the signed companion or contact support."]
-        case "backup_stalled", "backup_time_limit", "backup_no_file_progress", "connection_timeout", "phone_connection", "trust_required":
+        case "backup_stalled", "backup_no_file_progress":
+            return ["Check the iPhone for a passcode prompt and inspect its current backup status in Finder.", "If a Finder backup is running, wait until Finder's latest-backup date/time updates before starting a new approved collection. If this repeats, share the safe support code."]
+        case "backup_time_limit", "connection_timeout", "phone_connection", "trust_required":
             return ["Connect one phone by USB, keep it unlocked, and approve Trust on the phone if shown.", "Check the cable and use the phone's normal controls. Reconnect after the helper has stopped."]
         case "connection_lost": return ["Check the direct USB cable and port and respond to any iPhone Trust prompt.", "After the helper stops, compare a normal Finder backup on the same Mac. If Finder succeeds but this fails again, share the companion version and last transfer details with support."]
         case "device_backup_failed": return ["Note the device status and companion version.", "If the same iPhone cannot complete a normal Finder backup on this Mac, resolve that device backup issue first. Otherwise, share the status with support before repeating collection."]
@@ -3144,7 +3165,7 @@ final class CollectorModel: ObservableObject {
         case "connection_timeout", "timeout": return "The iPhone connection timed out. Keep it unlocked, check the cable or trusted Wi-Fi connection, then retry."
         case "connection_lost": return "The iPhone connection ended before backup completion. No metadata was saved. Check the cable and port, then reconnect after the helper stops."
         case "device_backup_failed": return "The iPhone reported a backup failure. No metadata was saved."
-        case "backup_stalled": return "No backup data arrived for 15 minutes. Collection stopped. Check the cable, unlock the iPhone, then reconnect."
+        case "backup_stalled": return "No backup data arrived for 15 minutes. Collection stopped without saving metadata."
         case "backup_no_file_progress": return "The iPhone kept responding but no backup file data arrived for one hour. Collection stopped without saving metadata. Check the phone's normal backup status before retrying."
         case "backup_time_limit": return "The backup made too little file-data progress within its data-aware time budget. Collection stopped. Use a direct USB cable and retry; if it repeats, contact support."
         case "cancelled": return "Collection was cancelled. No metadata was saved."
