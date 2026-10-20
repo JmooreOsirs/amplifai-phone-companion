@@ -29,7 +29,7 @@ class QualificationProfileTests(unittest.TestCase):
 
     def files(self):
         paths = [self.root / "source/collector/tests" / (name + ".py")
-                 for name in ("test_bridge_run_timing", "test_bridge_recovery")]
+                 for name in ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh")]
         paths += [self.root / "source/collector/macos/Tests" / name
                   for name in ("check_model.sh", "check_window_lifecycle.sh")]
         for path in paths:
@@ -121,7 +121,7 @@ class QualificationProfileTests(unittest.TestCase):
         paths[0].write_text("# fixture\n")
         with tempfile.TemporaryDirectory() as external:
             directory = paths[0].parent
-            for path in paths[:2]:
+            for path in (entry for entry in paths if entry.parent == directory):
                 path.unlink()
                 (Path(external) / path.name).write_text("# fixture\n")
             directory.rmdir()
@@ -131,17 +131,20 @@ class QualificationProfileTests(unittest.TestCase):
                     producer.run_phone_run_checks(self.root)
                 run.assert_not_called()
 
-    def test_shared_runner_executes_both_bridge_modules_model_and_appkit(self):
+    def test_shared_runner_executes_bridge_modules_model_and_appkit(self):
         self.files()
-        with patch.object(subprocess, "run") as run:
+        with patch.dict(producer.os.environ, {"AMPLIFAI_TEST_PYTHON": "/untrusted/python"}), \
+                patch.object(subprocess, "run") as run:
             producer.run_phone_run_checks(self.root)
         calls = run.call_args_list
-        self.assertEqual(calls[0].args[0], [sys.executable, "-m", "unittest", "test_bridge_run_timing", "test_bridge_recovery", "-v"])
+        self.assertEqual(calls[0].args[0], [sys.executable, "-m", "unittest", "test_bridge_run_timing",
+                                          "test_bridge_recovery", "test_bridge_refresh", "-v"])
         self.assertEqual([Path(call.args[0][-1]).name for call in calls[1:]], ["check_model.sh", "check_window_lifecycle.sh"])
         for call in calls:
             self.assertTrue(call.kwargs["check"])
             self.assertEqual(call.kwargs["cwd"], self.root)
             self.assertEqual(call.kwargs["env"]["PYTHONNOUSERSITE"], "1")
+            self.assertEqual(call.kwargs["env"]["AMPLIFAI_TEST_PYTHON"], sys.executable)
 
     def test_each_command_failure_propagates_without_running_later_commands(self):
         self.files()
