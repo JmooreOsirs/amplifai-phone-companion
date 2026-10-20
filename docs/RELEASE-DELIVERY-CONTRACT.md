@@ -1,8 +1,8 @@
 # Native delivery and website promotion contracts
 
-The retained October 17 completion receipt establishes RC28 publication from native source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`, protected control `067b2bc687e3af81d033923608679578814c535b`, and website merge `7dd79178b3a028eee3d2c8e358da79b8cb9d88a0` / deployment `dpl_ChSk6sFXE75hatGNYW5q9qtDgxWr`. It does not establish physical acceptance. RC29 is the new candidate: ARM `2026.10.19-rc29` / `26101929`, Intel Test `2026.10.19-rc29-intel1` / `261019291`. Each changed native source requires its own protected review and exact-source qualification before signing.
+RC29 was published on October 19 from native source `71dfabe3c3002e7a7787c649607607adafd29558` and protected control `e0e932a9d7d38de5cc63e64c697dda50e450213c`. Its coordinated website merge is `350ed70b4cdc0c17139a79418d0b0abfb4a2663a`, deployment `dpl_EyR8uZsANaMwAoGqLA4wyFu6ATBr`. The next candidate is RC30: ARM `2026.10.20-rc30` / `26102030`, Intel Test `2026.10.20-rc30-intel1` / `261020301`. Each changed native source requires exact-source qualification and approved merged-source custody before signing. Publication evidence does not establish physical acceptance.
 
-Use the separately reviewed protected-main release control for local signing/publication with the existing owner Keychain and notarization profile. Native source includes its frozen qualification producer; its inactive policy and older publisher are not the production control plane. The RC29 qualification profile is documented below; the current policy must authorize the final full source SHA before a release-mode build. Jeff owns the physical iPhone test and account review. The website owner coordinates exact migrations, compatibility admission and signed-byte promotion.
+Use the separately reviewed protected-main release control for local signing/publication with the existing owner Keychain and notarization profile. Native source includes its frozen qualification producer; its inactive policy and older publisher are not the production control plane. The RC30 qualification profile is documented below; the current policy must authorize the final full source SHA before a release-mode build. Jeff owns the physical iPhone test and account review. The website owner coordinates exact migrations, compatibility admission and signed-byte promotion.
 
 ## Native build owner hook
 
@@ -28,9 +28,9 @@ Use the existing hash-locked Python environment for this CLI. It executes the co
 
 5. Upload only `qualified-delivery/` with the existing pinned upload-artifact action (`ea165f8d65b6e75b540449e92b4886f43607fa02`), `if-no-files-found: error`, no `always()` success artifact on failure. Retain the artifact ID and server digest; the release dispatcher takes these exact values. `qualification.json`, `app.zip` and `source.zip` are the only three root files. No human approves those generated hashes again.
 
-Merged PR #5 installed the source-closure/map emitter, five-file Legal staging and producer/upload hook. RC29 must be clean, normally reviewed/merged and built/qualified anew for each architecture after implementation, identity and documentation freeze. No historical app or successful test suite substitutes for that exact-source delivery.
+Merged PR #5 installed the source-closure/map emitter, five-file Legal staging and producer/upload hook. RC30 must be clean, normally reviewed/merged and built/qualified anew for each architecture after implementation, identity and documentation freeze. No historical app or successful test suite substitutes for that exact-source delivery.
 
-Confirmed planned identities are ARM `2026.10.16-rc28` / `26101628` and Intel `2026.10.16-rc28-intel1` / `261016281`. The source audit confirmed channel compatibility and monotonic ordering; live feeds still match the retained RC26 hashes. The new packages remain unpublished and unqualified. These identities are not source authorization entries. Keep control `activationApproved=false`, `publicationEnabled=false` and `approvedSources=[]` for the current preparation slice; the eventual protected policy record must bind the confirmed identities to the exact final source and trusted workflows.
+The candidate identities above are not source authorization entries. After source qualification and normal merge, the protected-main policy must bind both identities to the final full source SHA and trusted workflows. Advance the previous-feed pins and published-build floors to the verified RC29 release. Preserve its sealed artifacts and the separate historical dependency/source-closure pins.
 
 ## Complete pre-sign source ZIP
 
@@ -60,7 +60,7 @@ After app/DMG signing, notarization and staples, `finalize.py` preserves every s
 
 ## Isolated GitHub publication
 
-Only the separate publication job has `contents:write`; it receives no Apple/Sparkle keys. `publicationEnabled=false` is the inactive default. Mode `publish` signs then promotes within the same workflow/run; it is not a second human approval.
+Only the separate publication job has `contents:write`; it receives no Apple/Sparkle keys. `publicationEnabled=false` is the inactive default. Hosted mode `publish` signs then promotes within the same workflow/run. The current local-Keychain path instead seals signing output first, then verifies that unchanged delivery with `local_release.py publish`; neither path requires a second routine human approval.
 
 - Revalidate source/control custody and the publication environment, then require the exact signer artifact from the successful signer job in this same run **and attempt**.
 - Verify all signed package/source/feed receipts, actual Ed25519 signatures, complete finalized source and descriptor/readback hashes.
@@ -77,8 +77,8 @@ The earlier read-only website audit recorded checkout `amplify-database-engine-a
 
 | Surface | Retained audit contract; refresh before final promotion |
 | --- | --- |
-| ARM feed | `public/phone/macos/appcast.xml`; rc28 / `26101628`; 1,561 bytes; SHA256 `22c677a174a5e4688825fae98f242b23eb74b731be14da3d27252411446a072a` |
-| Intel feed | `public/phone/macos/intel-appcast.xml`; rc28-intel1 / `261016281`; 1,654 bytes; SHA256 `747b851faa2bb4efbb6be3ffdc8265710dcdcee51881e736158ca47ea2f9da2f` |
+| ARM feed | `public/phone/macos/appcast.xml`; rc29 / `26101929`; 1,561 bytes; SHA256 `eeffb2be34d95bb8cdbb74e303200ca57ac6ea1caab2feacaac32c873c689313` |
+| Intel feed | `public/phone/macos/intel-appcast.xml`; rc29-intel1 / `261019291`; 1,654 bytes; SHA256 `31be4d7d539c3aadbb4a2fb3c9442bb87d73ab665486b659159d4b97452c1f70` |
 | Feed signatures | Embedded trailing Sparkle XML comments; **no Mac feed `.sig` sidecar**. The native package's `.dmg.sig` is a different artifact |
 | Acquisition pointers | `src/lib/release/phone-companion.ts`; update consistently with the same new package/source/version |
 | Exact feed tests | `tests/macos-arm-update-feed.test.ts`, `tests/macos-intel-update-feed.test.ts`: exact bytes/hash/key/channel/source/enclosure |
@@ -88,29 +88,29 @@ The earlier read-only website audit recorded checkout `amplify-database-engine-a
 | Routing/cache | Existing anonymous GET/HEAD handling in `proxy.ts`; no-store headers in `next.config.ts` |
 | Observed public origins | `https://amplifai.satoris.ai` and `https://amplifai-database-engine.vercel.app`; both exact files returned 200/no-store at the audit |
 
-The existing website owner has a receipt-consuming adapter with retained RC28 production evidence. Final acceptance must verify that the supplied implementation updates feed, acquisition, release-pinned tests and diagnostic allowlists together for the **actual signed public candidate bytes**. It must independently verify the signed feed/key/channel/CPU/newer build, official immutable assets, current highest published channel build and expected previous website feed. Deployment promotion needs a real expected-state/CAS or serialized equivalent to reject stale/concurrent packets, then both-origin feed/download readback and exact rollback custody. Native CI should receive only scoped dispatch/artifact authority for that interface, never general website deployment credentials. No new feed host or feed-only copying shortcut is part of this work.
+The existing website owner has a receipt-consuming adapter with retained RC29 production evidence. Final acceptance must verify that the supplied implementation updates feed, acquisition, release-pinned tests and diagnostic allowlists together for the **actual signed public candidate bytes**. It must independently verify the signed feed/key/channel/CPU/newer build, official immutable assets, current highest published channel build and expected previous website feed. Deployment promotion needs a real expected-state/CAS or serialized equivalent to reject stale/concurrent packets, then both-origin feed/download readback and exact rollback custody. Native CI should receive only scoped dispatch/artifact authority for that interface, never general website deployment credentials. No new feed host or feed-only copying shortcut is part of this work.
 
 
 ## Custody and enforcement handoff
 
-The existing local Keychain signing path was used for RC28. Reuse its reviewed protected-main commands and non-secret custody receipts; do not repeat credential provisioning. Hosted execution, if separately selected, retains the custody requirements in PROTECTED-MAC-RELEASE.md. Native build jobs remain free of product secrets, and source checkout code is never executed inside the signing step.
+The existing local Keychain signing path was used for RC28 and RC29. Reuse its reviewed protected-main commands and non-secret custody receipts; do not repeat credential provisioning. Hosted execution, if separately selected, retains the custody requirements in PROTECTED-MAC-RELEASE.md. Native build jobs remain free of product secrets, and source checkout code is never executed inside the signing step.
 
-Release readiness requires separate receipts for the exact source/build delivery, hosted signing/notarization, public package/source/feed bytes, website production promotion, installed app identity and Jeff's physical iPhone transfer plus explicit source review/Save. None implies the next. Existing deployment authority carries through these technical checks without another routine deployment permission request.
+Track separate receipts for exact source/build delivery, signing/notarization, public package/source/feed bytes, website production promotion, installed app identity and physical iPhone transfer plus explicit source review/Save. None implies the next. Physical testing was explicitly deferred until after publication; it is not a publication hold. Existing qualified-release authority carries through the technical checks without another routine deployment question.
 
 
 ### Phone run and recovery qualification profile
 
-Every newly approved source must include `"qualificationProfile": "phone-run-recovery-v1"` in its reviewed `approvedSources` row. This field is qualification policy, independent of consent disclosure versions. Adding the profile does not authorize a source or release: exact source approval, `releaseAuthorized`, protected reviews and all existing artifact/custody checks still apply.
+Every newly approved source must include `"qualificationProfile": "phone-run-recovery-v1"` in its reviewed `approvedSources` row. This field is qualification policy, independent of consent disclosure versions. Adding the profile does not authorize a source or release: exact source approval, `releaseAuthorized`, either-owner approval and all existing artifact/custody checks still apply.
 
 In addition to the existing checks, this profile executes:
 
-- `source/collector/macos/Tests/check_model.sh` → `collectorModel`.
+- `source/collector/macos/Tests/check_model.sh` → `collectorModel`, including the mandatory real30-second periodic-refresh integration. The producer supplies its pinned interpreter as `AMPLIFAI_TEST_PYTHON`; qualification never selects the developer quick-only mode.
 - `source/collector/macos/Tests/check_window_lifecycle.sh` → `windowLifecycle` (real hidden AppKit windows on the macOS runner, synthetic model; no customer app activation).
 - `source/collector/tests/test_bridge_run_timing.py` → `bridgeRunTiming`.
-- `source/collector/tests/test_bridge_recovery.py` → `bridgeRecovery`.
+- `source/collector/tests/test_bridge_recovery.py` and `test_bridge_refresh.py` → `bridgeRecovery`, including typed refresh, exact-page retry and terminal authority/expiry checks.
 
-All four files must exist as regular files inside the reviewed checkout; missing files, symlinks, failed commands and timeouts fail qualification. These results are emitted only after successful checks, as **schema 2**, the exact `qualificationProfile`, and the four additional strictly boolean `true` checks. The signer rejects schema-1 or incomplete results for a new source. The existing two RC28 tuples at `8f7ec4d3de4235ab5d36d5175c29121e3a26548a` alone retain their original schema-1 receipts and check path, allowing their immutable source to remain reproducible. A changed SHA, channel, version or build cannot use that exception.
+All five entry-point files must exist as regular files inside the reviewed checkout; missing files, symlinks, failed commands and timeouts fail qualification. These results are emitted only after successful checks, as **schema 2**, the exact `qualificationProfile`, and the four additional strictly boolean `true` checks. The signer rejects schema-1 or incomplete results for a new source. The existing two RC28 tuples at `8f7ec4d3de4235ab5d36d5175c29121e3a26548a` alone retain their original schema-1 receipts and check path, allowing their immutable source to remain reproducible. A changed SHA, channel, version or build cannot use that exception.
 
 The producer and receipt validator changes must be present in the final reviewed native source as well as protected main control. The native preview entry point must set this profile on its preview candidate; preview evidence still grants no release authority. This control change does not add or authorize a new source SHA.
 
-For PRs targeting `release/native` and pushes to that branch, the existing required `release-control-checks` job depends on `native-phone-run-checks` passing on `macos-15`. That job uses the existing pinned Python/uv runtime and hash-locked dependencies to execute these four checks through `release_control/check_phone_run.py`. A failure or cancellation cannot become a green required check. Main-only control PRs keep the existing Python control suite without executing native code. No credentials, environment grants, branch protections or reviewer requirements are changed.
+For PRs targeting `release/native` and pushes to that branch, the existing required `release-control-checks` job depends on `native-phone-run-checks` passing on `macos-15`. That job uses the existing pinned Python/uv runtime and hash-locked dependencies to execute these required checks through `release_control/check_phone_run.py`. A failure or cancellation cannot become a green required check. Main-only control PRs keep the existing Python control suite without executing native code. No credentials, environment grants, branch protections or reviewer requirements are changed.
