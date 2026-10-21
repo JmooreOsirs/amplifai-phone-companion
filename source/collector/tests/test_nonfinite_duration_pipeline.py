@@ -23,7 +23,7 @@ from unittest.mock import MagicMock, patch
 
 from amplifai_phone.__main__ import review_capture
 from amplifai_phone.agent import run_connect
-from amplifai_phone.bridge import selected_metadata
+from amplifai_phone.bridge import _selected_metadata, selected_metadata
 from amplifai_phone.ios_backup import DATABASES, IPhoneCapture, parse_selected_backup
 from amplifai_phone.workspace import SessionWorkspace, abandoned_sessions
 
@@ -208,8 +208,15 @@ class NonfiniteDurationPipelineTest(unittest.TestCase):
         bridge.code, bridge.port = "1234567890", 48751
         bridge.handoff_id, bridge.payload_sha256 = RUN_ID, "a" * 64
         bridge.handoff_state.return_value = "received"
-        with patch("amplifai_phone.agent.BridgeServer", return_value=bridge) as factory:
+
+        def reviewed_bridge(capture, ids):
+            _, bridge.call_accounting = _selected_metadata(capture, ids)
+            return bridge
+
+        with patch("amplifai_phone.agent.BridgeServer", side_effect=reviewed_bridge) as factory:
             self.assertEqual(run_connect(source, sink, synthetic_device), 0)
+        self.assertEqual(bridge.call_accounting["selectedRows"], 1)
+        self.assertEqual(bridge.call_accounting["selectedContactMismatchRows"], 3)
         events = [json.loads(line) for line in sink.getvalue().splitlines()]
         capture = next(event for event in events if event["kind"] == "capture")
         self.assertEqual(
