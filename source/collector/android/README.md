@@ -95,6 +95,72 @@ the build, a random short reference, fixed stage/category, elapsed seconds and
 zero-byte/status placeholders. It does not contain phone numbers, contact names,
 message content, account identity, pairing secrets or raw exception text.
 
+### Candidate contact-selection layout
+
+The current source candidate opens a dedicated selection view after Contacts
+becomes available. Search, page counts, Previous/Next and the applicable Review,
+Handoff or Cancel action stay fixed while the contact choices scroll. Existing
+native fonts, colors, buttons, checkboxes and side spacing remain in use. One
+weighted choices region receives the remaining measured height, including on
+short screens and with larger system text; a completed review replaces the
+Review action with Handoff instead of stacking both actions.
+
+**Sources & options** opens the full setup, optional source controls, progress,
+review details and privacy/help content. **Contact selection options** contains
+the existing all-page selection and Clear actions. **Return to contact
+selection** restores the choices. Review and errors open their full text in the
+details view. Source consent, available-zero versus unavailable coverage,
+selection invalidation, bound saved receipts and temporary-store cleanup are
+unchanged. This layout is a local candidate; it is not part of published rc10
+and does not enable a new setup or automatic account-save contract.
+
+Compile the candidate's synthetic Activity fixtures without running a device:
+
+```sh
+JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' \
+ANDROID_HOME='/Users/jeffmoore/Library/Android/sdk' \
+./gradlew --offline --no-daemon --no-configuration-cache \
+  :app:testWebsiteDebugUnitTest :app:testPlayDebugUnitTest \
+  :app:lintWebsiteRelease :app:lintPlayRelease \
+  :app:compileWebsiteDebugAndroidTestJavaWithJavac
+```
+
+The runtime operator must install the matching candidate debug/test APKs on a
+disposable, WAN-isolated emulator and configure each viewport before invoking
+the existing instrumentation runner. Keep loopback available. The fixtures
+reject physical phones and mismatched actual Activity width or font scale;
+they never change device settings. Use `selection_layout_360` at 360dp/100%,
+`selection_layout_320_large` at 320dp/150%, and `selection_layout_768` at
+768dp/100%. For each configured scenario:
+
+```sh
+adb -s "$ANDROID_TEST_SERIAL" shell am instrument -w \
+  -e scenario "$SELECTION_SCENARIO" \
+  -e fixture_scope disposable-emulator -e network_isolated true \
+  -e capture_screenshots true \
+  ai.satoris.amplifai.phone.test/ai.satoris.amplifai.phone.LocalBridgeInstrumentedTest
+```
+
+Only 305 synthetic contacts and an available-empty call source are staged in
+the private review store; no phone provider, handoff or account Save is used.
+The fixtures measure actual window bounds and insets, require at least two
+contact rows and 96dp of usable choices, compare fixed-control coordinates
+before/after scrolling, and check native style values, paging/search, full
+review/error text, review invalidation, all-page selection, Clear and bulk
+Cancel. The result reports actual height, width and geometry; requested
+emulator dimensions are not evidence of the rendered viewport. Matched-view
+screenshots, these runtime checks and physical-device acceptance remain
+separate from local compilation and unit/lint results.
+
+The optional `capture_screenshots` flag writes four PNGs (`populated`,
+`scrolled`, `review`, `error-details`) after settled frames and a `receipt.json`
+with relative filenames beneath the target app's external-files directory,
+`instrumentation-selection-layout/<scenario>/`. The names are bounded and
+reused for that scenario. UiAutomation or file-access failures are reported as
+unavailable screenshots; they do not replace the geometry assertions. This
+fixture does not stage a pending receipt or confirmed saved state. The runtime
+operator should retain only artifacts named by the successful run's receipt.
+
 ## Permission and coverage boundaries
 
 - `READ_SMS` and `READ_CALL_LOG` are hard-restricted permissions: an installer allowlist and an actual runtime grant are separate conditions. The official installer API defaults to allowlisting requested restricted permissions, but an OEM installer can apply different restrictions. A normal sideload can work; installation alone does not prove source access. [Permission reference](https://developer.android.com/reference/android/Manifest.permission#READ_SMS), [installer API](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setWhitelistedRestrictedPermissions(java.util.Set%3Cjava.lang.String%3E)).

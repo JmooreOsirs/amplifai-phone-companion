@@ -55,6 +55,11 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
+            if (testArguments.getString("scenario", "").startsWith("selection_layout_")) {
+                result.putString("result", SelectionLayoutCases.run(this, testArguments));
+                finish(0, result);
+                return;
+            }
             if (testArguments.getString("scenario", "").startsWith("t12_")) {
                 result.putString("result", OptionalNotificationCases.run(this, testArguments));
                 finish(0, result);
