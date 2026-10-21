@@ -1,14 +1,14 @@
-name: Windows rc19 source diagnostic qualification
+name: Windows source and package qualification
 
 on:
   workflow_dispatch:
     inputs:
       phase:
-        description: Fixed rc19 qualification phase
+        description: Windows qualification phase
         required: true
         default: build
         type: choice
-        options: [build, handoff]
+        options: [build, handoff, parity-ui]
 
 permissions:
   contents: read
@@ -18,6 +18,65 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  parity_ui:
+    if: inputs.phase == 'parity-ui'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: source/collector;source/collector/tests;source/collector/windows;source/collector/windows/tests;source/script
+    steps:
+      - name: Preserve exact committed source bytes on Windows
+        shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify fixed lock bytes before environment setup
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash source/collector/windows-requirements.lock -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne 'aa8ee933827681ebda483c2a889dc6156f7d9de906fe21d90f055fd06939c95d') { throw 'Windows checkout changed the exact locked dependency bytes' }
+          "WINDOWS_LOCK_SHA256=$hash"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+          cache: ''
+      - name: Assert accepted exact Windows Python runtime
+        shell: pwsh
+        run: |
+          python -c "import platform,sys; assert platform.python_implementation() == 'CPython' and sys.version_info[:3] == (3,12,10); print(platform.python_version())"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install exact locked Windows runtime
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify platform state and contact workspace guards
+        shell: pwsh
+        run: |
+          python -m unittest test_contact_workspace test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Render synthetic native workspace and recovery states
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiParityRender'
+          foreach ($fixture in @('contact_workspace', 'ack_recovery', 'source_diagnostic_acceptance', 'update_acceptance', 'video_parity')) {
+            python "source/collector/windows/tests/render_$fixture.py" --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output $fixture)
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Retain measured Windows UI evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-parity-ui-qualification
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/AmplifaiParityTests.log
+            ${{ runner.temp }}/AmplifaiParityRender/**/*.png
+            ${{ runner.temp }}/AmplifaiParityRender/**/*.json
+
   windows:
     if: inputs.phase == 'build'
     runs-on: windows-2025
