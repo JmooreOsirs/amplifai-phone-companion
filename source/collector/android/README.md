@@ -112,16 +112,27 @@ navigation container retains its system inset, and the same secondary controls
 return when the keyboard is dismissed. Fonts, control sizes and keyboard state
 are unchanged.
 
-API30+ uses `WindowInsets.isVisible(Type.ime())`. API26–29 compares the original
-root window's system bottom inset with its stable bottom inset, avoiding
-child-inset consumption. This follows the pre-30 resize case in
+API30+ uses `WindowInsets.isVisible(Type.ime())`. The candidate API26–29 path
+compares the original root window's system bottom inset with its stable bottom
+inset inside the child view's inset listener. The comparison follows the pre-30 resize case in
 [AndroidX's implementation](https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/core/core/src/main/java/androidx/core/view/WindowInsetsCompat.java).
-The fallback assumes resize mode: this Activity has shown native ScrollViews
+It assumes resize mode: this Activity has shown native ScrollViews
 and no soft-input-mode override, for which
 [AOSP selects resize](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/oreo-release/core/java/android/view/ViewRootImpl.java).
-It adds no keyboard-height threshold or dependency. This is source-level
-compatibility only; API26–29 execution, floating keyboards, pan mode and OEM
-behavior remain unqualified.
+It adds no keyboard-height threshold or dependency. API29 runtime comparison
+found 77dp of usable choices in both old and candidate apps, with navigation
+and paging still visible. That usability pass does not qualify the detector.
+
+The legacy path also depends on child inset dispatch. Android 10's
+[standard window layout](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android10-release/core/res/res/layout/screen_simple.xml)
+has a `fitsSystemWindows` ancestor;
+[View](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android10-release/core/java/android/view/View.java)
+consumes those system insets, and the legacy
+[ViewGroup dispatch](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android10-release/core/java/android/view/ViewGroup.java)
+can stop at consumed insets. This is a source-supported explanation to verify
+against the runtime root values and ancestor diagnostics. Effective legacy
+compact-mode activation, floating keyboards, pan mode and OEM behavior remain
+unqualified.
 
 **Sources & options** opens the full setup, optional source controls, progress,
 review details and privacy/help content. **Contact selection options** contains
@@ -199,7 +210,9 @@ rectangles. Search and the applicable Review, Handoff or bulk Cancel action
 must remain fully visible above the keyboard. The IME-specific list gate is at
 least one complete contact row and 48dp of usable choices. The existing
 two-row/96dp minimum applies before showing the keyboard and after dismissal;
-the original no-IME scenarios retain that gate throughout selection.
+the original no-IME scenarios retain that gate throughout selection. While the
+IME is visible, navigation and paging must actually be `GONE`; checking their
+controls prevents a usable but uncompacted viewport from passing this gate.
 
 IME fixtures type a synthetic search through input events, delete the query,
 dismiss with Back and verify that selected IDs are unchanged. They also check
@@ -236,6 +249,12 @@ showed a docked keyboard. The API supplies screen coordinates; the fixture
 uses [Rect.intersect](https://developer.android.com/reference/android/graphics/Rect#intersect(android.graphics.Rect))
 to measure the visible overlap without an assumed overscan or padding value.
 API30+ fixtures retain their native inset/WindowMetrics observation path.
+Legacy receipts also record current root system/stable top/bottom insets,
+soft-input mode and a bounded ancestor chain with `fitsSystemWindows`, bounds
+and padding before the IME, during each checked state and after dismissal.
+These are diagnostics only; the pass oracle remains independent accessibility
+window geometry plus actual control visibility. No listener is replaced or
+added by these diagnostics.
 
 The API29 scenario avoids API30 WindowMetrics/inset-type methods and uses
 independent HashSet snapshots instead of API31 `Set.copyOf`. Production source

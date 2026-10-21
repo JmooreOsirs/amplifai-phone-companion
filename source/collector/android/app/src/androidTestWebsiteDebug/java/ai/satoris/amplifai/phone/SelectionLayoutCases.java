@@ -303,6 +303,7 @@ final class SelectionLayoutCases {
         main(() -> {
             require(!imeVisible(), "Begin the IME fixture with the keyboard dismissed");
             requireChoicesWithoutIme();
+            if (legacyIme) recordLegacyWindowState("legacyBeforeIme");
         });
         @SuppressWarnings("unchecked") Set<Long> selected = get("selectedIds", Set.class);
         Set<Long> expected = new HashSet<>(selected);
@@ -357,7 +358,7 @@ final class SelectionLayoutCases {
                     "Cancel with the keyboard visible changed the prior selection");
         });
         dismissKeyboard(expected);
-        evidence.put("checks", "installed docked IME; actual insets and bounds; search/Review/Handoff/Cancel access; typed search/delete; dismissal preserves selection and restores navigation/paging; Review tapped with IME open; full review reachable by keyboard focus; no-IME minimum retained");
+        evidence.put("checks", "installed docked IME; actual insets and bounds; compact navigation/paging; search/Review/Handoff/Cancel access; typed search/delete; dismissal preserves selection and restores navigation/paging; Review tapped with IME open; full review reachable by keyboard focus; no-IME minimum retained");
     }
 
     private boolean imeVisible() {
@@ -392,7 +393,10 @@ final class SelectionLayoutCases {
 
     private void dismissKeyboard(Set<Long> expected) throws Exception {
         dismissKeyboardPreservingSelection(expected);
-        main(this::requireChoicesWithoutIme);
+        main(() -> {
+            requireChoicesWithoutIme();
+            if (legacyIme) recordLegacyWindowState("legacyAfterDismissal");
+        });
     }
 
     private void dismissKeyboardPreservingSelection(Set<Long> expected) throws Exception {
@@ -458,6 +462,12 @@ final class SelectionLayoutCases {
         require(usable.contains(bounds(search)) && usable.contains(bounds(action)), "Search or action overlaps the actual IME/system bounds: " + identity);
         require(choicesVisible.height() >= minimum && wholeRowVisible,
                 "IME leaves fewer than one full contact row or 48dp of usable choices: " + identity);
+        View pages = get("selectionPages", View.class);
+        JSONObject navigationState = recordControl(identity + "Navigation", navigation, null);
+        JSONObject pagingState = recordControl(identity + "Paging", pages, null);
+        require(navigation.getVisibility() == View.GONE && !navigation.isShown() &&
+                        pages.getVisibility() == View.GONE && !pages.isShown(),
+                "IME compact controls were not applied: " + navigationState + "; " + pagingState);
     }
 
     private void enableLegacyWindows() throws Exception {
@@ -520,6 +530,7 @@ final class SelectionLayoutCases {
     }
 
     private void requireLegacyImeControls(String identity, Button action) {
+        recordLegacyWindowState(identity + "LegacyWindow");
         LegacyWindows observed = readLegacyWindows();
         Rect window = new Rect(); root.getWindowVisibleDisplayFrame(window);
         Point size = new Point(); activity.getWindowManager().getDefaultDisplay().getRealSize(size);
@@ -544,6 +555,29 @@ final class SelectionLayoutCases {
                 visibleIme.left == screen.left && visibleIme.right == screen.right &&
                 visibleIme.bottom == screen.bottom && visibleIme.bottom >= window.bottom;
         requireImeChoices(identity, action, usable, measurement, docked);
+    }
+
+    private void recordLegacyWindowState(String identity) {
+        WindowInsets insets = root.getRootWindowInsets();
+        JSONArray ancestors = new JSONArray();
+        View view = (View) header.getParent();
+        try {
+            for (int depth = 0; view != null && depth < 8; depth++) {
+                ancestors.put(new JSONObject().put("type", view.getClass().getName())
+                        .put("fitsSystemWindows", view.getFitsSystemWindows())
+                        .put("bounds", bounds(view).toShortString())
+                        .put("paddingTop", view.getPaddingTop()).put("paddingBottom", view.getPaddingBottom()));
+                view = view.getParent() instanceof View parent ? parent : null;
+            }
+            require(view == null, "Unexpected Activity ancestor depth in legacy fixture");
+            JSONObject state = new JSONObject().put("ancestors", ancestors)
+                    .put("softInputMode", activity.getWindow().getAttributes().softInputMode)
+                    .put("rootInsetsAvailable", insets != null);
+            if (insets != null) state.put("systemTop", insets.getSystemWindowInsetTop())
+                    .put("systemBottom", insets.getSystemWindowInsetBottom())
+                    .put("stableTop", insets.getStableInsetTop()).put("stableBottom", insets.getStableInsetBottom());
+            evidence.put(identity, state);
+        } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
     }
 
     private void recordFailure(Throwable failure) {
@@ -663,7 +697,7 @@ final class SelectionLayoutCases {
             JSONObject state = new JSONObject().put("identity", identity).put("type", view.getClass().getSimpleName())
                     .put("bounds", bounds(view).toShortString()).put("visible", visible.toShortString())
                     .put("hasVisibleRect", hasVisibleRect).put("window", window.toShortString())
-                    .put("shown", view.isShown()).put("enabled", view.isEnabled())
+                    .put("visibility", view.getVisibility()).put("shown", view.isShown()).put("enabled", view.isEnabled())
                     .put("inTouchMode", view.isInTouchMode()).put("focusable", view.isFocusable())
                     .put("focusableInTouchMode", view.isFocusableInTouchMode()).put("focused", view.isFocused())
                     .put("layoutRequested", view.isLayoutRequested()).put("windowFocused", view.hasWindowFocus())
