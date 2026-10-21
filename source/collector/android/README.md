@@ -105,6 +105,14 @@ weighted choices region receives the remaining measured height, including on
 short screens and with larger system text; a completed review replaces the
 Review action with Handoff instead of stacking both actions.
 
+On API30+, actual IME visibility temporarily collapses the existing Sources &
+options button and Previous/Next row. Search, the selected/page count, contact
+choices and the applicable action remain available above the keyboard. The
+navigation container retains its system inset, and the same secondary controls
+return when the keyboard is dismissed. Fonts, control sizes and keyboard state
+are unchanged. Earlier Android versions retain the existing selection layout;
+their keyboard behavior still requires separate qualification.
+
 **Sources & options** opens the full setup, optional source controls, progress,
 review details and privacy/help content. **Contact selection options** contains
 the existing all-page selection and Clear actions. **Return to contact
@@ -185,12 +193,15 @@ the original no-IME scenarios retain that gate throughout selection.
 
 IME fixtures type a synthetic search through input events, delete the query,
 dismiss with Back and verify that selected IDs are unchanged. They also check
-the actual local review, return to selection with its Handoff action, and
+that navigation/paging restore, reopen the keyboard and tap Review while it is
+visible. The resulting review geometry and remaining IME visibility are
+recorded; if the keyboard remains, a normal Back dismissal precedes the full
+review reachability check. They return to selection with its Handoff action and
 exercise synthetic bulk Cancel while the keyboard remains visible. They never
 activate Handoff or read a phone provider. Capture names include `ime-review`,
 `ime-filtered`, `ime-dismissed`, `ime-handoff`, `ime-cancel`, `review` and
-`review-accessible`, plus `failure` when needed. Both scenario families retain
-the original review geometry/image after asynchronous text growth, report
+`review-accessible`, `review-from-ime`, plus `failure` when needed. Both scenario
+families retain the original review geometry/image after asynchronous text growth, report
 `reviewInitiallyFullyVisible`, then use native keyboard focus and require the
 full untruncated review text to be reachable. A partially visible initial
 review is recorded as such, even when the later reachability check passes.

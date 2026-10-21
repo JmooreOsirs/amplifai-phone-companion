@@ -24,6 +24,7 @@ import android.database.sqlite.SQLiteFullException;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -85,11 +86,13 @@ public final class MainActivity extends Activity {
     private LinearLayout choices;
     private LinearLayout selectionPanel;
     private LinearLayout selectionHeader;
+    private LinearLayout selectionPages;
     private LinearLayout actionBar;
     private ScrollView detailsScroll;
     private ScrollView contactScroll;
     private Button selectionNavigation;
     private boolean selectionVisible;
+    private boolean keyboardVisible;
     private EditText search;
     private EditText country;
     private Button cancel;
@@ -188,6 +191,8 @@ public final class MainActivity extends Activity {
             navigation.setPadding(dp(22), dp(8) + Math.max(0, insets.getSystemWindowInsetTop()), dp(22), 0);
             actionBar.setPadding(dp(22), dp(8), dp(22), dp(16) +
                     Math.max(0, insets.getSystemWindowInsetBottom()));
+            keyboardVisible = Build.VERSION.SDK_INT >= 30 && insets.isVisible(WindowInsets.Type.ime());
+            updateSelectionControls();
             return insets;
         });
         setContentView(screen);
@@ -281,17 +286,17 @@ public final class MainActivity extends Activity {
         pageIndicator = text("", 12, MUTED);
         pageIndicator.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         selectionHeader.addView(pageIndicator);
-        LinearLayout pages = new LinearLayout(this);
-        pages.setOrientation(LinearLayout.HORIZONTAL);
-        selectionHeader.addView(pages);
-        previousPage = button("Previous", pages);
+        selectionPages = new LinearLayout(this);
+        selectionPages.setOrientation(LinearLayout.HORIZONTAL);
+        selectionHeader.addView(selectionPages);
+        previousPage = button("Previous", selectionPages);
         previousPage.setContentDescription("Previous contacts");
         LinearLayout.LayoutParams previousParams = new LinearLayout.LayoutParams(0, -2, 1);
         previousParams.topMargin = dp(8);
         previousParams.rightMargin = dp(4);
         previousPage.setLayoutParams(previousParams);
         previousPage.setOnClickListener(view -> { pageOffset = Math.max(0, pageOffset - 100); renderChoices(); });
-        nextPage = button("Next", pages);
+        nextPage = button("Next", selectionPages);
         nextPage.setContentDescription("Next contacts");
         LinearLayout.LayoutParams nextParams = new LinearLayout.LayoutParams(0, -2, 1);
         nextParams.topMargin = dp(8);
@@ -419,6 +424,15 @@ public final class MainActivity extends Activity {
                 ? "Sources, contact selection options, progress and privacy help" : "Return to contact selection");
         selectionPanel.setVisibility(selectionVisible ? View.VISIBLE : View.GONE);
         detailsScroll.setVisibility(selectionVisible ? View.GONE : View.VISIBLE);
+        updateSelectionControls();
+    }
+
+    private void updateSelectionControls() {
+        // Keep Search, the count and actions usable above the IME; restore secondary controls on dismissal.
+        // The navigation container retains its status-bar inset even when its button is hidden.
+        boolean compact = selectionVisible && keyboardVisible;
+        selectionNavigation.setVisibility(compact ? View.GONE : View.VISIBLE);
+        if (selectionPages != null) selectionPages.setVisibility(compact ? View.GONE : View.VISIBLE);
     }
 
     private void openAccount() {

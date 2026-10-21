@@ -259,9 +259,7 @@ final class SelectionLayoutCases {
     }
 
     private void verifyFullReviewReachable() throws Exception {
-        TextView text = get("review", TextView.class);
-        awaitLayout(() -> text.getLayout() != null && !text.isLayoutRequested() && !detailsScroll.isLayoutRequested(),
-                "Final reviewed text did not finish layout");
+        TextView text = awaitReviewLayout();
         AtomicBoolean initiallyVisible = new AtomicBoolean();
         main(() -> {
             recordControl("reviewAfterAsyncText", text, null);
@@ -275,6 +273,13 @@ final class SelectionLayoutCases {
         focusWithKeyboard("fullReview", text);
         main(() -> requireFullyVisible("reviewAfterKeyboard", text));
         capture("review-accessible");
+    }
+
+    private TextView awaitReviewLayout() throws Exception {
+        TextView text = get("review", TextView.class);
+        awaitLayout(() -> text.getLayout() != null && !text.isLayoutRequested() && !detailsScroll.isLayoutRequested(),
+                "Final reviewed text did not finish layout");
+        return text;
     }
 
     private String verifyIme() throws Exception {
@@ -302,8 +307,22 @@ final class SelectionLayoutCases {
         awaitLayout(() -> search.length() == 0 && choices.getChildCount() == 100, "Keyboard deletion did not restore the contact page");
         dismissKeyboard(expected);
         capture("ime-dismissed");
-        tap("reviewAfterIme", review);
-        awaitLayout(() -> get("reviewed", Boolean.class), "Local review did not finish after keyboard dismissal");
+        showKeyboard();
+        tap("reviewWithIme", review);
+        awaitLayout(() -> get("reviewed", Boolean.class), "Local review did not finish after Review was tapped with the keyboard open");
+        TextView reviewText = awaitReviewLayout();
+        main(() -> {
+            Rect visible = new Rect(), window = new Rect();
+            root.getWindowVisibleDisplayFrame(window);
+            recordControl("reviewFromIme", reviewText, null);
+            require(detailsScroll.isShown() && reviewText.getGlobalVisibleRect(visible) && visible.intersect(window),
+                    "Review tapped above the keyboard did not expose its review text");
+        });
+        AtomicBoolean reviewImeVisible = new AtomicBoolean();
+        main(() -> reviewImeVisible.set(imeVisible()));
+        evidence.put("reviewFromImeKeyboardVisible", reviewImeVisible.get());
+        capture("review-from-ime");
+        if (reviewImeVisible.get()) dismissKeyboardPreservingSelection(expected);
         verifyFullReviewReachable();
         tap("returnToSelection", navigation);
         showKeyboard();
@@ -323,7 +342,7 @@ final class SelectionLayoutCases {
                     "Cancel with the keyboard visible changed the prior selection");
         });
         dismissKeyboard(expected);
-        evidence.put("checks", "installed docked IME; actual insets and bounds; search/Review/Handoff/Cancel access; typed search/delete; dismissal preserves selection; full review reachable by keyboard focus; no-IME minimum retained");
+        evidence.put("checks", "installed docked IME; actual insets and bounds; search/Review/Handoff/Cancel access; typed search/delete; dismissal preserves selection and restores navigation/paging; Review tapped with IME open; full review reachable by keyboard focus; no-IME minimum retained");
         return writeReceipt("passed");
     }
 
@@ -354,6 +373,11 @@ final class SelectionLayoutCases {
     }
 
     private void dismissKeyboard(Set<Long> expected) throws Exception {
+        dismissKeyboardPreservingSelection(expected);
+        main(this::requireChoicesWithoutIme);
+    }
+
+    private void dismissKeyboardPreservingSelection(Set<Long> expected) throws Exception {
         main(() -> require(imeVisible(), "Keyboard was no longer visible before dismissal"));
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);
         awaitLayout(() -> !imeVisible(), "Back did not dismiss the installed keyboard");
@@ -362,11 +386,13 @@ final class SelectionLayoutCases {
         main(() -> {
             require(!activity.isFinishing() && expected.equals(get("selectedIds", Set.class)),
                     "Keyboard dismissal left the Activity or changed selected contacts");
-            requireChoicesWithoutIme();
         });
     }
 
     private void requireChoicesWithoutIme() {
+        requireFullyVisible("restoredNavigation", navigation);
+        requireFullyVisible("restoredPrevious", get("previousPage", Button.class));
+        requireFullyVisible("restoredNext", get("nextPage", Button.class));
         require(contactScroll.getHeight() >= Math.max(Math.round(96 * density), choices.getChildAt(0).getHeight() * 2),
                 "The no-IME viewport lost its two-row/96dp minimum");
     }
@@ -396,6 +422,7 @@ final class SelectionLayoutCases {
         } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
         require(ime.bottom > 0, "A docked installed keyboard is required to measure its actual occlusion");
         requireFullyVisible(identity + "Search", search);
+        requireFullyVisible(identity + "Count", get("pageIndicator", TextView.class));
         requireFullyVisible(identity + "Action", action);
         require(search.isFocused() && action.isEnabled(), "IME input or applicable action is unavailable: " + identity);
         require(usable.contains(bounds(search)) && usable.contains(bounds(action)), "Search or action overlaps the actual IME/system bounds: " + identity);
