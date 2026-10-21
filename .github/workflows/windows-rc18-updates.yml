@@ -52,28 +52,37 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Measure normal opening against the actual desktop work area
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiParityRender\normal-open'
+          python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output --normal-open-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify platform state and contact workspace guards
         if: inputs.phase == 'parity-ui'
         shell: pwsh
         run: |
-          python -m unittest test_contact_workspace test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
+          python -m unittest test_startup_geometry test_visible_desktop test_contact_workspace test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Render synthetic native workspace and recovery states
         if: inputs.phase == 'parity-ui'
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiParityRender'
-          foreach ($fixture in @('contact_workspace', 'ack_recovery', 'source_diagnostic_acceptance', 'update_acceptance', 'video_parity')) {
-            python "source/collector/windows/tests/render_$fixture.py" --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output $fixture)
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $desktopMode = Join-Path $output 'desktop-mode.json'
+          try {
+            python source/collector/windows/tests/visible_desktop.py --prepare $desktopMode
+            if ($LASTEXITCODE -ne 0) { throw 'Visible desktop preparation failed' }
+            foreach ($fixture in @('contact_workspace', 'ack_recovery', 'source_diagnostic_acceptance', 'update_acceptance', 'video_parity')) {
+              python "source/collector/windows/tests/render_$fixture.py" --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output $fixture)
+              if ($LASTEXITCODE -ne 0) { throw "Visible Windows fixture failed: $fixture" }
+            }
+          } finally {
+            if (Test-Path $desktopMode) {
+              python source/collector/windows/tests/visible_desktop.py --restore $desktopMode
+              if ($LASTEXITCODE -ne 0) { throw 'Original desktop mode restoration failed' }
+            }
           }
-      - name: Measure normal opening against the actual desktop work area
-        if: inputs.phase == 'parity-normal-open'
-        shell: pwsh
-        run: |
-          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiParityRender\normal-open'
-          python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output --normal-open-only
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain measured Windows UI evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
