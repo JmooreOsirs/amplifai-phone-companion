@@ -11,18 +11,18 @@ This path signs an already qualified AMPLIFai Phone native build with the existi
 
 ## Current candidate and command inputs
 
-RC28 was signed locally, published and promoted on October 17 with control `067b2bc687e3af81d033923608679578814c535b`; see the [historical delivery receipt](RELEASE-DELIVERY-CONTRACT.md#historical-rc28-deliveries-and-publication). Those artifact IDs must not be reused as RC29 inputs.
+RC28 was signed locally, published and promoted on October 17 with control `067b2bc687e3af81d033923608679578814c535b`; see the [historical delivery receipt](RELEASE-DELIVERY-CONTRACT.md#historical-rc28-deliveries-and-publication). Those artifact IDs must not be reused as RC34 inputs.
 
-RC29 native PR #12 merged normally by `JmooreOsirs` at `2026-10-19T19:04:36Z`, preserving head `45777eb7fa1ff965815cca6de6d042fb0895a679` in final native source `71dfabe3c3002e7a7787c649607607adafd29558`. The live merge actor and latest exact-head App15368 CI passed runtime validation. RC29 has no release-mode build, signed package or publication receipt yet. Its identities are ARM `2026.10.19-rc29` / `26101929` and Intel `2026.10.19-rc29-intel1` / `261019291`; current policy pins the final source and RC28 previous-feed floors.
+RC34 native [PR #23](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/23) merged normally by `JmooreOsirs` at `2026-10-21T20:01:23Z`, preserving candidate `12cedc1f0ed7a7ff70612dec6bc5727ddad16ec4` in final native source `8b4474bb42e6c15aeb59136f807bc37d8f09ff33`. Required exact-head CI run `39666011657` passed. The release identities are ARM `2026.10.21-rc34` / `26102134` and Intel Test `2026.10.21-rc34-intel1` / `261021341`. Current policy pins that final source and the verified public RC33 build/feed floors. RC34 release-mode artifacts, signing and publication are still pending.
 
 | Channel | Version | Build |
 | --- | --- | --- |
-| `macos-arm64` | `2026.10.19-rc29` | `26101929` |
-| `macos-intel-test` | `2026.10.19-rc29-intel1` | `261019291` |
+| `macos-arm64` | `2026.10.21-rc34` | `26102134` |
+| `macos-intel-test` | `2026.10.21-rc34-intel1` | `261021341` |
 
 After normal source/control merges, take the **final native merge SHA** from `approvedSources` and each channel's successful release-mode run, immutable artifact ID and complete artifact ZIP SHA-256 from its qualification receipt. The PR head above is a candidate identifier, not the final release authorization. The CLI validates the artifact's three-member layout, qualification profile/checks, both payload digests, architecture/deployment audit and exact pre-sign source hash.
 
-The following is a command template. Set every nonsecret input from those verified receipts and use fresh, distinct absolute paths; no RC29 run/artifact identifiers are available yet. From the clean control checkout:
+The following is a command template. Set every nonsecret input from those verified receipts and use fresh, distinct absolute paths; no RC34 run/artifact identifiers are available yet. From the clean control checkout:
 
 ```sh
 : "${SOURCE_COMMIT:?Set the authorized final native merge SHA}"

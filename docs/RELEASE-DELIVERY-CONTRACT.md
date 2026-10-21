@@ -1,8 +1,16 @@
 # Native delivery and website promotion contracts
 
-## RC33 source qualification refresh — October 21
+## RC34 native setup and review flow — October 21
 
-The current policy authorizes native source `f9181b8509af81688dd457e8f93ddf3ee3d63b38` for ARM `2026.10.21-rc33` / `26102133` and Intel Test `2026.10.21-rc33-intel1` / `261021331`. It includes the reviewed diagnostic-retention corrections and an updated parser/bridge test fixture. Larger encrypted Messages remain unavailable; the 4,096-byte manifest/copy discrepancy and real producer Digest semantics are unresolved. No truncation or acceptance relaxation is authorized.
+RC34 native [PR #23](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/23) merged normally by `JmooreOsirs` at `2026-10-21T20:01:23Z`, preserving candidate `12cedc1f0ed7a7ff70612dec6bc5727ddad16ec4` in final native source `8b4474bb42e6c15aeb59136f807bc37d8f09ff33`. Required exact-head CI run `39666011657` passed. The release identities are ARM `2026.10.21-rc34` / `26102134` and Intel Test `2026.10.21-rc34-intel1` / `261021341`. Current policy pins that final source and the verified public RC33 build/feed floors. RC34 release-mode artifacts, signing and publication are still pending.
+
+This source adds verified native setup with explicit disclosure consent, exact-request recovery, the additive loopback capability endpoint, original-browser return and fixed contact review controls. The release producer invokes `check_flow.sh`, including `check_setup.sh`, alongside the existing model, window, bridge, frozen helper, source offer and architecture checks. Local synthetic consent/flow, full model, updater, loopback and matched-style consent UI gates passed before the source merge. No installed app or physical iPhone acceptance is claimed.
+
+Use a stable merged control SHA for both signing and publication. Publication remains coordinated in this order: compatible dormant server, qualified signed public native packages and feed promotion, then the exact-build/live-capability allowlist. The website owner controls server/allowlist changes. Prior RC33 public packages and exact feed bytes remain the rollback authority.
+
+## Historical RC33 source qualification refresh — October 21
+
+The RC33 policy authorized native source `f9181b8509af81688dd457e8f93ddf3ee3d63b38` for ARM `2026.10.21-rc33` / `26102133` and Intel Test `2026.10.21-rc33-intel1` / `261021331`. It includes the reviewed diagnostic-retention corrections and an updated parser/bridge test fixture. Larger encrypted Messages remain unavailable; the 4,096-byte manifest/copy discrepancy and real producer Digest semantics are unresolved. No truncation or acceptance relaxation is authorized.
 
 The shared Phone qualification gate now also requires `test_call_accounting`, `test_source_diagnostic_flow` and `test_nonfinite_duration_pipeline`. Normal exact-source/source-offer/CPU/frozen-helper and signing/publication custody still apply. Earlier RC33 ARM evidence at source `c718907aaeac5609954170eb27da2527acc10f3f` is superseded, unsigned and unpublished; both architectures must qualify this refreshed source. Receiver compatibility is already verified live; website admission/feed promotion requires final authenticated public native metadata. Physical device/account acceptance remains separate. Historical candidate sections below remain tied to their named sources.
 
