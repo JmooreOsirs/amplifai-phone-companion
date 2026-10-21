@@ -17,7 +17,7 @@ import release
 MAX_SOURCE = 4 * 1024**3
 APPEND_PATHS = ["release-evidence/final-signed-app-inventory.json", "release-evidence/source-finalization.json"]
 PHONE_RUN_MODULES = ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh",
-                     "test_call_accounting", "test_source_diagnostic_flow")
+                     "test_call_accounting", "test_source_diagnostic_flow", "test_nonfinite_duration_pipeline")
 PHONE_RUN_SCRIPTS = ("check_model.sh", "check_window_lifecycle.sh")
 
 
