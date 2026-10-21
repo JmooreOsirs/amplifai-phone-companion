@@ -88,7 +88,7 @@ jobs:
           try {
             python source/collector/windows/tests/visible_desktop.py --prepare $desktopMode
             if ($LASTEXITCODE -ne 0) { throw 'Visible desktop preparation failed' }
-            python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output --native-setup
+            python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output 'render') --native-setup
             if ($LASTEXITCODE -ne 0) { throw 'Native setup UI qualification failed' }
           } finally {
             if (Test-Path $desktopMode) {
