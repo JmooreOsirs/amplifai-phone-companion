@@ -5,6 +5,7 @@ import SwiftUI
 @main @MainActor
 struct RenderMacReviewAcceptance {
     private enum FixtureError: Error { case unexpectedState(String) }
+    private static var scrollEvidence: [String: [String: Any]] = [:]
 
     static func main() throws {
         let output = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -16,7 +17,7 @@ struct RenderMacReviewAcceptance {
         let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
         let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
         let setupStates = ["setup"] + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
-        let allStates = ["main", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
+        let allStates = ["main", "organizing", "history", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
         guard !states.isEmpty, states.allSatisfy({ allStates.contains($0) }) else { throw CocoaError(.validationMissingMandatoryProperty) }
@@ -229,6 +230,16 @@ struct RenderMacReviewAcceptance {
             else if state == "processing" { model.phase = .processing }
             else if state == "completing" { model.phase = .completing }
             else if state == "cancelling" { model.phase = .cancelling }
+            if state == "history" {
+                let record: [String: Any] = ["source": "messages", "component": "database", "reason": "selected_payload_length",
+                    "result": "length_mismatch", "declaredBytes": 8192, "rawBytes": 4112, "copiedBytes": 4096,
+                    "encrypted": true, "entryKeyPresent": true, "validationCode": "sidecar_present",
+                    "validationScope": "encrypted_messages_database_v1", "producerDigest": "matched", "copyDigest": "matched", "sidecars": "present"]
+                let attempt: [String: Any] = ["attemptId": "12345678-1234-4123-8123-123456789abc",
+                                            "createdAt": 1_800_000_000, "sourceDiagnostics": [record]]
+                model.receive(try AgentEvent.decode(JSONSerialization.data(withJSONObject:
+                    ["kind": "residue", "sessions": [], "sourceDiagnosticHistory": [attempt]])))
+            }
             guard model.accountNavigationID == nil, !model.helperRunning,
                   model.operationID == nil || ["connecting", "agree-checking", "active-transfer"].contains(state) || !setupStates.contains(state) else {
                 throw FixtureError.unexpectedState("Fixture must not request account navigation or start the helper")
@@ -252,7 +263,7 @@ struct RenderMacReviewAcceptance {
                     }.background(Brand.background).tint(Brand.lime), width: width, height: height,
                                path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 } else {
-                    try render(ContentView(model: model, updater: updater), width: width, height: height,
+                    try render(ContentView(model: model, updater: updater, showingGroupTools: state == "organizing"), width: width, height: height,
                                path: output.appendingPathComponent("mac-\(state)-\(width)x\(height).png"))
                 }
                 if let workspace = model.workspace, ["main", "review", "last-page", "search", "empty"].contains(state), [375, 768, 1440].contains(width) {
@@ -273,7 +284,7 @@ struct RenderMacReviewAcceptance {
         }
         let receipt: [String: Any] = ["renderer": "offscreen NSHostingView bitmap of production views", "contacts": 5501,
             "viewports": viewports.map { [$0.0, $0.1] }, "states": states, "fixturePreparationSeconds": timings,
-            "stateEvidence": stateEvidence,
+            "stateEvidence": stateEvidence, "contactScrollEvidence": scrollEvidence,
             "font": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
             "resolvedNativeStyle": [
                 "bodyFont": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
@@ -316,6 +327,27 @@ struct RenderMacReviewAcceptance {
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
         try data.write(to: path, options: .atomic)
-
+        if ["main", "review", "organizing", "unavailable", "history"].contains(where: { path.lastPathComponent.hasPrefix("mac-\($0)-") }) {
+            func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+            let scrollViews = descendants(hosting).compactMap { $0 as? NSScrollView }
+            guard scrollViews.count == 1, let scroll = scrollViews.first, let document = scroll.documentView else {
+                throw FixtureError.unexpectedState("\(path.lastPathComponent): expected one contact scroll region, found \(scrollViews.count)")
+            }
+            let viewport = hosting.convert(scroll.bounds, from: scroll)
+            guard hosting.bounds.contains(viewport), viewport.height >= 44 else {
+                throw FixtureError.unexpectedState("\(path.lastPathComponent): contact viewport is outside the window or unusable: \(viewport); hosting: \(hosting.bounds)")
+            }
+            let before = scroll.contentView.bounds.origin
+            scroll.contentView.scroll(to: NSPoint(x: before.x, y: before.y + 120))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            hosting.layoutSubtreeIfNeeded()
+            let after = scroll.contentView.bounds.origin
+            guard before != after, hosting.convert(scroll.bounds, from: scroll) == viewport else {
+                throw FixtureError.unexpectedState("\(path.lastPathComponent): scrolling must move contacts inside a fixed viewport; document: \(document.frame), bounds: \(document.bounds), clip: \(scroll.contentView.bounds), before: \(before), after: \(after)")
+            }
+            scrollEvidence[path.lastPathComponent] = ["scrollRegions": scrollViews.count,
+                "viewport": [viewport.minX, viewport.minY, viewport.width, viewport.height],
+                "scrolled": true, "fixedViewport": true]
+        }
     }
 }

@@ -39,9 +39,6 @@ enum Brand {
     enum Layout {
         static let workspaceMaximum: CGFloat = 1440
         static let contactMinimum: CGFloat = 220
-        static func contactWellHeight(windowHeight: CGFloat) -> CGFloat {
-            min(520, max(260, windowHeight - 430))
-        }
     }
     // Google's card gradient mixes 10% heading into the panel at its raised edge.
     static let raisedSurface = LinearGradient(colors: [

@@ -199,7 +199,10 @@ struct DemoRoot: View {
             session.openInBrowser(url)
             return .handled
         })
-        .environment(\.returnToBrowser, ReturnToBrowserAction { url, _, completion in
+        .environment(\.returnToBrowser, ReturnToBrowserAction(activateExisting: { _ in
+            session.showWebsite()
+            return true
+        }) { url, _, completion in
             session.openInBrowser(url)
             completion(true)
         })

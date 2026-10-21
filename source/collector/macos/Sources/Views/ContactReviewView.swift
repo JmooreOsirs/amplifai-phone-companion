@@ -4,13 +4,16 @@ import SwiftUI
 struct ContactReviewView: View {
     @ObservedObject var model: CollectorModel
     let workspace: ContactWorkspace
-    let wellHeight: CGFloat
+    /// Nil lets the grid use the space left by the pinned review controls and action dock.
+    let wellHeight: CGFloat?
+    var compact = false
     @Binding var search: String
     @Binding var showingGroupTools: Bool
     @Binding var confirmingBulkMove: Bool
+    @State private var showingOrganizingHelp = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Brand.Space.section) {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
             controls
             contactWell
         }
@@ -22,7 +25,7 @@ struct ContactReviewView: View {
                 HStack(spacing: Brand.Space.item) {
                     includeAll
                     Divider().frame(height: 24)
-                    filters()
+                    filters(compact: compact)
                     Spacer(minLength: 0)
                     organizingToggle
                 }
@@ -32,7 +35,7 @@ struct ContactReviewView: View {
                         VStack(alignment: .leading, spacing: 8) { includeAll; organizingToggle }
                     }
                     ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 6) { filters() }
+                        HStack(spacing: 6) { filters(compact: compact) }
                         HStack(spacing: 6) { filters(compact: true) }
                     }
                 }
@@ -41,19 +44,16 @@ struct ContactReviewView: View {
                 HStack(spacing: 12) {
                     searchField.frame(minWidth: 180, maxWidth: .infinity)
                     scopeActions
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                HStack(spacing: 12) {
+                    searchField.frame(minWidth: 180, maxWidth: .infinity)
+                    compactScopeActions
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     searchField
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 12) { scopeActions }
-                        VStack(alignment: .leading, spacing: 8) { scopeActions }
-                    }
+                    compactScopeActions
                 }
-            }
-            if showingGroupTools { organizingTools }
-            if model.canUndoGroupMove {
-                Button("Undo last group move") { model.undoContactMove() }
-                    .buttonStyle(QuietAction())
             }
         }
         .brandControls()
@@ -79,7 +79,9 @@ struct ContactReviewView: View {
             let count = group == .all ? workspace.knownIDs.count : group == .main ? workspace.mainCount : workspace.reviewCount
             Button { model.showContactGroup(group) } label: {
                 if compact {
-                    Text("\(group.rawValue)\n\(count.formatted())").monospacedDigit().multilineTextAlignment(.center)
+                    Text("\(group.rawValue)\n\(count.formatted())")
+                        .monospacedDigit().multilineTextAlignment(.center).lineLimit(2)
+                        .fixedSize(horizontal: true, vertical: true)
                 } else {
                     HStack(spacing: 4) {
                         Text(group.rawValue)
@@ -88,6 +90,7 @@ struct ContactReviewView: View {
                 }
             }
             .buttonStyle(GroupChip(isSelected: workspace.group == group))
+            .fixedSize(horizontal: true, vertical: false)
             .accessibilityAddTraits(workspace.group == group ? .isSelected : [])
             .help(group == .review
                   ? "Review holds contacts with a missing name, no supported phone number or an organization-like name. Your choice."
@@ -130,7 +133,27 @@ struct ContactReviewView: View {
         if workspace.isScoped { scopedSelectionActions }
     }
 
+    @ViewBuilder private var compactScopeActions: some View {
+        if workspace.isScoped {
+            HStack(spacing: 12) {
+                Menu("Selection actions") { scopedSelectionButtons }
+                    .menuStyle(.borderlessButton)
+                    .font(Brand.bodyFont(14)).foregroundStyle(Brand.heading).fixedSize()
+                Text("\(model.selectedScopedCount.formatted()) selected")
+                    .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted).fixedSize()
+                    .accessibilityLabel("\(model.selectedScopedCount) selected in \(workspace.scopeLabel)")
+            }
+        }
+    }
+
     @ViewBuilder private var scopedSelectionActions: some View {
+        scopedSelectionButtons
+        Text("\(model.selectedScopedCount.formatted()) of \(workspace.filteredCount.formatted()) selected in \(scopeName)")
+            .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted).monospacedDigit()
+            .accessibilityLabel("\(model.selectedScopedCount) of \(workspace.filteredCount) selected in \(workspace.scopeLabel)")
+    }
+
+    @ViewBuilder private var scopedSelectionButtons: some View {
         Button("Select all \(workspace.filteredCount.formatted()) in \(scopeName)") { model.selectScopedContacts() }
             .buttonStyle(QuietAction())
             .disabled(!model.canSelectScopedContacts)
@@ -139,11 +162,6 @@ struct ContactReviewView: View {
             .buttonStyle(QuietAction())
             .disabled(!model.canClearScopedContacts)
             .accessibilityLabel("Deselect all contacts in \(workspace.scopeLabel)")
-        Text("\(model.selectedScopedCount.formatted()) of \(workspace.filteredCount.formatted()) selected in \(scopeName)")
-            .font(Brand.bodyFont(13))
-            .foregroundStyle(Brand.muted)
-            .monospacedDigit()
-            .accessibilityLabel("\(model.selectedScopedCount) of \(workspace.filteredCount) selected in \(workspace.scopeLabel)")
     }
 
     private var contactWell: some View {
@@ -167,6 +185,7 @@ struct ContactReviewView: View {
                     }
                 }
                 .frame(height: wellHeight)
+                .frame(maxHeight: wellHeight == nil ? .infinity : nil)
                 if workspace.hasPreviousPage || workspace.hasNextPage {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 12) { pagination }
@@ -192,37 +211,33 @@ struct ContactReviewView: View {
     }
 
     private var organizingToggle: some View {
-        Button(organizingLabel) {
-            showingGroupTools.toggle()
+        Menu(organizingLabel) {
+            Button(showingGroupTools ? "Hide move marks" : "Mark contacts to move") { showingGroupTools.toggle() }
+            if workspace.group == .all {
+                Text("Choose Main or Review to move a group.")
+            } else if workspace.filteredCount > 0 {
+                groupMoveActions
+            }
+            if model.canUndoGroupMove {
+                Button("Undo last group move") { model.undoContactMove() }
+            }
+            Divider()
+            Button("About Main and Review") { showingOrganizingHelp = true }
         }
-        .buttonStyle(QuietAction())
+        .menuStyle(.borderlessButton).font(Brand.bodyFont(14)).fixedSize()
+        .popover(isPresented: $showingOrganizingHelp) {
+            VStack(alignment: .leading, spacing: Brand.Space.item) {
+                Text("Move marks (flag icons) organize Main and Review. They do not include or exclude anyone; only the checkboxes do. Moving contacts to Review removes them from the selection; Undo restores it.")
+                Text("Main starts with a display name and supported phone number. Review holds missing details or possible organization clues for your decision. One name is enough. These are local suggestions; nothing changes on your phone.")
+            }
+            .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+            .padding(Brand.Space.section).frame(width: 360).background(Brand.panel)
+        }
     }
 
     private var organizingLabel: String {
-        let title = showingGroupTools ? "Hide Organize" : "Organize"
+        let title = showingGroupTools ? "Organizing" : "Organize"
         return model.markedGroupMoveIDs.isEmpty ? title : "\(title) · \(model.markedGroupMoveIDs.count) marked"
-    }
-
-    private var organizingTools: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Move marks (flag icons) organize Main and Review. They do not include or exclude anyone; only the checkboxes do. Moving contacts to Review removes them from the selection; Undo restores it.")
-                .font(Brand.bodyFont(13))
-                .foregroundStyle(Brand.muted)
-            if workspace.group == .all {
-                Text("Choose Main or Review to mark a group move, or move one contact below.")
-                    .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
-            } else if workspace.filteredCount > 0 {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { groupMoveActions }
-                    VStack(alignment: .leading, spacing: 8) { groupMoveActions }
-                }
-            }
-            DisclosureGroup("About Main and Review") {
-                Text("Main starts with a display name and supported phone number. Review holds missing details or possible organization clues for your decision. One name is enough. These are local suggestions; nothing changes on your phone.")
-                    .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
-            }
-            .font(Brand.bodyFont(13))
-        }
     }
 
     @ViewBuilder private var groupMoveActions: some View {

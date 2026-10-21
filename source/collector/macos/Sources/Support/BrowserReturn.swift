@@ -1,20 +1,30 @@
 import AppKit
 import SwiftUI
 
-/// Opens an AMPLIFai account page in the browser that sent the run link, or the default browser. A host can
-/// replace it (the FAKE DATA demo shows its simulated website instead).
-///
-/// Limitation: macOS opens the URL in that browser application only. It cannot choose a browser profile, window
-/// or tab; the browser decides, usually a new tab in its frontmost window.
+/// Returning activates the originating browser without navigating. Opening a URL is a separate recovery
+/// operation: macOS cannot select the original tab, window or profile.
 struct ReturnToBrowserAction {
     let perform: @MainActor (URL, String?, @escaping @MainActor (Bool) -> Void) -> Void
+    private let activateExisting: @MainActor (String?) -> Bool
+
+    init(activateExisting: @escaping @MainActor (String?) -> Bool = { _ in false },
+         perform: @escaping @MainActor (URL, String?, @escaping @MainActor (Bool) -> Void) -> Void) {
+        self.activateExisting = activateExisting
+        self.perform = perform
+    }
+
+    @MainActor func activateOriginalBrowser(preferredBrowserBundleID: String?) -> Bool {
+        activateExisting(preferredBrowserBundleID)
+    }
 
     @MainActor func callAsFunction(_ url: URL, preferredBrowserBundleID: String?,
                                    completion: @escaping @MainActor (Bool) -> Void = { _ in }) {
         perform(url, preferredBrowserBundleID, completion)
     }
 
-    static let system = ReturnToBrowserAction { url, preferred, completion in
+    static let system = ReturnToBrowserAction(activateExisting: {
+        AppKitCompanionSurface.activateOriginalBrowser(bundleID: $0)
+    }) { url, preferred, completion in
         guard url.scheme == "https", url.host == "amplifai.satoris.ai" else { completion(false); return }
         let workspace = NSWorkspace.shared
         var browser: URL?

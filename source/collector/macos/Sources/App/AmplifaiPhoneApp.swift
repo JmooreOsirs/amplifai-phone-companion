@@ -69,7 +69,7 @@ struct AmplifaiPhoneApp: App {
                 }
                 .onDisappear { model.disconnect() }
         }
-        .defaultSize(width: 1180, height: 820)
+        .defaultSize(width: CompanionOpeningGeometry.preferred.width, height: CompanionOpeningGeometry.preferred.height)
     }
 }
 

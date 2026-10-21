@@ -197,10 +197,74 @@ enum CompanionWindowLifecycleChecks {
         }
     }
 
+    static func browserReturnDoesNotNavigate() throws {
+        var activated: [String?] = []
+        var opened: [URL] = []
+        let action = ReturnToBrowserAction(activateExisting: { browser in
+            activated.append(browser)
+            return browser == "com.example.original-browser"
+        }) { url, _, completion in
+            opened.append(url)
+            completion(true)
+        }
+        try require(action.activateOriginalBrowser(preferredBrowserBundleID: "com.example.original-browser"),
+                    "An explicit return can activate the original browser")
+        try require(!action.activateOriginalBrowser(preferredBrowserBundleID: nil), "Unknown originating browser fails closed")
+        try require(!action.activateOriginalBrowser(preferredBrowserBundleID: "com.example.closed-browser"),
+                    "A missing browser fails without recovery navigation")
+        try require(activated.count == 3 && opened.isEmpty, "Returning never opens a URL, even after activation failure")
+        let recovery = URL(string: CollectorModel.accountOrigin + "/phone/account")!
+        action(recovery, preferredBrowserBundleID: "com.example.original-browser")
+        try require(opened == [recovery], "Only explicit recovery opens its supplied account destination")
+        let inert = ReturnToBrowserAction { _, _, _ in }
+        try require(!inert.activateOriginalBrowser(preferredBrowserBundleID: "com.example.original-browser"),
+                    "Injected URL handlers must not inherit live browser activation")
+        try require(!ReturnToBrowserAction.system.activateOriginalBrowser(preferredBrowserBundleID: nil),
+                    "The system action never chooses a default browser when the sender is unknown")
+    }
+
+    static func openingGeometryFitsDisplay() throws {
+        let display = NSRect(x: 100, y: 40, width: 1440, height: 900)
+        let small = NSRect(x: 200, y: 300, width: 375, height: 600)
+        let fitted = CompanionOpeningGeometry.frame(current: small, visible: display, styleMask: [.titled, .resizable])
+        let content = NSWindow.contentRect(forFrameRect: fitted, styleMask: [.titled, .resizable])
+        try require(content.width >= 1180 && content.height >= 820 && display.contains(fitted),
+                    "An undersized restored window opens with useful review space inside the display")
+        let compactDisplay = NSRect(x: -1280, y: 0, width: 820, height: 640)
+        let compact = CompanionOpeningGeometry.frame(current: small, visible: compactDisplay, styleMask: [.titled, .resizable])
+        try require(compact == compactDisplay, "Small displays bound the opening frame, including negative display origins")
+        let roomy = NSRect(x: 120, y: 60, width: 1300, height: 870)
+        try require(CompanionOpeningGeometry.frame(current: roomy, visible: display, styleMask: [.titled, .resizable]) == roomy,
+                    "A larger usable opening frame is preserved")
+    }
+
+    static func openingGeometryRunsOnceWithoutShowingWindow() throws {
+        guard let visible = NSScreen.main?.visibleFrame else { throw Failure.check("A display is required for the sizing check") }
+        let host = NSWindow(contentRect: NSRect(x: visible.minX + 20, y: visible.minY + 20, width: 375, height: 600),
+                            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        host.isReleasedWhenClosed = false
+        let original = host.frame
+        let action = ReturnToBrowserAction { _, _, completion in completion(false) }
+        let first = AppKitCompanionSurface(window: host, returnToBrowser: action)
+        try require(host.frame == CompanionOpeningGeometry.frame(current: original, visible: visible, styleMask: host.styleMask),
+                    "The real surface applies the bounded opening frame before the window is shown")
+        host.setContentSize(NSSize(width: 500, height: 600))
+        let resized = host.frame
+        let second = AppKitCompanionSurface(window: host, returnToBrowser: action)
+        try require(host.frame == resized, "Reattaching the surface preserves the owner's later resize")
+        try require(!host.isVisible, "Sizing must not show or order the test window")
+        first.invalidate()
+        second.invalidate()
+        host.close()
+    }
+
     static func main() {
         let application = NSApplication.shared
         application.setActivationPolicy(.prohibited)
         do {
+            try browserReturnDoesNotNavigate()
+            try openingGeometryFitsDisplay()
+            try openingGeometryRunsOnceWithoutShowingWindow()
             try ownerCloseInvalidatesBeforeCallbacks()
             try detachReattachAndDismantle()
             try cancelThenCloseAndQueuedUpdates()
@@ -209,7 +273,7 @@ enum CompanionWindowLifecycleChecks {
             try detachPreservesAnotherOwnersSheet()
             try repeatedRepresentableDestruction()
             try require(!application.isActive, "The harness must not activate the application")
-            print("PASS: real offscreen AppKit lifecycle checks; 40 SwiftUI close/reopen cycles; no helper/device/account/browser")
+            print("PASS: real unshown AppKit lifecycle and once-only sizing checks; 40 SwiftUI close/reopen cycles; no helper/device/account/browser")
         } catch {
             fputs("FAIL: \(error)\n", stderr)
             exit(1)
