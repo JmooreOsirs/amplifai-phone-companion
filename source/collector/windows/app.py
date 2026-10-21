@@ -1,6 +1,7 @@
 """Windows source candidate. Launch only with the matching bundled helper."""
 from __future__ import annotations
 
+import ctypes
 import math
 import queue
 import sys
@@ -28,6 +29,64 @@ SETUP_STEPS = (
     ("Prepare a backup if you choose", "Apple Devices → your iPhone → General → Backups. If you choose Encrypt local backup, keep the password. Confirming can start a separate backup and overwrite older local backups; allow PC storage. AMPLIFai cannot change encryption or reset the password."),
     ("Finish, then return", "Let any Apple Devices backup finish before collecting here; it is a separate backup stored on this PC. Recheck if needed, then review the collection agreement below. Even encrypted backups may lack older Calls. Captured coverage is shown after collection."),
 )
+
+
+def fitted_window_bounds(client, frame, outer, work, minimum):
+    """Fit the visible frame, retaining the minimum usable client on small displays."""
+    client_size = (client[2] - client[0], client[3] - client[1])
+    frame_extra = (frame[2] - frame[0] - client_size[0], frame[3] - frame[1] - client_size[1])
+    size = tuple(max(minimum[axis], min(client_size[axis], work[axis + 2] - work[axis] - frame_extra[axis]))
+                 for axis in (0, 1))
+    # A display smaller than the minimum cannot fit the controls; keep its title accessible.
+    origin = tuple(max(work[axis], min(frame[axis], work[axis + 2] - size[axis] - frame_extra[axis]))
+                   + outer[axis] - frame[axis] for axis in (0, 1))
+    return (*origin, *(origin[axis] + size[axis] + outer[axis + 2] - outer[axis] - client_size[axis]
+                       for axis in (0, 1)))
+
+
+def fit_startup_window(window):
+    if sys.platform != "win32":
+        return
+    import win32api
+    import win32con
+    import win32gui
+
+    window.update_idletasks()
+    logical_size = (window.winfo_width(), window.winfo_height())
+    logical_minimum = window.minsize()
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+    user.GetAncestor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    user.GetAncestor.restype = ctypes.c_void_p
+    dwm = ctypes.WinDLL("dwmapi")
+    dwm.DwmGetWindowAttribute.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+    dwm.DwmGetWindowAttribute.restype = ctypes.c_int32
+    # The window keeps its existing DPI mode and fonts; only these API calls use physical pixels.
+    previous = user.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+    if not previous:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        client_id = window.winfo_id()
+        hwnd = user.GetAncestor(client_id, 2)  # GA_ROOT: Tk's decorated native window.
+        if not hwnd:
+            raise ctypes.WinError(ctypes.get_last_error())
+        work = win32api.GetMonitorInfo(win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST))["Work"]
+        client = win32gui.GetClientRect(client_id)
+        outer = win32gui.GetWindowRect(hwnd)
+        frame = (ctypes.c_int32 * 4)()
+        if dwm.DwmGetWindowAttribute(hwnd, 9, ctypes.byref(frame), ctypes.sizeof(frame)) != 0:  # EXTENDED_FRAME_BOUNDS
+            raise OSError("Could not measure the visible window frame")
+        minimum = tuple(math.ceil(logical_minimum[axis] * (client[axis + 2] - client[axis]) / logical_size[axis])
+                        for axis in (0, 1))
+        bounds = fitted_window_bounds(client, frame, outer, work, minimum)
+        if bounds != outer:
+            win32gui.SetWindowPos(hwnd, 0, bounds[0], bounds[1], bounds[2] - bounds[0], bounds[3] - bounds[1],
+                                  win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+    finally:
+        if not user.SetThreadDpiAwarenessContext(previous):
+            raise ctypes.WinError(ctypes.get_last_error())
+    window.update_idletasks()
 
 
 def window_title(state: Session) -> str:
@@ -120,6 +179,7 @@ class PhoneWindow:
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         self._style()
         self._layout(logo)
+        fit_startup_window(self.window)
         self.window.after(100, self.pump)
         try:
             self.status_server.start()

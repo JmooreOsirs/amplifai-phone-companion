@@ -73,7 +73,7 @@ Existing guide, source-diagnostic and update render fixtures use the new pane an
 
 ### Visible desktop qualification
 
-Windows run `39680842276`, source `cd29cdcf2c0ad802683c89e7fd7a986ea73c7548`, passed 113 tests and the logical geometry/style checks for 65 screenshots. Visual review found the taskbar covering the bottom action row in the 920×749 captures. Those logical bounds did not establish visible footer acceptance. The 680×680 captures were clean. The demonstrated harness defect is failure to compare the window with the desktop work area; normal product opening geometry still needs an independent measurement before attributing a product defect.
+Windows run `39680842276`, source `cd29cdcf2c0ad802683c89e7fd7a986ea73c7548`, passed 113 tests and the logical geometry/style checks for 65 screenshots. Visual review found the taskbar covering the bottom action row in the 920×749 captures. Those logical bounds did not establish visible footer acceptance. The 680×680 captures were clean. That established a harness defect: failure to compare the window with the desktop work area. The later independent normal-opening probe below also established a product sizing defect.
 
 The existing renderer now has a normal-open probe. Run it on the original disposable desktop **before changing resolution or forcing a fixture size**:
 
@@ -101,7 +101,15 @@ try {
 }
 ```
 
-No registry persistence, taskbar changes, unsafe display modes or offscreen rendering is used. Unsupported modes or insufficient work area fail qualification. The API behavior follows [ChangeDisplaySettingsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsexw) and the existing [pywin32 binding](https://mhammond.github.io/pywin32/win32api__ChangeDisplaySettingsEx_meth.html). Twelve headless regression tests reject the taskbar-overlap case, clipped frames, DPI mismatch and occlusion, and check exact placement, tested modes and restoration. Actual normal-open and corrected visible-desktop runtime results remain pending; `app.py` is unchanged in this harness repair.
+No registry persistence, taskbar changes, unsafe display modes or offscreen rendering is used. Unsupported modes or insufficient work area fail qualification. The API behavior follows [ChangeDisplaySettingsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsexw) and the existing [pywin32 binding](https://mhammond.github.io/pywin32/win32api__ChangeDisplaySettingsEx_meth.html). Twelve headless regression tests reject the taskbar-overlap case, clipped frames, DPI mismatch and occlusion, and check exact placement, tested modes and restoration. The harness-only repair was committed as `99ee89d`; corrected visible-desktop matrix results remain pending.
+
+### Normal startup fit
+
+The unforced Windows probe at source `0cfa9c4`, run `39683411577`, measured client `[86,31,1006,780]`, visible frame `[85,0,1007,781]` and work area `[0,0,1024,720]`. Artifact `12385651228` (ZIP SHA-256 `eb718736f9007d55f8a4f88ec1c414dad2fbc89e273c1a7e5cb3cd19781d30e6`) retains the receipt and taskbar-obscured screenshot. The normal product window exceeded the work area before any fixture resize or display preparation.
+
+`PhoneWindow` now fits its startup window after layout using the current monitor's measured work area, native client size and DWM visible frame. It reduces only excess dimensions and moves only as far as needed. The existing 680×680 logical minimum and all typography/styles remain unchanged. `SetWindowPos` preserves activation and Z order; its physical-coordinate API scope restores the thread's prior DPI context. The product does not import fixture helpers or alter screen resolution. See [window placement flags](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos) and [DPI context restoration](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setthreaddpiawarenesscontext).
+
+Eight headless regressions cover the measured failure (calculated client 920×688 and visible frame ending at work-area bottom 720), sufficient desktops, negative monitor origins, top/left taskbars, offscreen placement, minimum size preservation, DPI context restoration on failure and scaled coordinate units. A work area smaller than the decorated minimum remains unsupported: the minimum is retained and the title is placed within the work area, without claiming every control fits. Dynamic monitor/DPI changes after startup and physical DPI acceptance remain separate limits. Actual Windows normal-opening and full matrix requalification of this product repair are pending; the normal-open fixture still does not force a viewport or resolution.
 
 ## Package shape and qualification
 
