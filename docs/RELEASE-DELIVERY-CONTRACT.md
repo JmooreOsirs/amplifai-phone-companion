@@ -1,5 +1,16 @@
 # Native delivery and website promotion contracts
 
+## RC34 native setup and review flow — October 21
+
+Reserved candidate identities: ARM `2026.10.21-rc34` / `26102134` / `macos-2026.10.21-rc34-release`; Intel Test `2026.10.21-rc34-intel1` / `261021341` / `macos-2026.10.21-rc34-intel1-test`. These are reserved source identities, not published binaries. Existing bundle IDs, channels, keys, feeds and dependency inputs remain unchanged.
+
+This candidate combines the fixed contact workspace, useful opening geometry, preparation/password help and original-browser activation with explicit native setup consent. `phone-native-setup-v1` is separately negotiated; legacy pending approvals retain their original protocol. Claiming setup grants no capture, explicit native v3 approval requires a matching receipt, and Start still needs current operation admission. Exact uncertain approval retries preserve capabilities; the setup admission TTL does not expire an already authorized run. Chosen-contact manifests/digests and final Save receipts remain required.
+
+Source implementation milestones are `c7ed4804902c58ea481a459d945948a096c507cb` and `203f734a6e1ffc3e16aa38b3b0940345fd930e83`; neither is automatically the final authorized release merge. The final protected-source merge, current control authorization and exact architecture-specific qualification artifacts govern signing.
+
+The coordinator reserved these identities after checking the existing RC33 release and absent RC34 tags. Publication follows compatible dormant server → qualified signed public native bytes/feed → exact-build/running-capability allowlist. The allowlist remains empty until all actual public metadata agrees. Website server/discovery, physical iPhone/customer consent/Save and original-tab recovery remain separate evidence.
+
+
 ## RC33 diagnostic correction scope — October 21
 
 Source-stage record: ARM `2026.10.21-rc33` / `26102133`; Intel Test `2026.10.21-rc33-intel1` / `261021331`. Publication is established by the external protected publisher and website receipts, not this source document. Routine publish/deploy authority was explicitly renewed by Jeff for this correction phase.

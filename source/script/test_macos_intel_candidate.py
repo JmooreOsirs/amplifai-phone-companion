@@ -161,7 +161,7 @@ class SourceFreezeTests(unittest.TestCase):
 class CandidateIsolationTests(unittest.TestCase):
     def test_current_identity_and_unchanged_dependency_recipe_are_pinned(self):
         policy = builder.verify_release_policy()
-        self.assertEqual(policy["release"], "macos-2026.10.21-rc33-intel1-test")
+        self.assertEqual(policy["release"], "macos-2026.10.21-rc34-intel1-test")
         self.assertEqual(policy["historical_dependency_source"]["archive_sha256"],
                          "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3")
         with tempfile.TemporaryDirectory() as directory:
@@ -171,7 +171,7 @@ class CandidateIsolationTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes((builder.ROOT / name).read_bytes())
             (root / "docs").mkdir()
-            policy_path = root / "docs/INTEL-RC33-BASELINE.json"
+            policy_path = root / "docs/INTEL-RC34-BASELINE.json"
             policy_path.write_text(json.dumps(policy))
             self.assertEqual(builder.verify_release_policy(root), policy)
             (root / next(iter(policy["pinned_inputs"]))).write_text("changed recipe")
@@ -204,8 +204,8 @@ class CandidateIsolationTests(unittest.TestCase):
         self.assertNotEqual(info["CFBundleIdentifier"], original["CFBundleIdentifier"])
         self.assertEqual(info["CFBundleExecutable"], "AmplifaiPhone")
         self.assertEqual(info["LSMinimumSystemVersion"], "14.0")
-        self.assertEqual(info["CFBundleShortVersionString"], "2026.10.21-rc33-intel1")
-        self.assertEqual(info["CFBundleVersion"], "261021331")
+        self.assertEqual(info["CFBundleShortVersionString"], "2026.10.21-rc34-intel1")
+        self.assertEqual(info["CFBundleVersion"], "261021341")
         self.assertTrue(original["SUEnableAutomaticChecks"])
         self.assertIn("SUFeedURL", original)
 
