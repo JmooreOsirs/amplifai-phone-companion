@@ -71,6 +71,38 @@ python source/collector/windows/tests/render_ack_recovery.py --source source --l
 
 Existing guide, source-diagnostic and update render fixtures use the new pane and actual 920×749/680×680 targets. The old `render_scaling_acceptance.py` remains explicitly pinned to retained RC14 bytes; it must not be relabeled as this candidate. New Windows screenshots, matched reference review, frozen helper/MSI execution and installed-update gates remain pending. Synthetic Tk scaling is not physical DPI, screen-reader or consumer-PC acceptance.
 
+### Visible desktop qualification
+
+Windows run `39680842276`, source `cd29cdcf2c0ad802683c89e7fd7a986ea73c7548`, passed 113 tests and the logical geometry/style checks for 65 screenshots. Visual review found the taskbar covering the bottom action row in the 920×749 captures. Those logical bounds did not establish visible footer acceptance. The 680×680 captures were clean. The demonstrated harness defect is failure to compare the window with the desktop work area; normal product opening geometry still needs an independent measurement before attributing a product defect.
+
+The existing renderer now has a normal-open probe. Run it on the original disposable desktop **before changing resolution or forcing a fixture size**:
+
+```powershell
+python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output "$env:RUNNER_TEMP/AmplifaiParityRender/normal_open" --normal-open-only
+```
+
+`normal-open-receipt.json` records the actual `PhoneWindow` geometry requests, physical client bounds, native window and DWM visible-frame bounds, monitor/work area, DPI context and overlapping windows. `windows-normal-open-unqualified.png` is always retained as diagnostic evidence, even when the gate fails; its receipt explicitly says `visibilityQualified: false`. A passing probe also captures Contacts and verifies its primary actions at the same normal opening size. It does not resize the window or change desktop resolution. A default client or visible frame outside the work area requires a bounded product placement/size repair and another normal-open check; increasing the fixture desktop alone cannot satisfy that gate. Other probe failures require their own cause analysis before changing product layout.
+
+The shared capture helper now rejects client or visible-frame bounds outside `GetMonitorInfoW`'s work area, overlapping higher windows, Tk/physical-coordinate disagreement and changing bounds during capture. Every accepted screenshot records those measurements. Owned fixture windows are centered using their measured native frame without shrinking the required client size. The tests use a per-monitor-aware capture thread before creating Tk; this is a measurement context, not a product DPI change or physical-DPI acceptance. See [Microsoft's monitor/work-area contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-monitorinfo) and [visible-frame versus virtualized window bounds](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getwindowrect).
+
+For the forced viewport matrix, the existing locked `pywin32` supplies display-mode APIs. The following helper is restricted to the disposable Windows Actions environment. It keeps an already sufficient desktop; otherwise it chooses an advertised compatible mode of at least 1280×1024, tests it with `CDS_TEST`, applies it with flags `0`, and verifies a work area of at least 1000×850. The original mode is persisted before mutation and restored on preparation failure. The parent workflow must restore it after rendering as well:
+
+```powershell
+$desktop = "$env:RUNNER_TEMP/AmplifaiParityRender/desktop-mode.json"
+try {
+  python source/collector/windows/tests/visible_desktop.py --prepare $desktop
+  if ($LASTEXITCODE -ne 0) { throw 'Visible desktop preparation failed' }
+  # Run the existing render fixture commands here; check every exit code.
+} finally {
+  if (Test-Path $desktop) {
+    python source/collector/windows/tests/visible_desktop.py --restore $desktop
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop mode restoration failed' }
+  }
+}
+```
+
+No registry persistence, taskbar changes, unsafe display modes or offscreen rendering is used. Unsupported modes or insufficient work area fail qualification. The API behavior follows [ChangeDisplaySettingsEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsexw) and the existing [pywin32 binding](https://mhammond.github.io/pywin32/win32api__ChangeDisplaySettingsEx_meth.html). Twelve headless regression tests reject the taskbar-overlap case, clipped frames, DPI mismatch and occlusion, and check exact placement, tested modes and restoration. Actual normal-open and corrected visible-desktop runtime results remain pending; `app.py` is unchanged in this harness repair.
+
 ## Package shape and qualification
 
 The build_windows_candidate.py script freezes distinct console helper and Tk window runtimes into a disposable onedir candidate. The separate build_windows_msi.py script authors an unsigned WiX 3 per-user MSI only after the frozen package's exact file hash inventory and legal files match:

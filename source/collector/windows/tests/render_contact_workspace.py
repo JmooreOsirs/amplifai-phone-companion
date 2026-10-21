@@ -2,17 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import platform
 import sys
-import tkinter as tk
 from pathlib import Path
 from tkinter import font, ttk
 from unittest.mock import patch
 
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import HANDOFF_ID, capture, selected_review
+from render_candidate import HANDOFF_ID, ImageGrab, capture, create_root, place_viewport, selected_review, visible_snapshot
 from session import Session
 
 
@@ -158,19 +158,46 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ("source", "logo", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--normal-open-only", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    root = tk.Tk()
+    root = create_root()
+    if args.normal_open_only:
+        with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"), patch.object(root, "geometry", wraps=root.geometry) as geometry:
+            view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
+        root.update()
+        receipt = {"status": "normal-opening-measurement", "guiSourceSha256": gui_digest(args.source),
+                   "geometryRequests": [call.args[0] for call in geometry.call_args_list if call.args],
+                   "desktop": root.capture_desktop.snapshot(root), "fixtureResizedWindow": False,
+                   "fixtureChangedDesktop": False, "physicalDpiAcceptance": False}
+        # Preserve negative evidence without presenting it as a visibility-qualified capture.
+        diagnostic_path = args.output / "windows-normal-open-unqualified.png"
+        pixels = ImageGrab.grab(bbox=tuple(receipt["desktop"]["clientBounds"]), all_screens=True)
+        pixels.save(diagnostic_path)
+        receipt["diagnosticScreenshot"] = {"path": diagnostic_path.name, "size": list(pixels.size),
+                                            "sha256": hashlib.sha256(diagnostic_path.read_bytes()).hexdigest(),
+                                            "visibilityQualified": False}
+        try:
+            visible_snapshot(root)
+            view.state = captured()
+            view.render_contacts(); view.refresh(); root.update()
+            receipt["contactGeometry"] = workspace_geometry(root, view)
+            receipt["screenshot"] = capture(root, args.output, "normal-open-contacts")
+            receipt["visible"] = True
+        except RuntimeError as error:
+            receipt.update({"visible": False, "failure": str(error)})
+        (args.output / "normal-open-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        root.destroy()
+        if not receipt["visible"]:
+            raise SystemExit(receipt["failure"])
+        return
     records = []
     style_records = []
     for width, height, scaling in ((920, 749, 4 / 3), (680, 680, 4 / 3), (680, 680, 1.75)):
         root.tk.call("tk", "scaling", scaling)
         with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
             view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
-        root.geometry(f"{width}x{height}+0+0")
-        root.update()
-        if (root.winfo_width(), root.winfo_height()) != (width, height):
-            raise RuntimeError("Window manager changed the required content viewport")
+        place_viewport(root, width, height)
         styles = computed_styles(root, view)
         style_records.append({"viewport": [width, height], "tkScaling": root.tk.call("tk", "scaling"), "styles": styles})
         for name, state in scenarios().items():

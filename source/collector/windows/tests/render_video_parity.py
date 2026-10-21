@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
-import time
-import tkinter as tk
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import ImageGrab
-
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import capture, selected_review
+from render_candidate import capture, create_root, place_viewport, selected_review
 from session import BACKUP_CHECK_MODE, Session
 
 
@@ -33,20 +28,6 @@ def checked_setting(value: bool) -> Session:
     return state
 
 
-def capture_window(window: tk.Toplevel, output: Path, name: str) -> dict:
-    window.update()
-    time.sleep(0.15)
-    x, y = window.winfo_rootx(), window.winfo_rooty()
-    width, height = window.winfo_width(), window.winfo_height()
-    path = output / f"windows-{name}.png"
-    image = ImageGrab.grab(bbox=(x, y, x + width, y + height), all_screens=True)
-    if image.size != (width, height):
-        raise RuntimeError("Source-details screenshot viewport mismatch")
-    image.save(path)
-    return {"path": path.name, "width": width, "height": height,
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-
-
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("An actual Windows desktop runner is required")
@@ -57,12 +38,12 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
 
-    root = tk.Tk()
+    root = create_root()
     with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     records = []
     for width, height in ((920, 749), (680, 680)):
-        root.geometry(f"{width}x{height}+30+30")
+        place_viewport(root, width, height)
         view.state = checked_setting(False)
         view.refresh()
         root.update()
@@ -86,8 +67,8 @@ def main() -> None:
         raise RuntimeError("Focused contact source details did not open")
     if "Contact source details" != details.title():
         raise RuntimeError("Source details title changed")
-    details.geometry("520x320+80+80")
-    records.append(capture_window(details, args.output, "contact-source-details"))
+    place_viewport(details, 520, 320)
+    records.append(capture(details, args.output, "contact-source-details"))
     view.close_source_details()
     if view.source_details_window is not None:
         raise RuntimeError("Source details did not close")

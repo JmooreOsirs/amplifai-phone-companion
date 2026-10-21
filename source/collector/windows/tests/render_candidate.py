@@ -15,6 +15,7 @@ from PIL import ImageGrab
 
 import app
 from session import Session
+from visible_desktop import Desktop, validate_visible
 
 TOTAL_CONTACTS = 1_205
 HANDOFF_ID = "11111111-1111-4111-8111-111111111111"
@@ -79,6 +80,22 @@ def descendants(widget):
         yield from descendants(child)
 
 
+def create_root():
+    desktop = Desktop()
+    desktop.physical_coordinates()
+    root = tk.Tk()
+    root.capture_desktop = desktop
+    return root
+
+
+def place_viewport(root, width, height):
+    return root._root().capture_desktop.place(root, width, height)
+
+
+def visible_snapshot(root, expected_size=None):
+    return validate_visible(root._root().capture_desktop.snapshot(root), expected_size)
+
+
 def capture(root: tk.Tk, output: Path, name: str, *, scroll: float | None = None) -> dict:
     if scroll is not None:
         for canvas in descendants(root):
@@ -86,15 +103,18 @@ def capture(root: tk.Tk, output: Path, name: str, *, scroll: float | None = None
                 canvas.yview_moveto(scroll)
     root.update()
     time.sleep(0.15)
-    x, y = root.winfo_rootx(), root.winfo_rooty()
-    width, height = root.winfo_width(), root.winfo_height()
+    desktop = visible_snapshot(root)
+    x, y, right, bottom = desktop["clientBounds"]
+    width, height = right - x, bottom - y
     path = output / f"windows-{name}.png"
     image = ImageGrab.grab(bbox=(x, y, x + width, y + height), all_screens=True)
     if image.size != (width, height):
         raise RuntimeError("Windows screenshot viewport mismatch")
+    if visible_snapshot(root) != desktop:
+        raise RuntimeError("Visible desktop bounds changed during screenshot capture")
     image.save(path)
     return {"path": path.name, "width": width, "height": height,
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "visibleDesktop": desktop}
 
 
 def main() -> None:
@@ -105,8 +125,7 @@ def main() -> None:
     parser.add_argument("--logo", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    root = tk.Tk()
-    root.geometry("920x800+30+30")
+    root = create_root()
     with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     view.state = selected_review()
@@ -115,8 +134,7 @@ def main() -> None:
     root.update()
     records = []
     for width, height in ((920, 749), (680, 680)):
-        root.geometry(f"{width}x{height}+30+30")
-        root.update()
+        place_viewport(root, width, height)
         view.show_workspace("setup")
         root.update()
         canvas = view.details_canvas

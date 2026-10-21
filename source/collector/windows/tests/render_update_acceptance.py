@@ -5,14 +5,13 @@ import argparse
 import json
 import platform
 import sys
-import tkinter as tk
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import capture
+from render_candidate import capture, create_root, place_viewport
 from session import Session
 
 
@@ -30,14 +29,14 @@ def main() -> None:
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    root = tk.Tk()
+    root = create_root()
     with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     view._startup_update_pending = False
     records = []
     styles = app.ttk.Style(root)
     for width, height in ((920, 749), (680, 680)):
-        root.geometry(f"{width}x{height}+30+30")
+        place_viewport(root, width, height)
         for state in ("checking", "available", "deferred", "installing", "failed"):
             view.state = idle()
             view.update_state = state
