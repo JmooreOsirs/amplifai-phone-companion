@@ -1,10 +1,13 @@
 {
   "status": "private-unsigned-per-user-installer-candidate-not-supported-download",
-  "baseRelease": "current shared local iPhone collector including rc20 ACK-safe handoff and rc19 extraction; published Mac rc20 and website Android rc9 are separate apps",
+  "baseRelease": "Merged Mac RC34 shared local iPhone collector with the Windows RC19 unsigned Test installer as the upgrade baseline. Windows native setup v2 is a changed candidate requiring its own runtime and package qualification.",
   "windowEntrypoint": "collector/windows/app.py",
   "pythonModules": [
     "collector/windows/session.py",
     "collector/windows/helper_process.py",
+    "collector/windows/native_setup.py",
+    "collector/windows/native_run.py",
+    "collector/windows/setup_delivery.py",
     "collector/windows/updater.py",
     "collector/amplifai_phone/companion_status.py",
     "collector/amplifai_phone/windows_storage.py",
@@ -37,7 +40,7 @@
       "contract": "exact COPYRIGHT, LICENSE and THIRD-PARTY-NOTICES.txt byte hashes from the candidate source root"
     }
   ],
-  "install": "WiX 3 per-user limited-privilege MSI to LocalAppDataFolder, unsigned and private draft only; normal non-admin/SmartScreen/driver and physical account acceptance remain unqualified.",
+  "install": "WiX 3 per-user limited-privilege MSI to LocalAppDataFolder with HKCU amplifai-phone setup URI registration. Windows remains unsigned Test; physical PC/SmartScreen/driver/iPhone and real account acceptance are separate evidence.",
   "releaseGates": [
     "Windows GUI freeze/build",
     "Tcl/Tk runtime inclusion",
@@ -50,11 +53,12 @@
     "exact-origin authenticated browser receipt/save ACK",
     "rendered accessibility and DPI qualification"
   ],
-  "windowProtocol": "200-contact searchable pages with atomic all-page Select all/Clear all, 1000 selected IDs/review command and exact UUID/hash; server-confirmed signed-in destination approval for code-free Connect, manual one-use code fallback, bounded transfer counters and allowlisted optional source reasons. Strict v1 current source-failure diagnostics remain visible before Save; bounded durable previous-run history is labeled separately and never attached to current capture or Save. Account source Save/readback/Finalize remains separate in the website.",
+  "windowProtocol": "Account-bound native setup v2 claims the fixed HTTPS authority, displays the exact Windows disclosure and account/course, records explicit approval, then requires separate Start admission before collection. Selection is editable until deliberate Continue; the first immutable bind attempt freezes the exact selection/handoff/digest for identical retry or cancellation. Verified browser intent and Save/readback ACK remain required. Existing legacy handoff keeps its separate destination and Save decisions. Source coverage and bounded diagnostics remain distinct from received/transferred/saved state.",
   "updateVersion": "2026.10.15-rc19",
   "updateBuild": "26101519",
   "installerVersion": "1.0.19",
   "updateDependency": "Existing hash-pinned cryptography==50.0.1; no new dependency or lock change",
   "updateProtocol": "Fixed HTTPS signed exact-byte manifest; bounded matching GitHub MSI bytes verified by length/SHA256/Ed25519. Explicit live-idle action copies matching frozen helper/runtime using build-time embedded hash inventory. Helper independently verifies persisted signed manifest/MSI, pins runtime/cache/MSI, signals ready, requires explicit commit/EOF and normal parent exit, then launches normal Windows Installer UI and holds guards through exit. No app-path locks during replacement, no shell/quiet runtime, unsigned TEST label retained.",
-  "bootstrapInventory": "build_windows_candidate.py freezes helper first; exact helper onedir path/byte/SHA256 records are compiled into wrapper-only _windows_update_bootstrap Python module before wrapper freeze. No source/system Python fallback."
+  "bootstrapInventory": "build_windows_candidate.py freezes helper first; exact helper onedir path/byte/SHA256 records are compiled into wrapper-only _windows_update_bootstrap Python module before wrapper freeze. No source/system Python fallback.",
+  "nativeSetupDelivery": "Strict one-URI launch grammar; a bounded current-logon protected first-instance named pipe forwards to the existing Tk owner. Plain launch advertises read-only schema2 capabilities only when delivery is owned. Same-logon routing is not package attestation or collection authority."
 }
