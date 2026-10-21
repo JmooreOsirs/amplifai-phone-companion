@@ -755,12 +755,16 @@ class PhoneWindow:
                     if event.get("kind") in {"capture", "contacts"} and self.state._capture_received and not self.state.selecting_all:
                         self.render_contacts()
                     if event.get("kind") == "destination" and self.state.can_decide_destination:
+                        destination = (self.state.handoff_id, self.state.destination_intent_id)
                         approved = messagebox.askyesno(
                             "Confirm signed-in account destination",
                             f"Account: {self.state.destination_email}\nCourse: {self.state.destination_course}\n\n"
                             "These details came from AMPLIFai's authenticated server. Connect sends the reviewed preview only. Each source still needs separate Save approval in the account. Connect to this account?",
                         )
-                        self.send(self.state.decide_destination(approved))
+                        # Native dialogs can process other events while an answer is pending.
+                        if (destination == (self.state.handoff_id, self.state.destination_intent_id)
+                                and self.state.can_decide_destination):
+                            self.send(self.state.decide_destination(approved))
                     if event.get("kind") == "review" and self.state.reviewed:
                         selected, calls, messages = self.state.review_counts
                         calls_summary = "Calls unavailable" if "calls" in self.state.missing else f"{calls} matching calls"

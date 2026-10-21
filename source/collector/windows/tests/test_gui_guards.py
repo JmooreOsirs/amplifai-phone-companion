@@ -143,6 +143,31 @@ class GuiGuardsTests(unittest.TestCase):
         state.exited(0)
         self.assertTrue(title(state).endswith(" · temporary data remains"))
 
+    def test_account_dialog_answer_cannot_approve_a_replacement_intent(self):
+        from test_session import paired, BINDING
+        window = source_window()
+        window.state = paired()
+        original = {"kind": "destination", "state": "pending", "handoffId": BINDING,
+                    "intentId": "22222222-2222-4222-8222-222222222222",
+                    "email": "original@example.test", "course": "Original course"}
+        replacement = {**original, "intentId": "33333333-3333-4333-8333-333333333333",
+                       "email": "replacement@example.test", "course": "Replacement course"}
+        dialog = window.pump.__globals__["messagebox"]
+
+        def replace_during_dialog(*_args):
+            window.state.handle(replacement)
+            return True
+
+        dialog.askyesno.side_effect = replace_during_dialog
+        window.events.put(original)
+        window.pump()
+        window.helper.close_input.assert_not_called()
+        commands = [call.args[0] for call in window.helper.write.call_args_list]
+        self.assertFalse(any(command.get("action") == "destination-decision" for command in commands))
+        self.assertIsNone(window.state.destination_requested_approval)
+        self.assertFalse(window.state.destination_approved)
+        self.assertEqual(window.state.destination_intent_id, replacement["intentId"])
+
     def test_private_write_failure_requests_cooperative_stop_not_termination(self):
         window = source_window()
         window.helper.write.side_effect = OSError("private helper detail")
