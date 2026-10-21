@@ -8,7 +8,7 @@ on:
         required: true
         default: build
         type: choice
-        options: [build, handoff, parity-ui, parity-normal-open]
+        options: [build, handoff, parity-ui, parity-normal-open, native-delivery]
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   parity_ui:
-    if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open'
+    if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open' || inputs.phase == 'native-delivery'
     runs-on: windows-2025
     timeout-minutes: 20
     env:
@@ -53,10 +53,19 @@ jobs:
           python -m pip install --disable-pip-version-check --require-hashes -r source/collector/windows-requirements.lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Measure normal opening against the actual desktop work area
+        if: inputs.phase != 'native-delivery'
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiParityRender\normal-open'
           python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $output --normal-open-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify actual Windows setup delivery with synthetic links
+        if: inputs.phase == 'native-delivery'
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiNativeDelivery'
+          New-Item -ItemType Directory -Path $output -Force | Out-Null
+          python source/collector/windows/tests/qualify_setup_delivery.py --output $output 2>&1 | Tee-Object -FilePath (Join-Path $output 'tests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify platform state and contact workspace guards
         if: inputs.phase == 'parity-ui'
@@ -83,7 +92,7 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw 'Original desktop mode restoration failed' }
             }
           }
-      - name: Retain measured Windows UI evidence
+      - name: Retain measured Windows qualification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -94,6 +103,8 @@ jobs:
             ${{ runner.temp }}/AmplifaiParityTests.log
             ${{ runner.temp }}/AmplifaiParityRender/**/*.png
             ${{ runner.temp }}/AmplifaiParityRender/**/*.json
+            ${{ runner.temp }}/AmplifaiNativeDelivery/*.json
+            ${{ runner.temp }}/AmplifaiNativeDelivery/*.log
 
   windows:
     if: inputs.phase == 'build'

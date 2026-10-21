@@ -19,6 +19,8 @@ GUI_FILES = (
     "collector/windows/session.py",
     "collector/windows/helper_process.py",
     "collector/windows/native_setup.py",
+    "collector/windows/native_run.py",
+    "collector/windows/setup_delivery.py",
     "collector/windows/updater.py",
     "collector/windows/installer_guard.py",
     "collector/windows/update_installer.py",
