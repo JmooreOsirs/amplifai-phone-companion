@@ -4,12 +4,18 @@ import android.app.Instrumentation;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.view.InputDevice;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -29,6 +35,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -57,10 +64,11 @@ final class SelectionLayoutCases {
                 "Use an explicitly disposable, WAN-isolated emulator; preserve loopback");
         require(Build.FINGERPRINT.startsWith("generic") || Build.HARDWARE.contains("ranchu") ||
                 Build.HARDWARE.contains("goldfish"), "Selection fixtures must not run on a physical phone");
-        int width = switch (arguments.getString("scenario", "")) {
-            case "selection_layout_360" -> 360;
-            case "selection_layout_320_large" -> 320;
-            case "selection_layout_768" -> 768;
+        String scenario = arguments.getString("scenario", "");
+        int width = switch (scenario) {
+            case "selection_layout_360", "selection_ime_360" -> 360;
+            case "selection_layout_320_large", "selection_ime_320_large" -> 320;
+            case "selection_layout_768", "selection_ime_768" -> 768;
             default -> throw new AssertionError("Unknown selection layout scenario");
         };
         float scale = width == 320 ? 1.5f : 1f;
@@ -71,7 +79,7 @@ final class SelectionLayoutCases {
         try {
             instrumentation.waitForIdleSync();
             fixture = new SelectionLayoutCases(instrumentation, activity, arguments);
-            return fixture.verify(width, scale);
+            return fixture.verify(width, scale, scenario.startsWith("selection_ime_"));
         } catch (Exception | AssertionError failure) {
             if (fixture != null) fixture.recordFailure(failure);
             throw failure;
@@ -97,7 +105,7 @@ final class SelectionLayoutCases {
                 ? new File(external, arguments.getString("scenario")) : null;
     }
 
-    private String verify(int width, float scale) throws Exception {
+    private String verify(int width, float scale, boolean withIme) throws Exception {
         evidence.put("requestedWidthDp", width).put("widthDp", root.getWidth() / density)
                 .put("heightDp", root.getHeight() / density)
                 .put("fontScale", activity.getResources().getConfiguration().fontScale);
@@ -130,6 +138,7 @@ final class SelectionLayoutCases {
             require(review.isEnabled() && review.isShown(), "Review is not accessible after selecting a contact");
         });
         instrumentation.waitForIdleSync();
+        if (withIme) return verifyIme();
         capture("populated");
         main(() -> {
             Rect beforeHeader = bounds(header), beforeActions = bounds(actions), beforeNavigation = bounds(navigation);
@@ -179,8 +188,7 @@ final class SelectionLayoutCases {
         awaitLayout(() -> choices.getChildCount() == 100, "Cleared search did not restore contacts");
         main(() -> { review.performClick(); require(detailsScroll.isShown(), "Review text remains hidden behind the selection pane"); });
         awaitLayout(() -> get("reviewed", Boolean.class), "Actual local review did not finish");
-        main(() -> recordControl("reviewAfterAsyncText", get("review", TextView.class), null));
-        capture("review");
+        verifyFullReviewReachable();
         main(() -> {
             require(get("review", TextView.class).getText().toString().contains("0 matching calls") &&
                     get("review", TextView.class).getText().toString().contains("SMS unavailable/not read"),
@@ -246,8 +254,153 @@ final class SelectionLayoutCases {
                 require(status.getLayout().getEllipsisCount(line) == 0, "Full error explanation was truncated");
         });
         capture("error-details");
-        evidence.put("checks", "fixed controls; independent choices; actual bounds; native styles; paging; empty search; review/change; bulk Cancel; keyboard focus; all-page selection/clear; zero/unavailable; full error");
+        evidence.put("checks", "fixed controls; independent choices; actual bounds; native styles; paging; empty search; review/change; bulk Cancel; keyboard focus; all-page selection/clear; zero/unavailable; full review/error");
         return writeReceipt("passed");
+    }
+
+    private void verifyFullReviewReachable() throws Exception {
+        TextView text = get("review", TextView.class);
+        awaitLayout(() -> text.getLayout() != null && !text.isLayoutRequested() && !detailsScroll.isLayoutRequested(),
+                "Final reviewed text did not finish layout");
+        AtomicBoolean initiallyVisible = new AtomicBoolean();
+        main(() -> {
+            recordControl("reviewAfterAsyncText", text, null);
+            Rect visible = new Rect();
+            initiallyVisible.set(text.getGlobalVisibleRect(visible) && visible.equals(bounds(text)));
+            for (int line = 0; line < text.getLayout().getLineCount(); line++)
+                require(text.getLayout().getEllipsisCount(line) == 0, "Reviewed text was truncated");
+        });
+        evidence.put("reviewInitiallyFullyVisible", initiallyVisible.get());
+        capture("review");
+        focusWithKeyboard("fullReview", text);
+        main(() -> requireFullyVisible("reviewAfterKeyboard", text));
+        capture("review-accessible");
+    }
+
+    private String verifyIme() throws Exception {
+        require(Build.VERSION.SDK_INT >= 30, "Measured IME fixtures require Android API30 or newer");
+        evidence.put("configuredIme", Settings.Secure.getString(activity.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD));
+        main(() -> {
+            require(!imeVisible(), "Begin the IME fixture with the keyboard dismissed");
+            requireChoicesWithoutIme();
+        });
+        @SuppressWarnings("unchecked") Set<Long> selected = get("selectedIds", Set.class);
+        Set<Long> expected = Set.copyOf(selected);
+        showKeyboard();
+        main(() -> requireImeControls("ime-review", review));
+        capture("ime-review");
+        instrumentation.sendStringSync("305");
+        awaitLayout(() -> "305".contentEquals(search.getText()) && choices.getChildCount() == 1 &&
+                get("pageIndicator", TextView.class).getText().toString().startsWith("1–1 of 1"),
+                "Typed search did not filter the synthetic contacts");
+        main(() -> {
+            require(expected.equals(selected), "Typing changed the selected contacts");
+            requireImeControls("ime-filtered", review);
+        });
+        capture("ime-filtered");
+        for (int i = 0; i < 3; i++) instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_DEL);
+        awaitLayout(() -> search.length() == 0 && choices.getChildCount() == 100, "Keyboard deletion did not restore the contact page");
+        dismissKeyboard(expected);
+        capture("ime-dismissed");
+        tap("reviewAfterIme", review);
+        awaitLayout(() -> get("reviewed", Boolean.class), "Local review did not finish after keyboard dismissal");
+        verifyFullReviewReachable();
+        tap("returnToSelection", navigation);
+        showKeyboard();
+        main(() -> requireImeControls("ime-handoff", get("handoffButton", Button.class)));
+        capture("ime-handoff");
+        main(() -> {
+            set("bulkSelectionActive", true);
+            get("cancelSelectAll", Button.class).setVisibility(View.VISIBLE);
+            invoke("refreshActions");
+        });
+        instrumentation.waitForIdleSync();
+        main(() -> requireImeControls("ime-cancel", get("cancelSelectAll", Button.class)));
+        capture("ime-cancel");
+        tap("cancelWithIme", get("cancelSelectAll", Button.class));
+        main(() -> {
+            require(!get("bulkSelectionActive", Boolean.class) && expected.equals(selected),
+                    "Cancel with the keyboard visible changed the prior selection");
+        });
+        dismissKeyboard(expected);
+        evidence.put("checks", "installed docked IME; actual insets and bounds; search/Review/Handoff/Cancel access; typed search/delete; dismissal preserves selection; full review reachable by keyboard focus; no-IME minimum retained");
+        return writeReceipt("passed");
+    }
+
+    private boolean imeVisible() {
+        WindowInsets insets = root.getRootWindowInsets();
+        return insets != null && insets.isVisible(WindowInsets.Type.ime());
+    }
+
+    private void showKeyboard() throws Exception {
+        tap("searchBeforeIme", search);
+        awaitLayout(this::imeVisible, "The installed keyboard did not become visible; no IME dimensions were simulated");
+        instrumentation.getUiAutomation().waitForIdle(300, 5_000);
+        instrumentation.waitForIdleSync();
+    }
+
+    private void tap(String identity, View target) {
+        Rect rect = new Rect();
+        main(() -> { requireFullyVisible(identity, target); rect.set(bounds(target)); });
+        long start = SystemClock.uptimeMillis();
+        for (int action : new int[]{MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP}) {
+            MotionEvent event = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action,
+                    rect.exactCenterX(), rect.exactCenterY(), 0);
+            event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            try { instrumentation.sendPointerSync(event); }
+            finally { event.recycle(); }
+        }
+        instrumentation.waitForIdleSync();
+    }
+
+    private void dismissKeyboard(Set<Long> expected) throws Exception {
+        main(() -> require(imeVisible(), "Keyboard was no longer visible before dismissal"));
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK);
+        awaitLayout(() -> !imeVisible(), "Back did not dismiss the installed keyboard");
+        instrumentation.getUiAutomation().waitForIdle(300, 5_000);
+        instrumentation.waitForIdleSync();
+        main(() -> {
+            require(!activity.isFinishing() && expected.equals(get("selectedIds", Set.class)),
+                    "Keyboard dismissal left the Activity or changed selected contacts");
+            requireChoicesWithoutIme();
+        });
+    }
+
+    private void requireChoicesWithoutIme() {
+        require(contactScroll.getHeight() >= Math.max(Math.round(96 * density), choices.getChildAt(0).getHeight() * 2),
+                "The no-IME viewport lost its two-row/96dp minimum");
+    }
+
+    private void requireImeControls(String identity, Button action) {
+        WindowInsets insets = root.getRootWindowInsets();
+        require(insets != null && insets.isVisible(WindowInsets.Type.ime()), "The installed keyboard is not visible");
+        Insets ime = insets.getInsets(WindowInsets.Type.ime());
+        Insets system = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+        Rect window = new Rect(); root.getWindowVisibleDisplayFrame(window);
+        Rect metrics = activity.getWindowManager().getCurrentWindowMetrics().getBounds();
+        Rect usable = new Rect(metrics.left + Math.max(system.left, ime.left), metrics.top + Math.max(system.top, ime.top),
+                metrics.right - Math.max(system.right, ime.right), metrics.bottom - Math.max(system.bottom, ime.bottom));
+        if (!usable.intersect(window)) usable.setEmpty();
+        Rect choicesVisible = new Rect();
+        if (!contactScroll.getGlobalVisibleRect(choicesVisible) || !choicesVisible.intersect(usable)) choicesVisible.setEmpty();
+        int minimum = Math.max(Math.round(48 * density), choices.getChildAt(0).getHeight());
+        boolean wholeRowVisible = false;
+        for (int i = 0; i < choices.getChildCount(); i++)
+            if (choicesVisible.contains(bounds(choices.getChildAt(i)))) { wholeRowVisible = true; break; }
+        try {
+            evidence.put(identity, new JSONObject().put("imeVisible", true).put("imeInsets", ime.toString())
+                    .put("systemInsets", system.toString()).put("windowMetrics", metrics.toShortString())
+                    .put("visibleWindow", window.toShortString()).put("usable", usable.toShortString())
+                    .put("choicesVisible", choicesVisible.toShortString()).put("choicesHeightDp", choicesVisible.height() / density)
+                    .put("minimumChoicesDp", minimum / density).put("wholeRowVisible", wholeRowVisible));
+        } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+        require(ime.bottom > 0, "A docked installed keyboard is required to measure its actual occlusion");
+        requireFullyVisible(identity + "Search", search);
+        requireFullyVisible(identity + "Action", action);
+        require(search.isFocused() && action.isEnabled(), "IME input or applicable action is unavailable: " + identity);
+        require(usable.contains(bounds(search)) && usable.contains(bounds(action)), "Search or action overlaps the actual IME/system bounds: " + identity);
+        require(choicesVisible.height() >= minimum && wholeRowVisible,
+                "IME leaves fewer than one full contact row or 48dp of usable choices: " + identity);
     }
 
     private void recordFailure(Throwable failure) {
@@ -275,7 +428,7 @@ final class SelectionLayoutCases {
 
     private void focusWithKeyboard(String identity, View target) {
         main(() -> recordControl(identity + "BeforeKeyboard", target, target.requestFocus()));
-        // Keyboard input makes native button focus requests meaningful. Visibility is checked afterward.
+        // Keyboard input makes native control focus requests meaningful. Visibility is checked afterward.
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_TAB);
         instrumentation.waitForIdleSync();
         main(() -> {

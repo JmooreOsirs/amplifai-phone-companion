@@ -152,9 +152,9 @@ emulator dimensions are not evidence of the rendered viewport. Matched-view
 screenshots, these runtime checks and physical-device acceptance remain
 separate from local compilation and unit/lint results.
 
-The optional `capture_screenshots` flag writes four PNGs (`populated`,
-`scrolled`, `review`, `error-details`) after settled frames and a `receipt.json`
-with relative filenames beneath the target app's external-files directory,
+The optional `capture_screenshots` flag writes PNGs (`populated`,
+`scrolled`, `review`, `review-accessible`, `error-details`) after settled frames
+and a `receipt.json` with relative filenames beneath the target app's external-files directory,
 `instrumentation-selection-layout/<scenario>/`. The names are bounded and
 reused for that scenario. UiAutomation or file-access failures are reported as
 unavailable screenshots; they do not replace the geometry assertions. This
@@ -169,6 +169,31 @@ change production focusability or force a scroll position. The receipt also
 records review text geometry after its asynchronous update. A failed run writes
 `failure.png` when capture is available and a receipt with `outcome: failed`
 before finishing the Activity; partial captures are not a passing result.
+
+The separate `selection_ime_360`, `selection_ime_320_large` and
+`selection_ime_768` scenarios use the same respective width/font requirements
+and instrumentation command. They require API30+ and the emulator's installed
+docked keyboard; they do not choose an IME, change keyboard settings or simulate
+keyboard dimensions. An actual touchscreen event on Search must open that
+keyboard, confirmed by visible IME insets. The receipt records its configured
+identity, actual IME/system insets, window metrics and unobscured control/list
+rectangles. Search and the applicable Review, Handoff or bulk Cancel action
+must remain fully visible above the keyboard. The IME-specific list gate is at
+least one complete contact row and 48dp of usable choices. The existing
+two-row/96dp minimum applies before showing the keyboard and after dismissal;
+the original no-IME scenarios retain that gate throughout selection.
+
+IME fixtures type a synthetic search through input events, delete the query,
+dismiss with Back and verify that selected IDs are unchanged. They also check
+the actual local review, return to selection with its Handoff action, and
+exercise synthetic bulk Cancel while the keyboard remains visible. They never
+activate Handoff or read a phone provider. Capture names include `ime-review`,
+`ime-filtered`, `ime-dismissed`, `ime-handoff`, `ime-cancel`, `review` and
+`review-accessible`, plus `failure` when needed. Both scenario families retain
+the original review geometry/image after asynchronous text growth, report
+`reviewInitiallyFullyVisible`, then use native keyboard focus and require the
+full untruncated review text to be reachable. A partially visible initial
+review is recorded as such, even when the later reachability check passes.
 
 ## Permission and coverage boundaries
 
