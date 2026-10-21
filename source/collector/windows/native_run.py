@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from native_setup import (
-    APPROVE_PATH, CLAIM_PATH, DISCLOSURE, ORIGIN, SETUP_SECONDS, ApprovalRequest, ApprovedRun,
+    APPROVE_PATH, CLAIM_PATH, DISCLOSURE, ORIGIN, RUN_SECONDS, SETUP_SECONDS, ApprovalRequest, ApprovedRun,
     ClaimRequest, ClientIdentity, SetupClaim, SetupLink, SetupProtocolError, categories, digest,
     identifier, json_object, request_body, strict_object, timestamp,
 )
@@ -26,6 +26,7 @@ ROUTES = {CLAIM_PATH: (8192, (200,)), APPROVE_PATH: (16384, (200, 201)),
           BIND_PATH: (2048, (200,)), VERIFY_PATH: (2048, (200,))}
 REQUEST_SECONDS = 20
 REFRESH_SECONDS = 15
+CLOCK_SKEW_SECONDS = 60
 
 
 @dataclass(frozen=True, repr=False)
@@ -144,6 +145,8 @@ class NativeRun:
         self.next_refresh = 0.0
         self.claim_started = None
         self.approval_started = None
+        self.claim_started_monotonic = self.approval_started_monotonic = 0.0
+        self.claim_deadline = self.run_deadline = 0.0
         self.accepted = False
         self.operation_id = None
         self.start_body = self.bind_body = None
@@ -158,7 +161,13 @@ class NativeRun:
 
     @property
     def current(self):
-        return self.run is not None and self.run.expires_at > self.now() and self.phase not in ("refused", "cancelled")
+        return (self.run is not None and self.run.expires_at > self.now() and self.monotonic() < self.run_deadline
+                and self.phase not in ("refused", "cancelled"))
+
+    @property
+    def claim_current(self):
+        return (self.claim is not None and self.claim.expires_at > self.now()
+                and self.monotonic() < self.claim_deadline)
 
     def _send(self, action, path, body):
         if self.pending is not None:
@@ -172,18 +181,20 @@ class NativeRun:
             raise SetupProtocolError("Finish or cancel the current setup first")
         self.claim_request = ClaimRequest.create(SetupLink.parse(url), self.client)
         self.claim_started = self.now()
+        self.claim_started_monotonic = self.monotonic()
         self.phase = "claiming"
         return self._send("claim", CLAIM_PATH, self.claim_request.body)
 
     def agree(self, accepted):
         self.accepted = bool(type(accepted) is bool and accepted and self.phase == "pending_approval"
-                             and self.claim.expires_at > self.now())
+                             and self.claim_current)
 
     def approve(self):
-        if not self.accepted or self.phase != "pending_approval" or self.claim.expires_at <= self.now():
+        if not self.accepted or self.phase != "pending_approval" or not self.claim_current:
             raise SetupProtocolError("A current native agreement is required")
         self.approval_request = ApprovalRequest.create(self.claim, self.claim_request)
         self.approval_started = self.now()
+        self.approval_started_monotonic = self.monotonic()
         self.phase = "approving"
         return self._send("approve", APPROVE_PATH, self.approval_request.body)
 
@@ -292,7 +303,7 @@ class NativeRun:
         self.message = "Confirmation is unavailable. Retry the same operation; collection and transfer wait for confirmation."
 
     def timeout(self):
-        if self.run is not None and self.run.expires_at <= self.now() and self.phase not in ("cancelled", "refused"):
+        if self.run is not None and not self.current and self.phase not in ("cancelled", "refused"):
             self._refused()
             return True
         if self.pending is not None and self.monotonic() >= self.deadline:
@@ -320,14 +331,25 @@ class NativeRun:
             action = operation.action
             if action == "claim":
                 claim = SetupClaim.parse(outcome.body, self.claim_request)
-                if not self.now() < claim.expires_at <= self.claim_started + timedelta(seconds=SETUP_SECONDS):
+                if not self.now() < claim.expires_at <= self.claim_started + timedelta(seconds=SETUP_SECONDS + CLOCK_SKEW_SECONDS):
                     raise SetupProtocolError("Setup has expired or changed its lifetime")
+                self.claim_deadline = min(self.claim_started_monotonic + SETUP_SECONDS,
+                    self.monotonic() + (claim.expires_at - self.now()).total_seconds())
+                if self.monotonic() >= self.claim_deadline:
+                    raise SetupProtocolError("Setup has expired")
                 self.claim, self.phase, self.accepted = claim, "pending_approval", False
             elif action == "approve":
                 run = ApprovedRun.parse(outcome.body, self.approval_request)
-                if (run.expires_at <= self.now() or run.approved_at < self.approval_started
-                        or run.approved_at > self.now()):
+                if (run.expires_at <= self.now()
+                        or run.approved_at < self.approval_started - timedelta(seconds=CLOCK_SKEW_SECONDS)
+                        or run.approved_at > self.now() + timedelta(seconds=CLOCK_SKEW_SECONDS)):
                     raise SetupProtocolError("Approval cannot be confirmed")
+                # Request timestamps allow bounded skew. Neither wall-clock rollback nor
+                # replay can renew the maximum lifetime anchored to the original approval.
+                self.run_deadline = min(self.approval_started_monotonic + RUN_SECONDS,
+                    self.monotonic() + (run.expires_at - self.now()).total_seconds())
+                if self.monotonic() >= self.run_deadline:
+                    raise SetupProtocolError("Prepared run has expired")
                 self.run, self.phase = run, "prepared"
             elif action == "start":
                 if not self.current or preparation(outcome.body, self.run, self.operation_id) != "current":

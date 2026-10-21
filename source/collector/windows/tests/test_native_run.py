@@ -74,6 +74,43 @@ def bound():
 
 
 class NativeRunTests(unittest.TestCase):
+    def test_bounded_server_clock_skew_and_monotonic_claim_lifetime(self):
+        for skew in (-45, 45):
+            clock = Clock()
+            clock.time += timedelta(seconds=skew)
+            run = NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)
+            accept(run, run.claim_link(LINK_TEXT))
+            run.agree(True)
+            accept(run, run.approve())
+            self.assertEqual(run.phase, "prepared")
+            self.assertLessEqual(run.run_deadline, 43200)
+        clock = Clock()
+        run = NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)
+        accept(run, run.claim_link(LINK_TEXT))
+        clock.seconds = 601
+        clock.time -= timedelta(hours=1)
+        run.agree(True)
+        self.assertFalse(run.accepted)
+        with self.assertRaises(SetupProtocolError):
+            run.approve()
+
+    def test_wall_clock_rollback_and_retry_do_not_extend_original_run_deadline(self):
+        run, clock = started()
+        original = run.run_deadline
+        clock.time -= timedelta(days=1)
+        clock.seconds = original + 1
+        self.assertFalse(run.current)
+        self.assertTrue(run.timeout())
+        self.assertEqual(run.phase, "refused")
+        run, clock = prepared()
+        run.run = None
+        run.phase = "approval_uncertain"
+        clock.advance(601)
+        # The recovered response remains the original twelve-hour approval.
+        accept(run, run.retry())
+        self.assertEqual(run.run_deadline, 43200)
+        self.assertLess(run.run_deadline - clock.seconds, 43200)
+
     def test_claim_and_agreement_never_start_collection(self):
         clock = Clock()
         run = NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)
