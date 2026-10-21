@@ -8,7 +8,7 @@ This control update uses `releaseAuthority: "owner-approved-source-release"` and
 
 RC28 was signed through the local Keychain path, published and promoted on October 17 under control `067b2bc687e3af81d033923608679578814c535b`, source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`. The combined website receipt records deployment `dpl_ChSk6sFXE75hatGNYW5q9qtDgxWr` and `physicalAcceptance=false`. See [the retained RC28 receipt](RELEASE-DELIVERY-CONTRACT.md#historical-rc28-deliveries-and-publication).
 
-RC29 native PR #12 merged normally by `JmooreOsirs` at `2026-10-19T19:04:36Z`, preserving head `45777eb7fa1ff965815cca6de6d042fb0895a679` in final native source `71dfabe3c3002e7a7787c649607607adafd29558`. The live merge actor and latest exact-head App15368 CI passed runtime validation. RC29 has no release-mode build, signed package or publication receipt yet. Its identities are ARM `2026.10.19-rc29` / `26101929` and Intel `2026.10.19-rc29-intel1` / `261019291`; current policy pins the final source and RC28 previous-feed floors.
+RC34 native [PR #23](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/23) merged normally by `JmooreOsirs` at `2026-10-21T20:01:23Z`, preserving candidate `12cedc1f0ed7a7ff70612dec6bc5727ddad16ec4` in final native source `8b4474bb42e6c15aeb59136f807bc37d8f09ff33`. Required exact-head CI run `39666011657` passed. The release identities are ARM `2026.10.21-rc34` / `26102134` and Intel Test `2026.10.21-rc34-intel1` / `261021341`. Current policy pins that final source and the verified public RC33 build/feed floors. RC34 release-mode artifacts, signing and publication are still pending.
 
 ## Source, control and signing custody
 
