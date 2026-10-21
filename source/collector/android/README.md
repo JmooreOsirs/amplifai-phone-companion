@@ -216,6 +216,27 @@ families retain the original review geometry/image after asynchronous text growt
 full untruncated review text to be reachable. A partially visible initial
 review is recorded as such, even when the later reachability check passes.
 
+`selection_ime_api29_360` runs the same interaction and geometry gates on one
+representative API29 emulator at 360dp/font100%. Its independent measurement uses
+[UiAutomation interactive windows](https://developer.android.com/reference/android/app/UiAutomation#getWindows())
+and [TYPE_INPUT_METHOD screen bounds](https://developer.android.com/reference/android/view/accessibility/AccessibilityWindowInfo#getBoundsInScreen(android.graphics.Rect)),
+not the production bottom-versus-stable inset comparison. The fixture enables
+`FLAG_RETRIEVE_INTERACTIVE_WINDOWS`, waits for actual window-change events, and
+restores and verifies the original flags before writing either outcome receipt.
+It records bounded window types/IDs/layers/focus/bounds, the focused application
+window, real display size, visible window and actual root screen origin. Legacy
+root-relative visibility rectangles are translated to screen coordinates. It
+reads no window titles or node contents. The usable choices/control area is
+clipped above the observed IME.
+API30+ fixtures retain their native inset/WindowMetrics observation path.
+
+The API29 scenario avoids API30 WindowMetrics/inset-type methods and uses
+independent HashSet snapshots instead of API31 `Set.copyOf`. Production source
+is unchanged by this fixture. Use the same revised test APK when comparing old
+and repaired app APKs, and retain each run's app/test hashes, receipt and PNGs
+separately. Compilation does not establish an API29 pass; the runtime operator
+must execute the scenario on the isolated emulator.
+
 ## Permission and coverage boundaries
 
 - `READ_SMS` and `READ_CALL_LOG` are hard-restricted permissions: an installer allowlist and an actual runtime grant are separate conditions. The official installer API defaults to allowlisting requested restricted permissions, but an OEM installer can apply different restrictions. A normal sideload can work; installation alone does not prove source access. [Permission reference](https://developer.android.com/reference/android/Manifest.permission#READ_SMS), [installer API](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setWhitelistedRestrictedPermissions(java.util.Set%3Cjava.lang.String%3E)).
