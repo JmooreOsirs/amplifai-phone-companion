@@ -31,12 +31,12 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     root = tk.Tk()
-    with patch.object(app, "HelperProcess"), patch.object(app.PhoneWindow, "pump"):
+    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     view._startup_update_pending = False
     records = []
     styles = app.ttk.Style(root)
-    for width, height in ((920, 800), (680, 680)):
+    for width, height in ((920, 749), (680, 680)):
         root.geometry(f"{width}x{height}+30+30")
         for state in ("checking", "available", "deferred", "installing", "failed"):
             view.state = idle()
@@ -52,6 +52,7 @@ def main() -> None:
             if state == "deferred":
                 view.state._capture_received = True
             view.refresh(); root.update()
+            view.show_workspace("setup")
             enabled = str(view.install_update_button.cget("state")) == "normal"
             if enabled != (state == "available"):
                 raise RuntimeError("Update installer control did not respect idle/unsaved gate")

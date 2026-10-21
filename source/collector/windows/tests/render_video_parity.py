@@ -58,10 +58,10 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=False)
 
     root = tk.Tk()
-    with patch.object(app, "HelperProcess"), patch.object(app.PhoneWindow, "pump"):
+    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     records = []
-    for width, height in ((920, 800), (680, 680)):
+    for width, height in ((920, 749), (680, 680)):
         root.geometry(f"{width}x{height}+30+30")
         view.state = checked_setting(False)
         view.refresh()

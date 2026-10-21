@@ -51,7 +51,25 @@ The wrapper owns status port `127.0.0.1:48752` through the shared bounded compan
 
 ### UI reference contract
 
-The released rc17 Tk source is authority: existing `TLabel`, `TButton`, `TFrame`, Arial typography, `BACKGROUND/PANEL/BORDER/HEADING/BODY/MUTED` tokens and 8/16-pixel row spacing. The two update buttons and status line use these primitives. No new fonts, cards, motion or color system is introduced. `render_update_acceptance.py` records 920×800 and 680×680 screenshots, computed native button styles and installer disabled states. These are actual Windows synthetic UI checks; they do not establish physical-phone or consumer installation acceptance.
+The accepted RC14 Windows renders (actual 920×749 and 680×680 content areas, plus the corrected 1.75 Tk scaling sample) and unchanged rc19 styles govern this candidate. Keep Tk `clam`, Arial body/checkbox/list 12, heading 22 bold, button 11 bold; button padding 16×12, outer padding 24 and existing 8/16 spacing. The existing background, panel, border, heading, body, muted, lime and selected-blue values and Listbox focus ring are unchanged. `_style` is identical to the compatibility commit.
+
+The October 21 layout composes existing `TFrame` and `TButton` controls into Contacts, Setup, and Details & recovery navigation. Contacts has fixed source context, search, all-page selection/cancel, paging, counts and applicable Review/Connect actions around the existing independently scrolling Listbox. Contact details is the existing focused-contact disclosure with a shorter button label. Account & recovery reveals the existing destination, temporary code, browser and cleanup actions. Review becomes Connect only after the exact local review is accepted; changing selection, receipts and Save authority still belong to `Session`.
+
+Setup and Details share a bounded scrolling native pane. The original guide, collection disclosure, agreement actions, update controls, full measured progress/source diagnostics, password entry and recovery actions remain there. Tab focus reveals offscreen controls. The checkbox inherits the existing style with responsive text wrapping. Full errors stay in Details; a bounded workspace message points to them. Navigation cannot grant consent, select contacts, pair or Save. A newly captured page opens Contacts once; status refreshes do not pull the user out of Details.
+
+Local headless checks cover the model/callback changes; no Tk window was launched on macOS. `test_contact_workspace` covers navigation preserving selection/handoff/approval, unavailable versus readable zero, receipt states, full-error preservation and focus behavior. The affected local suite passed 88 tests using the existing Python 3.12.12 environment. Source checks confirm the unchanged style method and exact four disclosure strings. These are source results, not Windows layout acceptance.
+
+Run the current synthetic render gate on an actual Windows desktop, from the repository root with the existing pinned Windows dependencies:
+
+```powershell
+$env:PYTHONPATH = 'source/collector;source/collector/windows;source/collector/windows/tests;source/script'
+python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $env:RUNNER_TEMP/contact-workspace
+python source/collector/windows/tests/render_ack_recovery.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $env:RUNNER_TEMP/contact-ack
+```
+
+`render_contact_workspace.py` checks real 920×749 and 680×680 content geometry at approximately 1.33 Tk scaling, then 680×680 at 1.75. Its ten states are populated readable zero, empty, loading, partial unavailable, reviewed destination pending, all-page check, preview received, pending receipt, saved recovery and a long error. The 36 screenshots include each state's contact workspace, full-error Details and Setup at each viewport. The receipt records actual widget coordinates, computed fonts/colors/padding/state maps, keyboard traversal, list scrolling and fixed header/action bounds. It fails if the window manager changes the requested content size, an action clips, fewer than three list rows fit, or list scrolling moves controls or selection.
+
+Existing guide, source-diagnostic and update render fixtures use the new pane and actual 920×749/680×680 targets. The old `render_scaling_acceptance.py` remains explicitly pinned to retained RC14 bytes; it must not be relabeled as this candidate. New Windows screenshots, matched reference review, frozen helper/MSI execution and installed-update gates remain pending. Synthetic Tk scaling is not physical DPI, screen-reader or consumer-PC acceptance.
 
 ## Package shape and qualification
 

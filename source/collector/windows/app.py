@@ -40,6 +40,41 @@ def window_title(state: Session) -> str:
     return WINDOW_TITLE
 
 
+def workspace_summary(state: Session) -> tuple[str, str]:
+    """Bounded navigation copy; full source/status evidence stays in Details."""
+    coverage = "Call and message coverage has not been read."
+    if state._capture_received:
+        coverage = " · ".join(
+            f"{label} unavailable" if source in state.missing else f"{label}: {count:,} readable"
+            for source, label, count in (("calls", "Calls", state.source_counts[0]),
+                                         ("messages", "Messages", state.source_counts[1])))
+    if state.saved_acknowledged:
+        status = "Account Save acknowledged. See recovery for cleanup."
+    elif state.save_receipt_pending:
+        status = "Save receipt pending. Keep this app open."
+    elif state.phase in {"error", "cancelling"}:
+        status = "Collection needs attention. Open Details & recovery."
+    elif state._selection_change_pending:
+        status = "Changing contacts. Waiting for the current handoff."
+    elif state._browser_received:
+        status = "Preview received. Account Save is still required."
+    elif state.destination_approved:
+        status = "Destination confirmed. Account Save is still required."
+    elif state.destination_intent_id:
+        status = "Confirm the signed-in account before preview transfer."
+    elif state.reviewed:
+        status = "Reviewed locally. Connect does not save."
+    elif state._pending_review is not None:
+        status = "Preparing the selected metadata for local review."
+    elif not state._capture_received:
+        status = "Local operation in progress. Open Details & recovery." if state.running else "Open Setup to review the collection agreement."
+    elif not state.contacts:
+        status = "No contacts on this page. Review source coverage in Details."
+    else:
+        status = "Select contacts, then review the selected metadata."
+    return coverage, status
+
+
 class PhoneWindow:
     def __init__(self, window: tk.Tk, helper: Path, logo: Path) -> None:
         self.window, self.state = window, Session()
@@ -52,6 +87,8 @@ class PhoneWindow:
         self.pair_code = tk.StringVar(value="No browser pairing has been created.")
         self.contact_query = tk.StringVar(value="")
         self.contact_page = tk.StringVar(value="No contacts loaded.")
+        self.workspace_coverage = tk.StringVar()
+        self.workspace_status = tk.StringVar()
         self.destination_status = tk.StringVar(value="Connect from your signed-in account after reviewing contacts.")
         self.guide_step = 0
         self.guide_heading = tk.StringVar()
@@ -116,12 +153,34 @@ class PhoneWindow:
         return item
 
     def _layout(self, logo: Path) -> None:
-        canvas = tk.Canvas(self.window, background=BACKGROUND, highlightthickness=0)
-        scroll = ttk.Scrollbar(self.window, command=canvas.yview)
+        shell = ttk.Frame(self.window, padding=24)
+        shell.pack(fill="both", expand=True)
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(1, weight=1)
+        self.navigation = ttk.Frame(shell)
+        self.navigation.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        self.workspace_buttons = {}
+        for name, text in (("contacts", "Contacts"), ("setup", "Setup"), ("details", "Details & recovery")):
+            button = ttk.Button(self.navigation, text=text, command=lambda target=name: self.show_workspace(target))
+            button.pack(side="left", padx=(0, 8))
+            self.workspace_buttons[name] = button
+        host = ttk.Frame(shell)
+        host.grid(row=1, column=0, sticky="nsew")
+        host.columnconfigure(0, weight=1)
+        host.rowconfigure(0, weight=1)
+        self.details_pane = ttk.Frame(host)
+        self.details_pane.grid(row=0, column=0, sticky="nsew")
+        self.contact_workspace = ttk.Frame(host)
+        self.contact_workspace.grid(row=0, column=0, sticky="nsew")
+        self.contact_workspace.grid_remove()
+        self._visible_workspace = "setup"
+        self._workspace_capture = False
+        canvas = self.details_canvas = tk.Canvas(self.details_pane, background=BACKGROUND, highlightthickness=0)
+        scroll = ttk.Scrollbar(self.details_pane, command=canvas.yview)
         canvas.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
-        outer = ttk.Frame(canvas, padding=24)
+        outer = self.details_content = ttk.Frame(canvas)
         content = canvas.create_window((0, 0), window=outer, anchor="nw")
         outer.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
         def resize(event):
@@ -131,7 +190,8 @@ class PhoneWindow:
                 widget = pending.pop()
                 pending.extend(widget.winfo_children())
                 if isinstance(widget, ttk.Label):
-                    widget.configure(wraplength=max(240, event.width - 48))
+                    widget.configure(wraplength=max(240, event.width))
+            ttk.Style(self.window).configure("Disclosure.TCheckbutton", wraplength=max(240, event.width - 32))
         canvas.bind("<Configure>", resize)
         header = ttk.Frame(outer)
         header.pack(fill="x")
@@ -143,9 +203,9 @@ class PhoneWindow:
         update_actions = ttk.Frame(outer)
         update_actions.pack(fill="x", pady=(0, 16))
         self.check_update_button = ttk.Button(update_actions, text="Check for updates", command=self.request_update_check)
-        self.check_update_button.pack(side="left", padx=(0, 8))
+        self.check_update_button.pack(anchor="w")
         self.install_update_button = ttk.Button(update_actions, text="Open verified update installer", command=self.install_update)
-        self.install_update_button.pack(side="left")
+        self.install_update_button.pack(anchor="w", pady=(8, 0))
         self.setup_toggle = ttk.Button(outer, text="Hide iPhone setup guide", command=self.toggle_setup_guide)
         self.setup_toggle.pack(anchor="w", pady=(0, 8))
         self.setup_guide = ttk.Frame(outer)
@@ -165,8 +225,8 @@ class PhoneWindow:
         self.label(outer, GUARANTEE)
         self.label(outer, "Selected contact names and numbers, call counterpart/time/direction/duration, and message counterpart/time/direction/channel provide relationship context. Message text, attachments, passwords and backups are never handed to the website.")
         self.label(outer, "An iPhone backup can contain private content locally. Cleanup can leave files after interruption. Trust and device permissions are your decision. Agreement permits collection, not marketing or account saving.")
-        self.agreement = ttk.Checkbutton(outer, text="I agree to this selected phone metadata collection disclosure.", variable=self.checked, command=self.toggle_agreement)
-        self.agreement.pack(anchor="w", pady=(0, 8))
+        self.agreement = ttk.Checkbutton(outer, text="I agree to this selected phone metadata collection disclosure.", variable=self.checked, command=self.toggle_agreement, style="Disclosure.TCheckbutton")
+        self.agreement.pack(fill="x", pady=(0, 8))
         self.label(outer, "You must check the box and select Agree to continue. Agree alone does not collect. Version: " + DISCLOSURE_VERSION)
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=(0, 16))
@@ -182,7 +242,8 @@ class PhoneWindow:
         self.decline_button.pack(side="left", padx=(0, 8))
         self.privacy_button = ttk.Button(secondary_actions, text="Full privacy guarantee", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/experience/data-privacy-guarantee"))
         self.privacy_button.pack(side="left")
-        ttk.Label(outer, textvariable=self.status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
+        self.status_details_label = ttk.Label(outer, textvariable=self.status, wraplength=820, justify="left")
+        self.status_details_label.pack(fill="x", pady=(0, 8))
         self.activity = ttk.Frame(outer)
         self.activity.pack(fill="x", pady=(0, 12))
         ttk.Label(self.activity, textvariable=self.activity_stage, wraplength=820, style="Heading.TLabel").pack(fill="x", pady=(0, 8))
@@ -195,65 +256,145 @@ class PhoneWindow:
         password_row = ttk.Frame(outer)
         password_row.pack(fill="x", pady=(0, 12))
         self.password = ttk.Entry(password_row, show="•", width=30)
-        self.password.pack(side="left", padx=(0, 8))
+        self.password.pack(fill="x", pady=(0, 8))
         self.password_button = ttk.Button(password_row, text="Send backup password privately", command=self.send_password)
-        self.password_button.pack(side="left")
-        self.label(outer, "Select contacts below. Nothing is selected by default; unavailable history is not zero activity.")
+        self.password_button.pack(anchor="w")
+        self.label(outer, "Select contacts in Contacts. Nothing is selected by default; unavailable history is not zero activity.")
         ttk.Label(outer, textvariable=self.coverage_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
         self.diagnostic_details_button = ttk.Button(outer, text="Source diagnostic details", command=self.show_source_diagnostics)
         self.diagnostic_details_button.pack(anchor="w", pady=(0, 8))
-        paging = ttk.Frame(outer)
-        paging.pack(fill="x", pady=(0, 8))
-        self.search_entry = ttk.Entry(paging, textvariable=self.contact_query, width=28)
-        self.search_entry.pack(side="left", padx=(0, 8))
-        self.search_button = ttk.Button(paging, text="Search names", command=self.search_contacts)
-        self.search_button.pack(side="left", padx=(0, 8))
+        self.account_details_label = self.label(outer, "After reviewing the exact selection, connect from your signed-in website account. Confirm the account and course here before preview transfer. Connect does not save; each source needs separate Save approval in the account.")
+        ttk.Label(outer, textvariable=self.destination_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
+        ttk.Label(outer, textvariable=self.pair_code, font=("Arial", 18, "bold"), foreground=LIME).pack(anchor="w")
+        self.copy_code_button = ttk.Button(outer, text="Copy temporary code for manual recovery", command=self.copy_pair_code)
+        self.copy_code_button.pack(anchor="w", pady=(8, 8))
+        self.open_account_button = ttk.Button(outer, text="Open approved account browser", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/phone/account"))
+        self.open_account_button.pack(anchor="w", pady=(0, 8))
+        recovery = ttk.Frame(outer)
+        recovery.pack(fill="x")
+        self.inspect = ttk.Button(recovery, text="Check temporary data", command=lambda: self.start("inspect"))
+        self.inspect.pack(anchor="w", pady=(0, 8))
+        self.clear = ttk.Button(recovery, text="Remove marked abandoned data", command=self.clear_residue)
+        self.clear.pack(anchor="w", pady=(0, 8))
+        self.stop_button = ttk.Button(recovery, text="Request stop", command=self.stop)
+        self.stop_button.pack(anchor="w", pady=(0, 8))
+        self.force_button = ttk.Button(recovery, text="Force stop", command=self.force)
+        self.force_button.pack(anchor="w")
+        pending = [outer]
+        while pending:
+            widget = pending.pop()
+            pending.extend(widget.winfo_children())
+            widget.bind("<FocusIn>", lambda event: self.reveal_detail_focus(event.widget), add="+")
+        self._layout_contacts()
+        self.show_workspace("setup")
+        self.refresh()
+
+    def _layout_contacts(self) -> None:
+        workspace = self.contact_workspace
+        workspace.columnconfigure(0, weight=1)
+        workspace.rowconfigure(4, weight=1)
+        self.workspace_context = ttk.Label(workspace, textvariable=self.workspace_coverage, justify="left")
+        self.workspace_context.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        search = ttk.Frame(workspace)
+        search.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.search_entry = ttk.Entry(search, textvariable=self.contact_query, width=20)
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.search_entry.bind("<Return>", lambda _event: self.search_contacts())
+        self.search_button = ttk.Button(search, text="Search names", command=self.search_contacts)
+        self.search_button.pack(side="left")
+        selection = ttk.Frame(workspace)
+        selection.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        self.select_all_button = ttk.Button(selection, text="Select all contacts", command=self.select_all_contacts)
+        self.select_all_button.pack(side="left", padx=(0, 8))
+        self.cancel_select_all_button = ttk.Button(selection, text="Stop check", command=self.cancel_select_all)
+        self.cancel_select_all_button.pack(side="left", padx=(0, 8))
+        self.clear_all_button = ttk.Button(selection, text="Clear all", command=self.clear_all_contacts)
+        self.clear_all_button.pack(side="left")
+        paging = ttk.Frame(workspace)
+        paging.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         self.previous_button = ttk.Button(paging, text="Previous", command=self.previous_contacts)
         self.previous_button.pack(side="left", padx=(0, 8))
         self.next_button = ttk.Button(paging, text="Next", command=self.next_contacts)
-        self.next_button.pack(side="left")
-        selection_actions = ttk.Frame(outer)
-        selection_actions.pack(fill="x", pady=(0, 8))
-        self.select_all_button = ttk.Button(selection_actions, text="Select all contacts", command=self.select_all_contacts)
-        self.select_all_button.pack(side="left", padx=(0, 8))
-        self.cancel_select_all_button = ttk.Button(selection_actions, text="Stop check", command=self.cancel_select_all)
-        self.cancel_select_all_button.pack(side="left", padx=(0, 8))
-        self.clear_all_button = ttk.Button(selection_actions, text="Clear all", command=self.clear_all_contacts)
-        self.clear_all_button.pack(side="left")
-        ttk.Label(outer, textvariable=self.contact_page).pack(anchor="w", pady=(0, 8))
-        contact_frame = ttk.Frame(outer)
-        contact_frame.pack(fill="both", expand=True)
+        self.next_button.pack(side="left", padx=(0, 8))
+        self.page_label = ttk.Label(paging, textvariable=self.contact_page, justify="left")
+        self.page_label.pack(side="left", fill="x", expand=True)
+        self.page_label.bind("<Configure>", lambda event: self.page_label.configure(wraplength=event.width))
+        contact_frame = ttk.Frame(workspace)
+        contact_frame.grid(row=4, column=0, sticky="nsew")
         self.contacts = tk.Listbox(contact_frame, selectmode=tk.EXTENDED, exportselection=False, height=6, background=PANEL, foreground=HEADING, selectbackground=BLUE, selectforeground=BACKGROUND, highlightbackground=BORDER, highlightcolor=LIME, font=("Arial", 12), activestyle="underline")
         scrollbar = ttk.Scrollbar(contact_frame, command=self.contacts.yview)
         self.contacts.configure(yscrollcommand=scrollbar.set)
         self.contacts.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
-        self.details_button = ttk.Button(outer, text="Source details for focused contact", command=self.show_source_details)
-        self.details_button.pack(anchor="w", pady=(8, 8))
-        self.review_button = ttk.Button(outer, text="Review selected metadata", command=self.review)
-        self.review_button.pack(anchor="w", pady=(8, 8))
-        self.change_selection_button = ttk.Button(outer, text="Change selected contacts", command=self.change_selection)
-        self.change_selection_button.pack(anchor="w", pady=(0, 8))
-        self.label(outer, "After reviewing the exact selection, connect from your signed-in website account. Confirm the account and course here before preview transfer. Connect does not save; each source needs separate Save approval in the account.")
-        ttk.Label(outer, textvariable=self.destination_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
-        ttk.Label(outer, textvariable=self.pair_code, font=("Arial", 18, "bold"), foreground=LIME).pack(anchor="w")
-        self.pair_button = ttk.Button(outer, text="Connect signed-in account", command=self.pair)
-        self.pair_button.pack(anchor="w", pady=(8, 8))
-        self.copy_code_button = ttk.Button(outer, text="Copy temporary code for manual recovery", command=self.copy_pair_code)
-        self.copy_code_button.pack(anchor="w", pady=(0, 8))
-        ttk.Button(outer, text="Open approved account browser", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/phone/account")).pack(anchor="w", pady=(0, 8))
-        recovery = ttk.Frame(outer)
-        recovery.pack(fill="x")
-        self.inspect = ttk.Button(recovery, text="Check temporary data", command=lambda: self.start("inspect"))
-        self.inspect.pack(side="left", padx=(0, 8))
-        self.clear = ttk.Button(recovery, text="Remove marked abandoned data", command=self.clear_residue)
-        self.clear.pack(side="left", padx=(0, 8))
-        self.stop_button = ttk.Button(recovery, text="Request stop", command=self.stop)
-        self.stop_button.pack(side="left", padx=(0, 8))
-        self.force_button = ttk.Button(recovery, text="Force stop", command=self.force)
-        self.force_button.pack(side="left")
-        self.refresh()
+        self.workspace_status_label = ttk.Label(workspace, textvariable=self.workspace_status, justify="left")
+        self.workspace_status_label.grid(row=5, column=0, sticky="ew", pady=(8, 8))
+        self.contact_actions = ttk.Frame(workspace)
+        self.contact_actions.grid(row=6, column=0, sticky="ew")
+        self.review_button = ttk.Button(self.contact_actions, text="Review selected metadata", command=self.review)
+        self.review_button.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.pair_button = ttk.Button(self.contact_actions, text="Connect signed-in account", command=self.pair)
+        self.pair_button.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.details_button = ttk.Button(self.contact_actions, text="Contact details", command=self.show_source_details)
+        self.details_button.grid(row=0, column=1, sticky="w", pady=(0, 8))
+        self.change_selection_button = ttk.Button(self.contact_actions, text="Change selected contacts", command=self.change_selection)
+        self.change_selection_button.grid(row=1, column=0, sticky="w", padx=(0, 8))
+        self.account_recovery_button = ttk.Button(self.contact_actions, text="Account & recovery", command=lambda: self.show_workspace("details", account=True))
+        self.account_recovery_button.grid(row=1, column=1, sticky="w")
+        def resize(event):
+            for label in (self.workspace_context, self.workspace_status_label):
+                label.configure(wraplength=event.width)
+        workspace.bind("<Configure>", resize)
+
+    def show_workspace(self, name: str, *, account: bool = False) -> None:
+        if name not in self.workspace_buttons:
+            raise ValueError("Unknown native workspace")
+        self._visible_workspace = name
+        for target, button in self.workspace_buttons.items():
+            button.configure(style="Primary.TButton" if target == name else "TButton")
+        self.workspace_buttons[name].focus_set()
+        if name == "contacts":
+            self.details_pane.grid_remove()
+            self.contact_workspace.grid()
+        else:
+            self.contact_workspace.grid_remove()
+            self.details_pane.grid()
+            self.window.update_idletasks()
+            anchor = self.account_details_label if account else self.status_details_label
+            offset = 0 if name == "setup" else anchor.winfo_y()
+            self.details_canvas.yview_moveto(offset / max(1, self.details_content.winfo_height()))
+
+    def reveal_detail_focus(self, widget) -> None:
+        """Tab traversal reveals controls inside the bounded details pane."""
+        if not self.details_pane.winfo_ismapped() or not widget.winfo_ismapped():
+            return
+        canvas = self.details_canvas
+        top = widget.winfo_rooty() - self.details_content.winfo_rooty()
+        bottom = top + widget.winfo_height()
+        visible = canvas.canvasy(0)
+        height = canvas.winfo_height()
+        if top < visible or bottom > visible + height:
+            offset = top if top < visible else bottom - height
+            canvas.yview_moveto(offset / max(1, self.details_content.winfo_height()))
+
+    def refresh_workspace(self) -> None:
+        coverage, status = workspace_summary(self.state)
+        self.workspace_coverage.set(coverage)
+        self.workspace_status.set(status)
+        if self.state.reviewed:
+            self.review_button.grid_remove()
+            self.pair_button.grid()
+            if self.window.focus_get() == self.review_button:
+                self.pair_button.focus_set()
+        else:
+            self.pair_button.grid_remove()
+            self.review_button.grid()
+            if self.window.focus_get() == self.pair_button:
+                self.review_button.focus_set()
+        if self.state._capture_received and not self._workspace_capture:
+            self.show_workspace("contacts")
+            self.contacts.focus_set()
+        self._workspace_capture = self.state._capture_received
 
     def readable_text(self, parent, *, height: int):
         value = tk.Text(parent, height=height, wrap="word", background=PANEL, foreground=HEADING,
@@ -573,10 +714,12 @@ class PhoneWindow:
         self.cancel_select_all_button.configure(state="normal" if state.selecting_all and not state._select_all_cancel else "disabled")
         self.clear_all_button.configure(state="normal" if state.can_select and not state.selecting_all and state.pending_contact is None and state.selected_ids else "disabled")
         if state._capture_received:
-            self.contact_page.set((f"Checking {state.select_all_visited} of {state.total_contacts} contacts. "
-                                   f"Selection remains {len(state.selected_ids)} until complete.") if state.selecting_all else
-                f"{len(state.contacts)} on this page · {state.total_contacts} total contacts · "
-                f"{len(state.selected_ids)} selected across pages")
+            self.contact_page.set((f"Checking {state.select_all_visited:,} / {state.total_contacts:,}\n"
+                                   f"{len(state.selected_ids):,} selected; check pending") if state.selecting_all else
+                f"{len(state.contacts):,} on page / {state.total_contacts:,} total\n"
+                f"{len(state.selected_ids):,} selected across pages")
+        else:
+            self.contact_page.set("No contacts loaded.")
         self.pair_button.configure(state="normal" if state.can_pair else "disabled")
         self.password_button.configure(state="normal" if state.phase == "password_required" else "disabled")
         self.password.configure(state="normal" if state.phase == "password_required" else "disabled")
@@ -595,6 +738,7 @@ class PhoneWindow:
         self.copy_code_button.configure(state="normal" if state.pair_code else "disabled")
         self.destination_status.set(("Server-confirmed destination: " + state.destination_email + " · " + state.destination_course)
                                     if state.destination_intent_id else "Connect from your signed-in account after reviewing contacts.")
+        self.refresh_workspace()
 
     def enqueue_update_check(self) -> bool:
         with self.update_lock:

@@ -32,12 +32,12 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     root = tk.Tk()
-    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app.PhoneWindow, "pump"):
+    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     view._startup_update_pending = False
     styles = app.ttk.Style(root)
     records = []
-    for width, height in ((920, 800), (680, 680)):
+    for width, height in ((920, 749), (680, 680)):
         root.geometry(f"{width}x{height}+30+30")
         for name in ("current-unavailable", "previous-run", "readable-zero-with-history"):
             if name == "current-unavailable":
@@ -53,6 +53,8 @@ def main() -> None:
                     state.handle(capture(missing=[], unavailableReasons={}))
             view.state = state
             view.render_contacts(); view.refresh(); root.update()
+            view.show_workspace("details")
+            root.update()
             expected = "Current collection source details" if name == "current-unavailable" else "Previous run diagnostics"
             if expected not in view.coverage_status.get() or str(view.diagnostic_details_button.cget("state")) != "normal":
                 raise RuntimeError("Native diagnostic label or disclosure state differs from session facts")
@@ -60,7 +62,7 @@ def main() -> None:
                 raise RuntimeError("Historical diagnostics changed a readable zero")
             label = next(widget for widget in children(root) if isinstance(widget, app.ttk.Label)
                          and str(widget.cget("textvariable")) == str(view.coverage_status))
-            canvas = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Canvas))
+            canvas = view.details_canvas
             left, right = canvas.winfo_rootx(), canvas.winfo_rootx() + canvas.winfo_width()
             button = view.diagnostic_details_button
             if button.winfo_rootx() < left or button.winfo_rootx() + button.winfo_width() > right:

@@ -58,6 +58,7 @@ def source_window():
     window.checked = Mock()
     window.events = queue.Queue()
     window.refresh = Mock()
+    window.refresh_workspace = Mock()
     window.contact_query = Mock()
     window.contact_page = Mock()
     window._rendering_contacts = False
@@ -88,7 +89,7 @@ class GuiGuardsTests(unittest.TestCase):
         window.state.select_all_contacts()
         type(window).refresh(window)
         self.assertEqual(window.state.selected_ids, {1})
-        self.assertIn("Selection remains 1", window.contact_page.set.call_args.args[0])
+        self.assertEqual("Checking 0 / 201\n1 selected; check pending", window.contact_page.set.call_args.args[0])
         window.select_all_button.configure.assert_called_with(state="disabled")
         window.cancel_select_all_button.configure.assert_called_with(state="normal")
         window.review_button.configure.assert_called_with(state="disabled")
