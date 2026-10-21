@@ -227,7 +227,14 @@ It records bounded window types/IDs/layers/focus/bounds, the focused application
 window, real display size, visible window and actual root screen origin. Legacy
 root-relative visibility rectangles are translated to screen coordinates. It
 reads no window titles or node contents. The usable choices/control area is
-clipped above the observed IME.
+clipped above the measured IME/display intersection. The receipt retains both
+raw `imeWindow` and intersected `visibleImeWindow` bounds. The visible IME must
+span the full display width and reach its bottom; the full-row, minimum-height
+and action visibility gates still apply. An observed API29 keyboard reported
+raw bounds `[0,1130][1080,2020]` on a `[0,0][1080,1920]` display while its image
+showed a docked keyboard. The API supplies screen coordinates; the fixture
+uses [Rect.intersect](https://developer.android.com/reference/android/graphics/Rect#intersect(android.graphics.Rect))
+to measure the visible overlap without an assumed overscan or padding value.
 API30+ fixtures retain their native inset/WindowMetrics observation path.
 
 The API29 scenario avoids API30 WindowMetrics/inset-type methods and uses

@@ -525,21 +525,24 @@ final class SelectionLayoutCases {
         Point size = new Point(); activity.getWindowManager().getDefaultDisplay().getRealSize(size);
         int[] origin = new int[2]; root.getRootView().getLocationOnScreen(origin);
         Rect screen = new Rect(0, 0, size.x, size.y);
+        Rect visibleIme = new Rect(observed.ime);
+        if (!visibleIme.intersect(screen)) visibleIme.setEmpty();
         Rect usable = new Rect(observed.application);
         if (!usable.intersect(screen) || !usable.intersect(window)) usable.setEmpty();
-        usable.bottom = Math.min(usable.bottom, observed.ime.top);
+        usable.bottom = Math.min(usable.bottom, visibleIme.top);
         JSONObject measurement;
         try {
-            measurement = new JSONObject().put("imeVisible", !observed.ime.isEmpty())
+            measurement = new JSONObject().put("imeVisible", !visibleIme.isEmpty())
                     .put("imeObservation", "accessibility-window-bounds").put("windows", observed.windows)
-                    .put("imeWindow", observed.ime.toShortString()).put("applicationWindow", observed.application.toShortString())
+                    .put("imeWindow", observed.ime.toShortString()).put("visibleImeWindow", visibleIme.toShortString())
+                    .put("applicationWindow", observed.application.toShortString())
                     .put("screenBounds", screen.toShortString()).put("visibleWindow", window.toShortString())
                     .put("rootScreenX", origin[0]).put("rootScreenY", origin[1])
                     .put("usable", usable.toShortString());
         } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
-        boolean docked = !observed.ime.isEmpty() && !observed.application.isEmpty() &&
-                observed.ime.left <= screen.left && observed.ime.right >= screen.right &&
-                observed.ime.bottom >= window.bottom && screen.contains(observed.ime);
+        boolean docked = !visibleIme.isEmpty() && !observed.application.isEmpty() &&
+                visibleIme.left == screen.left && visibleIme.right == screen.right &&
+                visibleIme.bottom == screen.bottom && visibleIme.bottom >= window.bottom;
         requireImeChoices(identity, action, usable, measurement, docked);
     }
 
