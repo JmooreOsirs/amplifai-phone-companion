@@ -111,6 +111,18 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual(run.run_deadline, 43200)
         self.assertLess(run.run_deadline - clock.seconds, 43200)
 
+    def test_shorter_receipt_lifetime_stays_shorter_with_clock_skew(self):
+        clock = Clock()
+        clock.time -= timedelta(seconds=45)
+        run = NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)
+        accept(run, run.claim_link(LINK_TEXT))
+        run.agree(True)
+        operation = run.approve()
+        value = json.loads(response(run, "approve"))
+        value["expiresAt"] = value["preparation"]["expiresAt"] = "2026-10-21T22:05:00Z"
+        run.complete(operation, Outcome("accepted", request_body(value)))
+        self.assertEqual(run.run_deadline, 300)
+
     def test_claim_and_agreement_never_start_collection(self):
         clock = Clock()
         run = NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)

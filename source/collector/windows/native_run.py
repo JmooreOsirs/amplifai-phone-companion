@@ -346,7 +346,8 @@ class NativeRun:
                     raise SetupProtocolError("Approval cannot be confirmed")
                 # Request timestamps allow bounded skew. Neither wall-clock rollback nor
                 # replay can renew the maximum lifetime anchored to the original approval.
-                self.run_deadline = min(self.approval_started_monotonic + RUN_SECONDS,
+                lifetime = min(RUN_SECONDS, (run.expires_at - run.approved_at).total_seconds())
+                self.run_deadline = min(self.approval_started_monotonic + lifetime,
                     self.monotonic() + (run.expires_at - self.now()).total_seconds())
                 if self.monotonic() >= self.run_deadline:
                     raise SetupProtocolError("Prepared run has expired")
