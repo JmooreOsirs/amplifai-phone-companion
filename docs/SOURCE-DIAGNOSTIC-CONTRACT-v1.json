@@ -83,7 +83,8 @@
     "copy_checksum_mismatch",
     "sidecar_present",
     "schema_unsupported",
-    "validated_call_database"
+    "validated_call_database",
+    "unsupported_size_growth"
   ],
   "nullableValidationScopes": [
     "contacts_tables_v1",
@@ -113,6 +114,7 @@
     "This array contains failure/unavailable evidence, not successful-source metadata. Valid readable zero has no failure record.",
     "A completed capture or bridge contains only diagnostics for its current missing/unavailable source, with reason matching unavailableReasons. Fatal Contacts evidence is local only because required Contacts still fail closed.",
     "All fields enter schema1 payload or schema2 manifest hash, per-category Save fingerprint, persisted source receipt and report readback. Never place personal source rows in diagnostics.",
+    "unsupported_size_growth is diagnostic-only: proof statuses do not establish size reconciliation, SQLite integrity, or historical completeness. It never permits import of a larger encrypted Messages copy. Receivers must recognize this code before a changed companion is distributed.",
     "Older payloads may omit this field. Do not infer validation facts for older reports.",
     "Historical local diagnostics must be labeled previous run and never attached to a new capture or Save."
   ],

@@ -8,6 +8,7 @@ import json
 import plistlib
 import sqlite3
 import struct
+import subprocess
 import tempfile
 import unittest
 from contextlib import closing
@@ -226,6 +227,211 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
 
     def test_larger_than_manifest_plaintext_is_not_a_compatibility_case(self) -> None:
         self._reject_length(self._backup(delta=-4096))
+
+    def _growth_failure(self, **options) -> dict:
+        backup = self._backup(("messages",), delta=-4096, **options)
+        samples: list[dict] = []
+        with self.assertRaises(SelectedPayloadIntegrityError) as raised:
+            _extract_database(backup, DATABASES["messages"], self.copy_path / "messages",
+                              workspace=self.workspace, payload_diagnostic_callback=samples.append)
+        self.assertEqual(raised.exception.code, "selected_payload_length")
+        self.assertEqual(samples[-1]["result"], "length_mismatch")
+        safe = _payload_diagnostic_event(samples[-1])
+        self.assertIsNotNone(safe)
+        return safe
+
+    def test_one_page_larger_messages_collects_proof_but_never_imports(self) -> None:
+        # No SQLite parser is used on a contradictory copy, even when all
+        # byte-identity proofs match and the difference is exactly one page.
+        safe = self._growth_failure()
+        destination = self.copy_path / "messages"
+        with patch.object(sqlite_encrypted_size_compat.messages, "_validate",
+                          side_effect=AssertionError("must not parse growth")):
+            self.assertEqual(sqlite_encrypted_size_compat._validate({
+                "category": "messages", "path": str(destination),
+                "actual_size": safe["copiedBytes"], "manifest_size": safe["declaredBytes"],
+                "copied_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+            }), ("unsupported_size_growth", True))
+        self.assertEqual(safe["copiedBytes"] - safe["declaredBytes"], 4096)
+        self.assertEqual(safe["rawBytes"] - safe["copiedBytes"], 16)
+        self.assertEqual(safe["validationCode"], "unsupported_size_growth")
+        self.assertEqual((safe["producerDigest"], safe["copyDigest"], safe["sidecars"]),
+                         ("matched", "matched", "absent"))
+        self.assertFalse(sqlite_encrypted_size_compat.Validation(
+            "unsupported_size_growth", "encrypted_messages_database_v1", True, True,
+            True, True).accepted)
+        for private in ("PRIVATE_BODY", "+12025550123", str(self.root), "raw_digest", "key"):
+            self.assertNotIn(private, json.dumps(safe))
+
+    def test_larger_messages_missing_producer_proof_stays_insufficient(self) -> None:
+        safe = self._growth_failure(digest_mode="missing")
+        self.assertEqual((safe["validationCode"], safe["producerDigest"], safe["copyDigest"]),
+                         ("insufficient_manifest", "absent", "unknown"))
+
+    def test_larger_messages_wrong_or_plaintext_digest_never_substitutes(self) -> None:
+        for mode in ("wrong", "plaintext"):
+            with self.subTest(mode=mode):
+                self.backup_path = self.session / f"backup-{mode}"
+                self.backup_path.mkdir(mode=0o700)
+                safe = self._growth_failure(digest_mode=mode)
+                self.assertEqual((safe["validationCode"], safe["producerDigest"]),
+                                 ("checksum_mismatch", "mismatched"))
+
+    def test_larger_messages_sidecars_still_fail_closed(self) -> None:
+        for suffix in ("-wal", "-shm", "-journal"):
+            with self.subTest(suffix=suffix):
+                self.backup_path = self.session / f"backup-{suffix[1:]}"
+                self.backup_path.mkdir(mode=0o700)
+                safe = self._growth_failure(sidecar=("messages", suffix))
+                self.assertEqual((safe["validationCode"], safe["sidecars"]),
+                                 ("sidecar_present", "present"))
+
+    def test_larger_messages_copy_tampering_reports_mismatch(self) -> None:
+        from amplifai_phone import ios_backup
+        ordinary_copy = ios_backup.copy_backup_file
+
+        def tamper(*args, **kwargs):
+            copied = ordinary_copy(*args, **kwargs)
+            with Path(args[1]).open("r+b") as stream:
+                stream.seek(4096)
+                stream.write(b"x")
+            return copied
+
+        with patch.object(ios_backup, "copy_backup_file", side_effect=tamper):
+            safe = self._growth_failure()
+        self.assertEqual((safe["validationCode"], safe["copyDigest"]),
+                         ("copy_checksum_mismatch", "mismatched"))
+
+    def test_larger_messages_faulty_worker_success_cannot_admit_growth(self) -> None:
+        class FaultyWorker:
+            returncode = 0
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, *args, **kwargs):
+                return json.dumps({"code": "validated_messages_database",
+                                   "copy_checksum_matches": True}), None
+
+            def poll(self):
+                return 0
+
+        with patch.object(sqlite_encrypted_size_compat.subprocess, "Popen", FaultyWorker):
+            safe = self._growth_failure()
+        self.assertEqual(safe["validationCode"], "unavailable")
+
+    def test_larger_messages_sidecar_race_updates_diagnostic_status(self) -> None:
+        with patch.object(sqlite_encrypted_size_compat, "_sidecars_absent", side_effect=[True, False]):
+            safe = self._growth_failure()
+        self.assertEqual((safe["validationCode"], safe["sidecars"]), ("sidecar_present", "present"))
+
+    def test_larger_messages_source_replacement_rejects_identity(self) -> None:
+        from amplifai_phone import ios_backup
+        ordinary_copy = ios_backup.copy_backup_file
+
+        def replace_after_copy(*args, **kwargs):
+            copied = ordinary_copy(*args, **kwargs)
+            source = Path(args[0])
+            replacement = source.with_name(source.name + "-replacement")
+            replacement.write_bytes(source.read_bytes())
+            replacement.replace(source)
+            return copied
+
+        with patch.object(ios_backup, "copy_backup_file", side_effect=replace_after_copy):
+            safe = self._growth_failure()
+        self.assertEqual(safe["validationCode"], "unsafe")
+
+    def test_larger_messages_worker_timeout_cannot_admit_growth(self) -> None:
+        class TimedOutWorker:
+            returncode = None
+            killed = False
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, *args, **kwargs):
+                if not self.killed:
+                    raise subprocess.TimeoutExpired("synthetic-worker", 1)
+                return "", None
+
+            def poll(self):
+                return 0 if self.killed else None
+
+            def kill(self):
+                self.killed = True
+
+        def cancel_validation():
+            raise subprocess.TimeoutExpired("synthetic-worker", 1)
+
+        backup = self._backup(("messages",), delta=-4096)
+        entry = backup.get_entry_by_domain_and_path("HomeDomain", DATABASES["messages"])
+        self._reject_length(backup, "messages")
+        destination = self.copy_path / "messages"
+        worker = TimedOutWorker()
+        # First bound callback runs before launch; the second runs after the
+        # synthetic worker times out, exercising bounded process teardown.
+        with patch.object(sqlite_encrypted_size_compat.subprocess, "Popen", return_value=worker):
+            calls = iter((None, "timeout"))
+
+            def bound():
+                if next(calls) == "timeout":
+                    cancel_validation()
+
+            result = sqlite_encrypted_size_compat.validate_encrypted_size_difference(
+                "messages", backup, entry, destination, destination.stat().st_size,
+                workspace=self.workspace, source_before=entry.real_path.stat(follow_symlinks=False),
+                raw_size=entry.real_path.stat().st_size,
+                raw_digest=hashlib.sha1(entry.real_path.read_bytes()).digest(),
+                copied_digest=hashlib.sha256(destination.read_bytes()).digest(),
+                bound_callback=bound,
+            )
+        self.assertEqual(result.code, "timed_out")
+        self.assertFalse(result.accepted)
+        self.assertTrue(worker.killed)
+
+    def test_exact_encrypted_messages_keep_existing_acceptance_path(self) -> None:
+        backup = self._backup(("messages",), delta=0)
+        with patch.object(sqlite_encrypted_size_compat.subprocess, "Popen",
+                          side_effect=AssertionError("exact sizes need no compatibility worker")):
+            accepted, samples = self._extract(backup, "messages")
+        self.assertTrue(accepted)
+        self.assertEqual(samples[-1]["result"], "match")
+
+    def test_larger_calls_remain_outside_diagnostic_growth_path(self) -> None:
+        backup = self._backup(("calls",), delta=-4096)
+        with patch.object(sqlite_encrypted_size_compat.subprocess, "Popen",
+                          side_effect=AssertionError("must not launch growth worker for calls")):
+            self._reject_length(backup, "calls")
+
+    def test_growth_worker_rejects_malformed_sizes_and_other_categories(self) -> None:
+        request = {"category": "messages", "path": "/not-a-session/never-read",
+                   "actual_size": 12288, "manifest_size": 8192, "copied_sha256": "a" * 64}
+        for fields in ({"actual_size": True}, {"manifest_size": False},
+                       {"actual_size": 8192}, {"manifest_size": 0},
+                       {"actual_size": 2**63}, {"manifest_size": 2**63},
+                       {"category": "contacts"}, {"category": "calls"}):
+            with self.subTest(fields=fields):
+                self.assertEqual(sqlite_encrypted_size_compat._validate({**request, **fields}),
+                                 ("unsafe", None))
+
+    def test_larger_messages_remains_unavailable_in_partial_capture(self) -> None:
+        backup = self._backup(tuple(DATABASES), delta=-4096)
+        # Required Contacts must keep their ordinary exact-size path. Adjust
+        # only its fictional manifest entry, leaving Messages contradictory.
+        db = backup._manifest_db._conn
+        for category in ("contacts", "calls"):
+            relative = DATABASES[category]
+            entry = backup.get_entry_by_domain_and_path("HomeDomain", relative)
+            digest = hashlib.sha1(entry.real_path.read_bytes()).digest()
+            db.execute("UPDATE Files SET file=? WHERE relativePath=?",
+                       (self._archive(relative, entry.real_path.stat().st_size - 16, digest), relative))
+        db.commit()
+        capture = _parse_entries(backup, self.copy_path, datetime(2026, 10, 11, tzinfo=UTC),
+                                 RETAINED_HISTORY_START, workspace=self.workspace)
+        self.assertEqual(capture.missing_sources, ("messages",))
+        self.assertEqual(len(capture.messages.records), 0)
+        self.assertEqual(capture.source_diagnostics[0]["validationCode"], "unsupported_size_growth")
+        self.assertEqual(dict(capture.unavailable_reasons)["messages"], "selected_payload_length")
 
     def test_ciphertext_truncation_never_reaches_size_compatibility(self) -> None:
         backup = self._backup()

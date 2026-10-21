@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
 
+from .call_accounting import call_accounting
 from .ios_backup import IPhoneCapture, capture_source_diagnostics
 from .metadata import (
     Contact,
@@ -79,6 +80,8 @@ class PagedTransfer:
                     raise ValueError("Source coverage counts are inconsistent")
                 sources[category] = {"rowsSeen": seen, "rowsIncluded": count,
                                      "pageCount": pages, "chainSha256": chain}
+            # Local diagnostic state is deliberately outside the bound manifest.
+            self.call_accounting = call_accounting(capture.calls, sources["calls"]["rowsIncluded"])
             self.manifest = {
                 "schema": 2, "platform": "iphone", "since": capture.since,
                 "collectedAt": capture.collected_at,

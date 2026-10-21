@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from uuid import uuid4
 
+from .call_accounting import call_accounting
 from .ios_backup import IPhoneCapture, capture_source_diagnostics
 from .metadata import interactions_for_contacts, select_people
 from .paged_transfer import PagedTransfer
@@ -80,6 +81,10 @@ class LocalHTTPServer(ThreadingHTTPServer):
 
 def selected_metadata(capture: IPhoneCapture, ids: set[int]) -> bytes:
     """Serialize a strict allowlist, never source DBs, message bodies or passwords."""
+    return _selected_metadata(capture, ids)[0]
+
+
+def _selected_metadata(capture: IPhoneCapture, ids: set[int]) -> tuple[bytes, dict[str, int | None] | None]:
     if not ids:
         raise BridgeError("Select at least one contact")
     contacts = select_people(capture.contacts, ids)
@@ -132,7 +137,7 @@ def selected_metadata(capture: IPhoneCapture, ids: set[int]) -> bytes:
     encoded = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode()
     if len(encoded) > MAX_TRANSFER_BYTES:
         raise BridgeError("Selected metadata exceeds the local handoff limit")
-    return encoded
+    return encoded, call_accounting(capture.calls, included["calls"])
 
 
 class BridgeServer:
@@ -156,7 +161,10 @@ class BridgeServer:
         self.transfer = PagedTransfer(
             capture, ids, capture.review_workspace.directory / f"handoff-{self.handoff_id}.sqlite3"
         ) if capture.review_workspace is not None and capture.record_store is not None else None
-        self.payload = selected_metadata(capture, ids) if self.transfer is None else b""
+        if self.transfer is None:
+            self.payload, self.call_accounting = _selected_metadata(capture, ids)
+        else:
+            self.payload, self.call_accounting = b"", self.transfer.call_accounting
         self.payload_sha256 = self.transfer.sha256 if self.transfer is not None else hashlib.sha256(self.payload).hexdigest()
         self.acknowledged_saved = False
         self.browser_confirmed_saved = False

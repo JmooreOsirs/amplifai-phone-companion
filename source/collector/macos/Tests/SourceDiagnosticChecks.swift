@@ -38,6 +38,14 @@ enum SourceDiagnosticChecks {
         let decoded = try event(["kind": "capture", "sourceDiagnostics": [valid]])
         try require(decoded.sourceDiagnostics?.count == 1,
                     "Exact fourteen-field records must decode")
+        var growth = valid
+        growth["validationCode"] = "unsupported_size_growth"
+        growth["declaredBytes"] = 8192; growth["copiedBytes"] = 12288; growth["rawBytes"] = 12304
+        growth["sidecars"] = "absent"
+        let unsupported = try event(["kind": "capture", "sourceDiagnostics": [growth]])
+        try require(unsupported.sourceDiagnostics?.first?.validationCode == "unsupported_size_growth" &&
+                    unsupported.sourceDiagnostics?.first?.result == "length_mismatch",
+                    "Proved copy identity must not turn unsupported growth into an accepted source")
         for key in SourceDiagnostic.fields {
             var value = valid; value.removeValue(forKey: key)
             try rejected(["kind": "capture", "sourceDiagnostics": [value]], "Every diagnostic key is required, including nullables")

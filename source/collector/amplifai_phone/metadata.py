@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .call_accounting import CallAccounting
 from .record_store import RecordCollection, RecordStore
 from .workspace import WorkspaceError
 
@@ -126,6 +127,7 @@ class SourceResult:
     rows_seen: int
     records: Sequence[Contact | Interaction]
     excluded: int
+    call_accounting: CallAccounting | None = None
 
 
 def normalize_phone(raw: object) -> str | None:
@@ -346,6 +348,7 @@ def read_calls(
         )
         calls = []
         row_count = 0
+        invalid_date = before_cutoff = invalid_address = 0
         for row_count, row in enumerate(rows, 1):
             if store is None and row_count > MAX_ROWS_PER_SOURCE:
                 raise SourceReadCapacityLimit("Call row limit exceeded")
@@ -354,7 +357,14 @@ def read_calls(
             source_id = _checked_row_id(row["source_id"])
             when = _cocoa_datetime(row["ZDATE"])
             phone = normalize_phone(row["ZADDRESS"])
-            if when is None or when < since or phone is None:
+            if when is None:
+                invalid_date += 1
+                continue
+            if when < since:
+                before_cutoff += 1
+                continue
+            if phone is None:
+                invalid_address += 1
                 continue
             outgoing = row["ZORIGINATED"] == 1
             direction = (
@@ -384,7 +394,9 @@ def read_calls(
             else:
                 store.add("calls", call)
         records = tuple(calls) if store is None else store.collection("calls")
-        return SourceResult(row_count, records, row_count - len(records))
+        return SourceResult(row_count, records, row_count - len(records),
+                            CallAccounting(row_count, invalid_date, before_cutoff,
+                                           invalid_address, len(records)))
 
 
 def read_messages(

@@ -29,7 +29,8 @@ class QualificationProfileTests(unittest.TestCase):
 
     def files(self):
         paths = [self.root / "source/collector/tests" / (name + ".py")
-                 for name in ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh")]
+                 for name in ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh",
+                              "test_call_accounting", "test_source_diagnostic_flow")]
         paths += [self.root / "source/collector/macos/Tests" / name
                   for name in ("check_model.sh", "check_window_lifecycle.sh")]
         for path in paths:
@@ -139,7 +140,8 @@ class QualificationProfileTests(unittest.TestCase):
             producer.run_phone_run_checks(self.root)
         calls = run.call_args_list
         self.assertEqual(calls[0].args[0], [sys.executable, "-m", "unittest", "test_bridge_run_timing",
-                                          "test_bridge_recovery", "test_bridge_refresh", "-v"])
+                                          "test_bridge_recovery", "test_bridge_refresh", "test_call_accounting",
+                                          "test_source_diagnostic_flow", "-v"])
         self.assertEqual([Path(call.args[0][-1]).name for call in calls[1:]], ["check_model.sh", "check_window_lifecycle.sh"])
         for call in calls:
             self.assertTrue(call.kwargs["check"])

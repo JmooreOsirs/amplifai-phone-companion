@@ -220,6 +220,7 @@ enum AuthorityRefreshIntegrationChecks {
                     "No completion or save acknowledgement before all source pages")
         var rows = 0
         var pages = 0
+        var nextSourceIDs = ["contacts": 1, "calls": 1, "messages": 1]
         var chains = ["contacts": String(repeating: "0", count: 64), "calls": String(repeating: "0", count: 64),
                       "messages": String(repeating: "0", count: 64)]
         func readPage(_ category: String, _ cursor: Int) async throws -> Data {
@@ -232,6 +233,11 @@ enum AuthorityRefreshIntegrationChecks {
             try require(response.object["category"] as? String == category &&
                         response.object["cursor"] as? Int == cursor && digest(Data(chunk.utf8)) == sha,
                         "Page identity and payload SHA must match")
+            for (offset, record) in records.enumerated() {
+                try require(record["sourceId"] as? Int == nextSourceIDs[category]! + offset,
+                            "Every synthetic source ID arrives in order without duplication or omission")
+            }
+            nextSourceIDs[category]! += records.count
             chains[category] = digest(Data((chains[category]! + sha).utf8))
             rows += records.count
             pages += 1
@@ -303,6 +309,8 @@ enum AuthorityRefreshIntegrationChecks {
         for category in expected.keys {
             try require(chains[category] == sources[category]?["chainSha256"] as? String,
                         "Every transmitted page contributes to the original \(category) chain")
+            try require(nextSourceIDs[category] == expected[category]!.0 + 1,
+                        "Every generated \(category) row arrived exactly once")
         }
         try require(rows == 311149 && pages == 3114, "All raw records and all pages arrived exactly once in the assembled data")
         let complete = try await request("POST", "/v1/complete", token: token)
@@ -327,6 +335,14 @@ enum AuthorityRefreshIntegrationChecks {
         try require(expectedReport != nil && model.completedReportReturnURL == expectedReport &&
                     model.phoneRun == nil && model.localCollectionApproval == nil,
                     "Clean real-helper completion retains only the exact report route after retiring run authority")
+        let historyURL = Bundle.main.resourceURL!.appendingPathComponent("refresh-data/call-accounting/history.json")
+        let history = try JSONSerialization.jsonObject(with: Data(contentsOf: historyURL)) as? [String: Any]
+        let attempts = history?["attempts"] as? [[String: Any]]
+        let accounting = attempts?.first?["callAccounting"] as? [String: Int]
+        try require(attempts?.count == 1 && accounting == ["rawRows": 3711, "invalidDateRows": 0,
+                    "beforeCutoffRows": 0, "invalidAddressRows": 0, "validBeforeSelectionRows": 3711,
+                    "selectedRows": 3711, "selectedContactMismatchRows": 0],
+                    "Exact aggregate call counts survive the completed helper's ordinary session cleanup")
         let legacyPaths = [PhoneRunContract.claimPath, PhoneRunContract.statusPath, PhoneRunContract.bindPath]
         try require(!fixture.server.requests.contains { legacyPaths.contains($0.path) } &&
                     fixture.server.requests.filter { $0.path == PhoneRunContract.startPath }.count == 1,
