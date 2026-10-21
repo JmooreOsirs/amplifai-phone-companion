@@ -204,6 +204,8 @@ class CompanionStatusServer:
 
             def do_OPTIONS(self) -> None:
                 method = {"/v1/status": "GET", "/v1/check-update": "POST"}.get(self.path)
+                if self.path == "/v1/setup-capabilities" and owner.identity.platform == "macos":
+                    method = "GET"
                 requested = self.headers.get_all("Access-Control-Request-Headers") or []
                 headers = [name.strip().lower() for item in requested for name in item.split(",")]
                 if (not self._authorized() or method is None
@@ -214,7 +216,15 @@ class CompanionStatusServer:
                 self._reply(204, preflight=method)
 
             def do_GET(self) -> None:
-                if not self._authorized() or self.path != "/v1/status":
+                if not self._authorized():
+                    self._reply(403)
+                    return
+                if self.path == "/v1/setup-capabilities" and owner.identity.platform == "macos":
+                    identity = owner.identity.payload()
+                    del identity["protocol"]
+                    self._reply(200, {**identity, "protocols": ["phone-native-setup-v1"]})
+                    return
+                if self.path != "/v1/status":
                     self._reply(403)
                     return
                 try:

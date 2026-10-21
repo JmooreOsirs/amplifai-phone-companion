@@ -99,7 +99,7 @@ final class CollectorModel: ObservableObject {
         let runID: String
         let capability: String
         /// The exact prepared claim retained for uncertain claim recovery; status revalidates before Start.
-        let claimRequest: PhoneRunClaimRequest
+        let claimRequest: PhoneRunClaimRequest?
         var claim: PhoneRunClaim
         let returnBrowserBundleID: String?
         /// The course and categories the run saves to now; a replacement approval may update them, never the
@@ -113,6 +113,7 @@ final class CollectorModel: ObservableObject {
         var boundPayloadSha256: String?
         var admissionProtocol: PhoneRunAdmissionProtocol = .legacy
         var admittedOperation: PhoneRunOperation?
+        var nativeSetupID: String?
 
         /// Status supplies the original Start deadline. Legacy claim responses use a conservative local fallback.
         var startDeadline: Date {
@@ -123,6 +124,9 @@ final class CollectorModel: ObservableObject {
         var enrollmentID: String { claim.enrollmentID }
     }
     enum RunApproval: Equatable { case none, claiming, uncertain, refused, approved }
+    enum NativeSetupState: Equatable {
+        case none, claiming, claimUncertain, pendingApproval, approving, approvalUncertain, refused
+    }
     enum RunBinding: Equatable { case none, binding, bound, uncertain, refused }
     enum RunStatus: Equatable { case unchecked, checking, current, refreshing, uncertain, replacementRequired, expired, revoked }
     /// Revalidation of the run immediately before the helper launches.
@@ -207,6 +211,15 @@ final class CollectorModel: ObservableObject {
     private var pendingPreparationBind: PhoneRunPreparationBindRequest?
     @Published private(set) var runApproval: RunApproval = .none
     @Published private(set) var runApprovalMessage = ""
+    @Published private(set) var nativeSetupState: NativeSetupState = .none
+    @Published private(set) var nativeSetup: PhoneSetupClaim?
+    @Published private(set) var nativeSetupMessage = ""
+    @Published var nativeDisclosureAccepted = false
+    private var pendingSetupClaim: PhoneSetupClaimRequest?
+    private var pendingSetupApproval: PhoneSetupApprovalRequest?
+    private var setupBrowserBundleID: String?
+    private var setupClaimStartedAt = Date.distantPast
+    private var setupApprovalStartedAt = Date.distantPast
     @Published private(set) var runBinding: RunBinding = .none
     @Published private(set) var runStatus: RunStatus = .unchecked
     @Published private(set) var runStatusMessage = ""
@@ -379,7 +392,7 @@ final class CollectorModel: ObservableObject {
     private var commandReady: Bool { helperRunning || commandWriter != nil }
 
     var canPrepareCollection: Bool {
-        companionStatusAllowsWork && !updateInstallationInProgress && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty && !hasUnsavedReview &&
+        !hasPendingNativeSetup && companionStatusAllowsWork && !updateInstallationInProgress && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty && !hasUnsavedReview &&
             (phase == .idle || phase == .error || phase == .completed)
     }
 
@@ -423,9 +436,8 @@ final class CollectorModel: ObservableObject {
 
     var canConnect: Bool { canPrepareCollection && hasCurrentCollectionApproval }
 
-    /// Composes this run's local collection approval from the verified server run. There is no local consent
-    /// control: the owner's one agreement was given in the account. Nothing old is reused, and the approval is
-    /// consumed at launch, so it never authorizes a later collection.
+    /// Composes this run's local operation from the verified server receipt (legacy web approval or native v3).
+    /// It is consumed at launch and never authorizes a later collection.
     @discardableResult
     func composeRunCollectionApproval(callHistoryPreparation: CallHistoryPreparation) -> Bool {
         guard canPrepareCollection, hasStartableRun, runStatus == .current, candidateClaim == nil, let run = phoneRun,
@@ -457,7 +469,7 @@ final class CollectorModel: ObservableObject {
     /// A link is admitted only when nothing is running or in progress: no helper process, no collection,
     /// no review or handoff, and no claim in flight. A verified run that has not started may be replaced.
     var admitsRunLink: Bool {
-        readyForRunLinks && runAuthority != nil && !helperRunning && process == nil && runApproval != .claiming &&
+        !hasPendingNativeSetup && readyForRunLinks && runAuthority != nil && !helperRunning && process == nil && runApproval != .claiming &&
             !updateInstallationInProgress && !hasUnsavedReview && handoffID.isEmpty && !pairingRequested &&
             phoneRun?.collectionStarted != true && localCollectionApproval == nil && !startAfterSettingCheck &&
             startConfirmation != .confirming && candidateClaim == nil &&
@@ -476,7 +488,8 @@ final class CollectorModel: ObservableObject {
         guard admitsRunLink, let authority = runAuthority else { return false }
         // The same link again (the owner opened the app twice) is a duplicate: the grant, its capability and
         // any prepared claim stay exactly as they are.
-        if let run = phoneRun, run.runID == item.link.runID, run.claimRequest.bootstrap == item.link.bootstrap { return false }
+        if let run = phoneRun, run.runID == item.link.runID,
+           run.nativeSetupID != nil || run.claimRequest?.bootstrap == item.link.bootstrap { return false }
         if let pending = pendingClaim, pending.runID == item.link.runID, pending.bootstrap == item.link.bootstrap { return false }
         var capability = PhoneRunContract.newCapability()
         if capability == item.link.bootstrap { capability = PhoneRunContract.newCapability() }
@@ -516,7 +529,8 @@ final class CollectorModel: ObservableObject {
         if authority.admissionProtocol == .preparation {
             func finish(_ outcome: PhoneRunOutcome<PhonePreparationStatus>) {
                 switch outcome {
-                case .accepted(let status) where status.state == .current && status.operation == nil:
+                case .accepted(let status) where status.state == .current && status.operation == nil &&
+                    status.claim.disclosureVersion == PhoneRunContract.disclosureVersion:
                     completion(.accepted(status.claim))
                 case .accepted: completion(.refused(status: 409, code: "phone_run_changed"))
                 case .refused(let status, let code): completion(.refused(status: status, code: code))
@@ -540,7 +554,8 @@ final class CollectorModel: ObservableObject {
             }
             authority.status(statusRequest) { statusOutcome in
                 switch statusOutcome {
-                case .accepted(let status) where status.state == .current: completion(.accepted(status.claim))
+                case .accepted(let status) where status.state == .current &&
+                    status.claim.disclosureVersion != PhoneSetupContract.disclosureVersion: completion(.accepted(status.claim))
                 case .accepted, .refused: completion(.refused(status: 409, code: "phone_run_changed"))
                 case .uncertain: completion(.uncertain)
                 case .malformed: completion(.malformed)
@@ -579,7 +594,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func claimIsCurrent(_ claim: PhoneRunClaim) -> Bool {
-        PhoneRunContract.supportedDisclosureVersions.contains(claim.disclosureVersion) && claim.expiresAt > now() &&
+        claim.disclosureVersion != PhoneSetupContract.disclosureVersion &&
+            PhoneRunContract.supportedDisclosureVersions.contains(claim.disclosureVersion) && claim.expiresAt > now() &&
             claim.expiresAt <= now().addingTimeInterval(PhoneRunContract.runLifetime +
                 (runAuthority?.admissionProtocol == .preparation ? 60 : 3600))
     }
@@ -651,13 +667,14 @@ final class CollectorModel: ObservableObject {
 
     /// Not now: forget this verified, unstarted run. Nothing was collected.
     func dismissRunApproval() {
-        guard phoneRun?.collectionStarted != true, !helperRunning else { return }
+        guard !hasPendingNativeSetup, phoneRun?.collectionStarted != true, !helperRunning else { return }
         endPhoneRun()
         declineLocalCollection()
     }
 
     /// Ends this app's use of the run: completion, discard, or a collection that stopped.
     private func endPhoneRun() {
+        clearNativeSetup()
         pendingStartRequest = nil
         pendingPreparationBind = nil
         completedReportNavigation = nil
@@ -684,7 +701,153 @@ final class CollectorModel: ObservableObject {
         candidateNotice = ""
     }
 
-    var returnBrowserBundleID: String? { phoneRun?.returnBrowserBundleID ?? pendingClaimBrowser }
+    var returnBrowserBundleID: String? { phoneRun?.returnBrowserBundleID ?? setupBrowserBundleID ?? pendingClaimBrowser }
+
+    // MARK: Native setup and consent
+
+    var hasPendingNativeSetup: Bool { nativeSetupState != .none && nativeSetupState != .refused }
+
+    /// A pending setup cannot displace a verified legacy run or discard an uncertain one-use claim.
+    @discardableResult
+    func admitSetupLink(_ item: PendingSetupLink) -> Bool {
+        guard admitsRunLink, runAuthority?.admissionProtocol == .preparation, phoneRun == nil,
+              pendingClaim == nil, let authority = runAuthority else { return false }
+        guard let capability = PhoneRunContract.newCapability(),
+              let request = PhoneSetupClaimRequest(setupID: item.link.setupID, bootstrap: item.link.bootstrap,
+                capability: capability, requestID: UUID().uuidString.lowercased()) else { return false }
+        endPhoneRun()
+        declineLocalCollection()
+        if phase == .completed || phase == .error { errorMessage = ""; phase = .idle }
+        pendingSetupClaim = request
+        setupBrowserBundleID = item.returnBrowserBundleID
+        setupClaimStartedAt = now()
+        nativeSetupState = .claiming
+        authority.claimSetup(request) { [weak self] result in self?.setupClaimFinished(request, result) }
+        return true
+    }
+
+    func retrySetupClaim() {
+        guard nativeSetupState == .claimUncertain, let request = pendingSetupClaim,
+              let authority = runAuthority else { return }
+        nativeSetupState = .claiming
+        nativeSetupMessage = ""
+        authority.claimSetup(request) { [weak self] result in self?.setupClaimFinished(request, result) }
+    }
+
+    private func setupClaimFinished(_ request: PhoneSetupClaimRequest, _ result: PhoneRunOutcome<PhoneSetupClaim>) {
+        guard nativeSetupState == .claiming, pendingSetupClaim == request else { return }
+        switch result {
+        case .accepted(let setup):
+            guard setup.setupID == request.setupID, setup.requestID == request.requestID,
+                  setup.disclosure == .pinned, setup.expiresAt > now(),
+                  setup.expiresAt <= setupClaimStartedAt.addingTimeInterval(PhoneSetupContract.lifetime + 60) else {
+                refuseNativeSetup()
+                return
+            }
+            nativeSetup = setup
+            nativeDisclosureAccepted = false
+            nativeSetupState = .pendingApproval
+        case .refused: refuseNativeSetup()
+        case .uncertain, .malformed:
+            nativeSetupState = .claimUncertain
+            nativeSetupMessage = "Your account setup could not be confirmed. Try again to check the same setup. Nothing has been approved or collected."
+        }
+    }
+
+    var canApproveNativeSetup: Bool {
+        nativeSetupState == .pendingApproval && nativeDisclosureAccepted &&
+            (nativeSetup?.expiresAt ?? .distantPast) > now() && pendingSetupApproval == nil &&
+            companionStatusAllowsWork && !updateInstallationInProgress && !helperRunning && process == nil
+    }
+
+    /// The deliberate native agreement action. Claim, polling, opening a link and rendering never call this.
+    func approveNativeSetup() {
+        guard canApproveNativeSetup, let setup = nativeSetup, let claim = pendingSetupClaim,
+              let capability = PhoneRunContract.newCapability(),
+              let request = PhoneSetupApprovalRequest(setup: setup, claimRequest: claim,
+                requestID: UUID().uuidString.lowercased(), runCapability: capability) else { return }
+        pendingSetupApproval = request
+        setupApprovalStartedAt = now()
+        sendSetupApproval(request)
+    }
+
+    /// A lost approval reply can be recovered after setup expiry. Only the exact original POST may recover it.
+    func retryNativeApproval() {
+        guard nativeSetupState == .approvalUncertain, let request = pendingSetupApproval else { return }
+        sendSetupApproval(request)
+    }
+
+    private func sendSetupApproval(_ request: PhoneSetupApprovalRequest) {
+        guard let authority = runAuthority else { return }
+        nativeSetupState = .approving
+        nativeSetupMessage = ""
+        authority.approveSetup(request) { [weak self] result in self?.setupApprovalFinished(request, result) }
+    }
+
+    private func setupApprovalFinished(_ request: PhoneSetupApprovalRequest,
+                                      _ result: PhoneRunOutcome<PhoneSetupApprovalReceipt>) {
+        guard nativeSetupState == .approving, pendingSetupApproval == request, nativeSetup == request.setup else { return }
+        switch result {
+        case .accepted(let receipt):
+            let claim = receipt.preparation.claim
+            guard receipt.setupID == request.setup.setupID, receipt.requestID == request.requestID,
+                  receipt.preparation.state == .current, receipt.preparation.operation == nil,
+                  claim.disclosureVersion == PhoneSetupContract.disclosureVersion,
+                  claim.enrollmentID == request.setup.enrollmentID, claim.email == request.setup.email,
+                  claim.course == request.setup.course, claim.categories == request.setup.categories,
+                  claim.expiresAt > now(), claim.expiresAt <= receipt.approvedAt.addingTimeInterval(PhoneRunContract.runLifetime),
+                  receipt.approvedAt >= setupApprovalStartedAt.addingTimeInterval(-60),
+                  receipt.approvedAt <= now().addingTimeInterval(60) else {
+                // The server may already have recorded consent. Keep the exact request for recovery.
+                nativeSetupState = .approvalUncertain
+                nativeSetupMessage = Self.nativeApprovalUncertainMessage
+                return
+            }
+            let browser = setupBrowserBundleID
+            clearNativeSetup()
+            cancelRunStatusCheck()
+            phoneRun = PhoneRun(runID: receipt.runID, capability: request.runCapability, claimRequest: nil, claim: claim,
+                                returnBrowserBundleID: browser, course: claim.course, categories: claim.categories,
+                                claimedAt: receipt.approvedAt, admissionProtocol: .preparation, nativeSetupID: receipt.setupID)
+            runApproval = .approved
+            runApprovalMessage = ""
+            runStatus = .unchecked
+            runStatusMessage = ""
+            declineLocalCollection()
+        case .refused: refuseNativeSetup()
+        case .uncertain, .malformed:
+            nativeSetupState = .approvalUncertain
+            nativeSetupMessage = Self.nativeApprovalUncertainMessage
+        }
+    }
+
+    private static let nativeApprovalUncertainMessage = "Your approval could not be confirmed. Retry the same approval to recover its result. To cancel, return to your original account tab. Collection stays off until confirmation."
+
+    /// Before approval, Not now only forgets the local setup. Server cancellation belongs to the signed-in tab.
+    func dismissNativeSetup() {
+        guard pendingSetupApproval == nil else { return }
+        clearNativeSetup()
+    }
+
+    private func clearNativeSetup() {
+        pendingSetupClaim = nil
+        pendingSetupApproval = nil
+        nativeSetup = nil
+        nativeSetupState = .none
+        nativeSetupMessage = ""
+        nativeDisclosureAccepted = false
+        setupBrowserBundleID = nil
+        setupClaimStartedAt = .distantPast
+        setupApprovalStartedAt = .distantPast
+    }
+
+    private func refuseNativeSetup() {
+        let browser = setupBrowserBundleID
+        clearNativeSetup()
+        setupBrowserBundleID = browser
+        nativeSetupState = .refused
+        nativeSetupMessage = "This setup is unavailable or has changed. Return to your account tab and start a new phone setup. Nothing can be collected from this setup."
+    }
 
     /// The run's categories describe what may be saved to the account. The unchanged helper still reads contacts,
     /// calls and message metadata for the local review; this label never claims a smaller local read.
@@ -706,7 +869,9 @@ final class CollectorModel: ObservableObject {
 
     /// The account page for this run's enrollment, or the account start page.
     var accountContinueURL: URL {
-        phoneRun.flatMap { Self.accountContinueURL(enrollmentID: $0.enrollmentID) } ?? Self.accountStartURL
+        if let enrollment = phoneRun?.enrollmentID ?? nativeSetup?.enrollmentID,
+           let url = Self.accountContinueURL(enrollmentID: enrollment) { return url }
+        return Self.accountStartURL
     }
 
     var accountControlURL: URL? {
@@ -1316,7 +1481,7 @@ final class CollectorModel: ObservableObject {
     }
     var canTerminateForUpdate: Bool {
         let settled = phase == .idle || phase == .completed || phase == .error
-        return settled && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty &&
+        return settled && !hasPendingNativeSetup && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty &&
             !hasUnsavedReview && !reviewPending && !pairingRequested &&
             (handoffID.isEmpty || handoffAcknowledged)
     }

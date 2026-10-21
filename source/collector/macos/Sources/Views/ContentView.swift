@@ -77,6 +77,10 @@ struct ContentView: View {
             showingFinderGuide = false
             scrollToCollectionSetup(setupScroll)
         }
+        .onChange(of: model.nativeSetupState) { _, _ in
+            showingFinderGuide = false
+            scrollToCollectionSetup(setupScroll)
+        }
         .onChange(of: model.backupEncryptionStatus) { _, _ in
             scrollToCollectionSetup(setupScroll)
         }
@@ -326,6 +330,8 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 18) {
             if showingFinderGuide {
                 FinderEncryptionGuide(model: model) { showingFinderGuide = false }
+            } else if model.nativeSetupState != .none {
+                NativeSetupView(model: model)
             } else if model.runApproval == .approved, let run = model.phoneRun {
                 // Re-evaluate the negotiated preparation/Start deadline without renewing authority.
                 TimelineView(.periodic(from: .now, by: 5)) { context in
@@ -343,7 +349,7 @@ struct ContentView: View {
         .panel()
     }
 
-    /// Without a verified run nothing can be collected: the one agreement happens in the account.
+    /// A plain launch has no account identity. The original signed-in tab must deliberately hand setup over.
     @ViewBuilder private var runStartContent: some View {
         Text("Collect phone data with your AMPLIFai account")
             .font(Brand.headingFont(28))
@@ -365,7 +371,7 @@ struct ContentView: View {
             Button("Approve again in your account") { openAccountStart() }
                 .buttonStyle(LimeButton())
         case .none, .approved:
-            Text("Approve this collection in your account, then return here to connect your iPhone.")
+            Text("In your signed-in AMPLIFai tab, choose Open app to connect this Mac to your account and course. Then follow the approval and iPhone steps here.")
                 .font(Brand.bodyFont(16))
             Button("Start in your AMPLIFai account") { openURL(CollectorModel.accountStartURL) }
                 .buttonStyle(LimeButton())

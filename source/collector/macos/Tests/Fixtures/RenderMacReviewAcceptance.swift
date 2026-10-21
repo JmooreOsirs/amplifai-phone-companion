@@ -6,6 +6,7 @@ import SwiftUI
 struct RenderMacReviewAcceptance {
     private enum FixtureError: Error { case unexpectedState(String) }
     private static var scrollEvidence: [String: [String: Any]] = [:]
+    private static var setupScrollEvidence: [String: [String: Any]] = [:]
 
     static func main() throws {
         let output = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -16,7 +17,9 @@ struct RenderMacReviewAcceptance {
         let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry", "adoption-retry", "adoption-checking", "adoption-recovered"] + shareStates
         let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
         let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
-        let setupStates = ["setup"] + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let nativeStates = ["native-claiming", "native-claim-uncertain", "native-consent", "native-consent-checked",
+                            "native-approving", "native-approval-uncertain", "native-refused", "native-expired"]
+        let setupStates = ["setup"] + nativeStates + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "organizing", "history", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
@@ -24,14 +27,37 @@ struct RenderMacReviewAcceptance {
         for state in states {
             var commands: [Data] = []
             let server = SimulatedPhoneRunServer()
+            let setupServer = SimulatedPhoneSetupServer()
+            let transport: PhoneRunTransport = nativeStates.contains(state) ? setupServer : server
             let model = CollectorModel(commandWriter: { commands.append($0) },
-                                       runAuthority: PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate))
+                                       runAuthority: PhoneRunAuthorityClient(transport: transport, schedule: PhoneRunAuthorityClient.immediate,
+                                           admissionProtocol: nativeStates.contains(state) ? .preparation : .legacy))
             let updater = CompanionUpdater(bundleInformation: [:])
             let start = Date()
             func admit() throws {
                 let run = server.createRun(email: "synthetic.owner@example.invalid", course: "SYNTHETIC review course")
                 guard let link = PhoneRunLink(url: server.appLink(run)) else { throw FixtureError.unexpectedState("link") }
                 model.admitRunLink(PendingRunLink(link: link, returnBrowserBundleID: nil))
+            }
+            if nativeStates.contains(state) {
+                if state == "native-claiming" { setupServer.holdReplies = true }
+                if state == "native-claim-uncertain" { setupServer.faults = [.loseReply, .dropRequest, .dropRequest] }
+                if state == "native-refused" { setupServer.revoke() }
+                model.admitSetupLink(setupServer.link)
+                if state == "native-consent-checked" { model.nativeDisclosureAccepted = true }
+                if state == "native-approving" || state == "native-approval-uncertain" {
+                    setupServer.holdReplies = state == "native-approving"
+                    if state == "native-approval-uncertain" { setupServer.faults = [.loseReply, .dropRequest, .dropRequest] }
+                    model.nativeDisclosureAccepted = true
+                    model.approveNativeSetup()
+                }
+                if state == "native-expired" {
+                    // Claim a setup with a short remaining lifetime, then render its expired state without waiting.
+                    model.now = { setupServer.expiresAt.addingTimeInterval(1) }
+                }
+                guard model.phoneRun == nil, !model.canConnect, commands.isEmpty else {
+                    throw FixtureError.unexpectedState("Native setup fixture enabled capture")
+                }
             }
             if !setupStates.contains(state) {
                 // A synthetic run, started on the simulated helper wire.
@@ -248,6 +274,8 @@ struct RenderMacReviewAcceptance {
                 "selectionNeedsReview": model.selectionNeedsReview, "canEditWorkspace": model.canEditWorkspace,
                 "handoffPresent": !model.handoffID.isEmpty, "browserReceived": model.browserReceived,
                 "runApproval": String(describing: model.runApproval), "runBinding": String(describing: model.runBinding),
+                "nativeSetup": String(describing: model.nativeSetupState),
+                "nativeConsentChecked": model.nativeDisclosureAccepted, "canStartCapture": model.canConnect,
                 "runStatus": String(describing: model.runStatus),
                 "approvalAdoptionPending": model.approvalAdoptionPending,
                 "canRetryApprovalAdoption": model.canRetryApprovalAdoption,
@@ -284,7 +312,7 @@ struct RenderMacReviewAcceptance {
         }
         let receipt: [String: Any] = ["renderer": "offscreen NSHostingView bitmap of production views", "contacts": 5501,
             "viewports": viewports.map { [$0.0, $0.1] }, "states": states, "fixturePreparationSeconds": timings,
-            "stateEvidence": stateEvidence, "contactScrollEvidence": scrollEvidence,
+            "stateEvidence": stateEvidence, "contactScrollEvidence": scrollEvidence, "setupScrollEvidence": setupScrollEvidence,
             "font": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
             "resolvedNativeStyle": [
                 "bodyFont": NSFont(name: "OpenSans-Regular", size: 16)?.fontName ?? "missing",
@@ -299,11 +327,12 @@ struct RenderMacReviewAcceptance {
             ],
             "guideSymbolsAvailable": ["iphone.gen3", "cable.connector.horizontal", "laptopcomputer", "lock.iphone"]
                 .allSatisfy { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil },
-            "screenCaptured": false, "windowCreated": false, "appActivated": false,
+            "screenCaptured": false, "windowCreated": states.contains(where: nativeStates.contains),
+            "windowShown": false, "appActivated": false,
             "collectorStarted": false, "ownerWorkspaceRead": false, "updateControllerStarted": false]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("mac-review-render-receipt.json"))
-        print("Rendered synthetic Mac states without a window, collection or account action")
+        print("Rendered synthetic Mac states without showing a window, collection or account action")
     }
 
     private static func rgb(_ color: Color) -> [Double] {
@@ -322,11 +351,59 @@ struct RenderMacReviewAcceptance {
                     .background(Color.yellow, in: Capsule()).padding(8)
             })
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        var validationWindow: NSWindow?
+        if path.lastPathComponent.hasPrefix("mac-native-") {
+            let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: width, height: height),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.animationBehavior = .none
+            window.contentView = hosting
+            validationWindow = window
+            var drained = false
+            DispatchQueue.main.async { drained = true }
+            while !drained { _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.1)) }
+            guard !window.isVisible, !window.isKeyWindow else { throw FixtureError.unexpectedState("Validation window became visible") }
+        }
+        defer { validationWindow?.contentView = nil; validationWindow?.close() }
         hosting.layoutSubtreeIfNeeded()
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { throw CocoaError(.coderInvalidValue) }
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
         try data.write(to: path, options: .atomic)
+        if path.lastPathComponent.hasPrefix("mac-native-") {
+            func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+            let scrollViews = descendants(hosting).compactMap { $0 as? NSScrollView }
+            guard scrollViews.count == 1, let scroll = scrollViews.first, let document = scroll.documentView else {
+                throw FixtureError.unexpectedState("\(path.lastPathComponent): native consent requires one setup scroll region")
+            }
+            let viewport = hosting.convert(scroll.bounds, from: scroll)
+            guard hosting.bounds.contains(viewport), viewport.height >= 44 else {
+                throw FixtureError.unexpectedState("\(path.lastPathComponent): setup viewport is outside the window")
+            }
+            let before = scroll.contentView.bounds.origin
+            guard document.frame.height > 0 else {
+                throw FixtureError.unexpectedState("Consent scroll document has not completed layout")
+            }
+            let scrolls = document.frame.height > scroll.contentView.bounds.height + 1
+            if scrolls {
+                scroll.contentView.scroll(to: NSPoint(x: before.x,
+                    y: max(0, document.frame.height - scroll.contentView.bounds.height)))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                hosting.layoutSubtreeIfNeeded()
+                guard scroll.contentView.bounds.origin != before else {
+                    throw FixtureError.unexpectedState("\(path.lastPathComponent): consent controls cannot be reached by scrolling")
+                }
+                guard let bottom = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { throw CocoaError(.coderInvalidValue) }
+                hosting.cacheDisplay(in: hosting.bounds, to: bottom)
+                guard let bytes = bottom.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+                let bottomPath = path.deletingPathExtension().appendingPathExtension("scrolled.png")
+                try bytes.write(to: bottomPath, options: .atomic)
+            }
+            setupScrollEvidence[path.lastPathComponent] = ["scrollRegions": 1, "overflow": scrolls,
+                "scrolled": scrolls, "documentFrame": [document.frame.width, document.frame.height],
+                "clipBounds": [scroll.contentView.bounds.width, scroll.contentView.bounds.height],
+                "viewport": [viewport.minX, viewport.minY, viewport.width, viewport.height]]
+        }
         if ["main", "review", "organizing", "unavailable", "history"].contains(where: { path.lastPathComponent.hasPrefix("mac-\($0)-") }) {
             func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
             let scrollViews = descendants(hosting).compactMap { $0 as? NSScrollView }

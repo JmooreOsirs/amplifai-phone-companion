@@ -212,10 +212,10 @@ enum PhoneRunFlowChecks {
         let second = server.createRun()
         try require(!inbox.receive(URL(string: "https://amplifai.satoris.ai/phone")!, returnBrowserBundleID: nil) &&
                     inbox.pending == nil, "Anything but a run link is ignored")
-        try require(inbox.receive(server.appLink(first), returnBrowserBundleID: nil) && inbox.pending?.link.runID == first.runID,
+        try require(inbox.receive(server.appLink(first), returnBrowserBundleID: nil) && inbox.pending == .run(PendingRunLink(link: PhoneRunLink(url: server.appLink(first))!, returnBrowserBundleID: nil)),
                     "A cold-start link waits for the model")
         inbox.receive(server.appLink(second), returnBrowserBundleID: nil)
-        try require(inbox.pending?.link.runID == second.runID && server.claimCount == 0,
+        try require(inbox.pending == .run(PendingRunLink(link: PhoneRunLink(url: server.appLink(second))!, returnBrowserBundleID: nil)) && server.claimCount == 0,
                     "At most one link is buffered; the newer one replaces it")
         inbox.attach(model)
         try require(inbox.pending != nil && server.claimCount == 0 && model.runApproval == .none,

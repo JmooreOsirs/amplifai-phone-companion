@@ -23,7 +23,7 @@ struct BrowserReturnControls: View {
                     Button("Reopen account") {
                         if model.phase == .completed {
                             model.continueToSignedInAccount { url, browser in openRecovery(url, browser: browser) }
-                        } else if model.browserOwnsFlow {
+                        } else if model.browserOwnsFlow || model.nativeSetupState != .none {
                             openRecovery(model.accountContinueURL, browser: model.returnBrowserBundleID)
                         }
                     }

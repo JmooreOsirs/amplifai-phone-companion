@@ -85,6 +85,20 @@ import Foundation
         URL(string: "amplifai-phone://start?run=\(run.runID)&bootstrap=\(run.bootstrap)")!
     }
 
+    /// Native setup fixture admission: the real server creates this only in its atomic consent transaction.
+    func createNativeRun(setup: PhoneSetupClaim, capability: String, approvedAt: Date) -> Run {
+        let created = createRun(email: setup.email, course: setup.course, categories: setup.categories,
+                                disclosureVersion: PhoneSetupContract.disclosureVersion)
+        var run = runs[created.runID]!
+        run.enrollmentID = setup.enrollmentID
+        run.capability = capability
+        run.claimedAt = approvedAt
+        run.expiresAt = approvedAt.addingTimeInterval(PhoneRunContract.runLifetime)
+        run.preparationMode = true
+        runs[created.runID] = run
+        return run
+    }
+
     func revoke(_ runID: String) { runs[runID]?.revoked = true }
     func changeApproval(_ runID: String) { runs[runID]?.approvalCurrent = false }
     /// A replacement approval in the account for the same owner and enrollment.
