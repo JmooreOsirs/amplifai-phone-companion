@@ -11,6 +11,7 @@ trap 'if [ -f "$native_temp/PhonePreparationWireChecks" ]; then unlink "$native_
 trap 'exit 130' HUP INT TERM
 swiftc -parse-as-library -target "$native_arch-apple-macos14.0" \
     "$native_root/collector/macos/Sources/Services/PhoneRunAuthority.swift" \
+    "$native_root/collector/macos/Sources/Services/PhoneSetupAuthority.swift" \
     "$native_root/collector/macos/Tests/PhonePreparationWireChecks.swift" \
     -o "$native_temp/PhonePreparationWireChecks"
 "$native_temp/PhonePreparationWireChecks"

@@ -85,6 +85,54 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(self.request(path="/v1/status?extra=1")[0], 403)
         self.assertEqual(self.request(path="/v1/metadata")[0], 403)
 
+    def test_setup_capabilities_match_current_status_without_tokens_or_account_data(self):
+        legacy = json.loads(self.request()[2])
+        token_count = len(self.server._tokens)
+        status, headers, body = self.request(path="/v1/setup-capabilities")
+        self.assertEqual(status, 200)
+        self.assertLessEqual(len(body), 4096)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["Access-Control-Allow-Origin"], ORIGIN)
+        fields = {key: legacy[key] for key in (
+            "schema", "product", "platform", "architecture", "channel", "bundleId", "version", "build")}
+        self.assertEqual(json.loads(body), {**fields, "protocols": ["phone-native-setup-v1"]})
+        self.assertEqual(len(self.server._tokens), token_count)
+        self.assertEqual(self.checks, 0)
+        # The additive route leaves the exact legacy status schema intact.
+        self.assertEqual(set(json.loads(self.request()[2])), set(legacy))
+
+    def test_setup_capabilities_preserve_origin_host_method_and_preflight_guards(self):
+        path = "/v1/setup-capabilities"
+        for origin in (None, "null", "https://evil.example", ORIGIN + ".evil.example"):
+            status, headers, _ = self.request(path=path, origin=origin)
+            self.assertEqual(status, 403)
+            self.assertNotIn("Access-Control-Allow-Origin", headers)
+        self.assertEqual(self.request(path=path, origin=OTHER_ORIGIN)[0], 200)
+        self.assertEqual(self.request(path=path, extra=(("Host", "evil.example"),))[0], 403)
+        self.assertEqual(self.request(path=path, extra=(("Origin", ORIGIN),))[0], 403)
+        self.assertEqual(self.request(path=path + "?extra=1")[0], 403)
+        self.assertEqual(self.request("POST", path=path, body=b"{}")[0], 403)
+        status, headers, body = self.request("OPTIONS", path=path, extra=(
+            ("Access-Control-Request-Method", "GET"), ("Access-Control-Request-Private-Network", "true")))
+        self.assertEqual((status, body), (204, b""))
+        self.assertEqual(headers["Access-Control-Allow-Methods"], "GET")
+        self.assertEqual(headers["Access-Control-Allow-Private-Network"], "true")
+
+    def test_windows_does_not_advertise_native_mac_setup(self):
+        self.server.identity = CompanionIdentity("windows", "x86_64", "windows-x64-test",
+            "ai.satoris.amplifai.phone.windows-candidate", "2026.10.21-test", "26102101")
+        self.assertEqual(self.request(path="/v1/setup-capabilities")[0], 403)
+        self.assertEqual(self.request()[0], 200)
+
+    def test_intel_setup_identity_matches_running_status(self):
+        self.server.identity = CompanionIdentity("macos", "x86_64", "macos-intel-test",
+            "ai.satoris.amplifai.phone.intel-candidate", "2026.10.21-test", "261021011")
+        status = json.loads(self.request()[2])
+        capabilities = json.loads(self.request(path="/v1/setup-capabilities")[2])
+        for field in ("platform", "architecture", "channel", "bundleId", "version", "build"):
+            self.assertEqual(capabilities[field], status[field])
+        self.assertEqual(capabilities["protocols"], ["phone-native-setup-v1"])
+
     def test_private_network_preflight(self):
         status, headers, body = self.request("OPTIONS", extra=(
             ("Access-Control-Request-Method", "GET"),

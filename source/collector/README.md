@@ -9,13 +9,26 @@ advertises their capabilities. Android-specific behavior is in
 
 ## Current Mac preparation and account handoff
 
-The website's combined `phone-run-v2` approval covers collection and automatic
-saving of the contacts later chosen in the companion. New Mac clients use the
-additive `phone-start-v1` protocol: claim the bootstrap promptly, prepare the
-iPhone locally, then obtain operation-bound admission only when the owner
-explicitly starts collection. Preparation and retries do not extend the original
-12-hour claimed-run expiry. Legacy clients retain their original ten-minute
-Start deadline and strict wire formats.
+The original website `phone-run-v2` approval covers collection and automatic
+saving of the contacts later chosen in the companion. Source now also supports
+`phone-native-setup-v1`: the original signed-in tab hands over a pending setup,
+the native app verifies the account/course and exact disclosure, and the owner
+explicitly approves in the app. Only a confirmed `phone-run-v3` native receipt
+creates a preparation run. Opening or claiming setup does not approve or collect.
+
+The additive `/v1/setup-capabilities` route preserves the legacy `/v1/status`
+schema. The website must match the running identity to qualified signed bytes,
+an exact channel/build allowlist and live server support before using native
+setup. RC33, unknown builds and old pending runs keep their legacy protocol.
+Publishing source alone does not activate this route for customers.
+
+Mac preparation uses `phone-start-v1`: prepare the iPhone locally, then obtain
+operation-bound admission only when the owner explicitly starts collection.
+Preparation and retries do not extend the original 12-hour run expiry. Lost
+native approval replies retain the exact request and private capabilities in
+memory for retry; the signed-in tab owns cancellation. Restarting the app
+requires a new deliberate setup. Legacy clients retain their original
+ten-minute Start deadline and strict wire formats.
 
 The native read-only setting check, connection illustration and manual Finder
 walkthrough do not start collection or prove that Trust, encryption or a Finder
@@ -28,7 +41,10 @@ the exact bound selection under the prior approval. Completion navigation is
 available only after matching Save/ACK and clean helper/storage teardown. It
 retains only enrollment, handoff, payload digest and browser preference; the
 website verifies that identity against the current saved report. The browser
-must be available for Save, and browser profile/tab reuse is not guaranteed.
+must be available for Save. The primary final return activates the original
+browser without opening a URL; the owner selects the original tab if needed.
+Reopening the verified account/report URL is a separate explicit recovery action.
+Browser profile/tab selection is not guaranteed.
 
 ## Historical qualification notes
 

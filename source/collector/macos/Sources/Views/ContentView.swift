@@ -15,30 +15,40 @@ struct ContentView: View {
     @State private var confirmingRetainedReviewDiscard = false
     @State private var confirmingBulkMove = false
     @State private var showingGroupTools = false
+    @State private var showingCollectionDetails = false
+    @State private var showingSourceDetails = false
+    @State private var showingPreviousSourceDetails = false
 
-    @MainActor init(model: CollectorModel, updater: CompanionUpdater) {
+    @MainActor init(model: CollectorModel, updater: CompanionUpdater, showingGroupTools: Bool = false) {
         self.model = model
         self.updater = updater
         _search = State(initialValue: model.workspace?.query ?? "")
+        _showingGroupTools = State(initialValue: showingGroupTools)
     }
 
     var body: some View {
         GeometryReader { geometry in
         ScrollViewReader { setupScroll in
+        Group {
+        if usesContactWorkspace {
+                VStack(alignment: .leading, spacing: Brand.Space.item) {
+                    phaseHeader
+                    collectionNotices
+                    if model.phase == .reviewing && !model.handoffNotice.isEmpty {
+                        Text(model.handoffNotice).font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
+                    }
+                    contactPanel(wellHeight: nil, compact: geometry.size.width < 600 || geometry.size.height < 760)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .padding(geometry.size.width < 600 || geometry.size.height < 760 ? 16 : Brand.Space.page)
+                .frame(maxWidth: Brand.Layout.workspaceMaximum, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .safeAreaInset(edge: .bottom, spacing: 0) { contactActionDock(compact: geometry.size.width < 600) }
+        } else {
         ScrollView {
             VStack(alignment: .leading, spacing: Brand.Space.section) {
-                header.id("phase-heading")
-                JourneySteps(current: model.journeyStep)
-                if showsRunStatusNotice { runStatusNotice }
-                if model.companionStatus == .anotherAppRunning || model.companionStatus == .unavailable { companionStatusNotice }
-                if !model.residues.isEmpty { residueNotice }
-                if model.diagnosticRetention == .failed {
-                    Text("Safe source details could not be retained or restored on this Mac. Copy any current source details before closing.")
-                        .font(Brand.bodyFont(16))
-                        .foregroundStyle(Brand.body)
-                        .panel()
-                }
-                if !model.sourceDiagnosticHistory.isEmpty { previousSourceDetails }
+                phaseHeader
+                collectionNotices
                 if model.phase == .error || model.phase == .completed || (model.phase == .idle && model.needsStorageReview) { statusPanel }
                 // A confirmed save ends on its own summary; starting again means closing and reopening.
                 if (!model.helperRunning || model.backupSettingCheckInProgress) &&
@@ -46,26 +56,16 @@ struct ContentView: View {
                     if model.hasUnsavedReview { retainedReviewRecovery }
                     else if !runNeedsAccountAction { collectionApprovalPanel.id("collection-setup") }
                 }
-                if ![.error, .idle, .selecting, .reviewing, .completed].contains(model.phase) { statusPanel }
+                if ![.error, .idle, .selecting, .reviewing, .completed, .passwordRequired].contains(model.phase) { statusPanel }
                 if model.canInstallUpdate && model.backupEncryptionStatus == .notChecked && model.localCollectionApproval == nil && !showingFinderGuide { updatePanel }
                 if model.phase == .passwordRequired { passwordPanel }
-                if model.phase == .selecting {
-                    contactPanel(wellHeight: Brand.Layout.contactWellHeight(windowHeight: geometry.size.height))
-                }
-                if model.phase == .reviewing {
-                    reviewPanel
-                    if model.canEditWorkspace && !model.handoffNotice.isEmpty {
-                        // Change selected contacts closed the link, so the selection is editable again.
-                        contactPanel(wellHeight: Brand.Layout.contactWellHeight(windowHeight: geometry.size.height))
-                    }
-                }
+                if model.phase == .reviewing { reviewPanel }
             }
             .frame(maxWidth: contentMaximumWidth)
             .padding(geometry.size.width < 600 ? 16 : Brand.Space.page)
             .frame(maxWidth: .infinity)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if model.phase == .selecting { contactActionDock }
+        }
         }
         .background(Brand.background)
         .font(Brand.bodyFont(16))
@@ -74,6 +74,10 @@ struct ContentView: View {
         .background(ActiveCompanionWindow(model: model, returnToBrowser: returnToBrowser)
             .frame(width: 0, height: 0))
         .onChange(of: model.runApproval) { _, _ in
+            showingFinderGuide = false
+            scrollToCollectionSetup(setupScroll)
+        }
+        .onChange(of: model.nativeSetupState) { _, _ in
             showingFinderGuide = false
             scrollToCollectionSetup(setupScroll)
         }
@@ -119,6 +123,28 @@ struct ContentView: View {
         }
         }
         }
+    }
+
+    private var usesContactWorkspace: Bool {
+        model.phase == .selecting || (model.phase == .reviewing && model.canEditWorkspace && !model.handoffNotice.isEmpty)
+    }
+
+    private var phaseHeader: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
+            header.id("phase-heading")
+            JourneySteps(current: model.journeyStep)
+        }
+    }
+
+    @ViewBuilder private var collectionNotices: some View {
+        if showsRunStatusNotice { runStatusNotice }
+        if model.companionStatus == .anotherAppRunning || model.companionStatus == .unavailable { companionStatusNotice }
+        if !model.residues.isEmpty { residueNotice }
+        if model.diagnosticRetention == .failed {
+            Text("Safe source details could not be retained or restored on this Mac. Copy any current source details before closing.")
+                .font(Brand.bodyFont(16)).foregroundStyle(Brand.body).panel()
+        }
+        if !usesContactWorkspace && !model.sourceDiagnosticHistory.isEmpty { previousSourceDetails }
     }
 
     private func scrollToCollectionSetup(_ reader: ScrollViewProxy) {
@@ -304,6 +330,8 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 18) {
             if showingFinderGuide {
                 FinderEncryptionGuide(model: model) { showingFinderGuide = false }
+            } else if model.nativeSetupState != .none {
+                NativeSetupView(model: model)
             } else if model.runApproval == .approved, let run = model.phoneRun {
                 // Re-evaluate the negotiated preparation/Start deadline without renewing authority.
                 TimelineView(.periodic(from: .now, by: 5)) { context in
@@ -321,7 +349,7 @@ struct ContentView: View {
         .panel()
     }
 
-    /// Without a verified run nothing can be collected: the one agreement happens in the account.
+    /// A plain launch has no account identity. The original signed-in tab must deliberately hand setup over.
     @ViewBuilder private var runStartContent: some View {
         Text("Collect phone data with your AMPLIFai account")
             .font(Brand.headingFont(28))
@@ -343,7 +371,7 @@ struct ContentView: View {
             Button("Approve again in your account") { openAccountStart() }
                 .buttonStyle(LimeButton())
         case .none, .approved:
-            Text("Approve this collection in your account, then return here to connect your iPhone.")
+            Text("In your signed-in AMPLIFai tab, choose Open app to connect this Mac to your account and course. Then follow the approval and iPhone steps here.")
                 .font(Brand.bodyFont(16))
             Button("Start in your AMPLIFai account") { openURL(CollectorModel.accountStartURL) }
                 .buttonStyle(LimeButton())
@@ -381,15 +409,6 @@ struct ContentView: View {
                 .accessibilityAddTraits(.isHeader)
             VerifiedStatusRow(verified: true, title: "Account: \(run.email)",
                               detail: "Course: \(run.course) · \(CollectorModel.approvedToSaveLabel(run.categories))")
-            if !run.collectionStarted {
-                if model.isPreparationRun {
-                    Text("Prepare your iPhone here, then choose Start collection. This approval expires at \(run.claim.expiresAt.formatted(date: .abbreviated, time: .shortened)).")
-                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
-                } else {
-                    Text("Approval start window: about \(max(1, Int(ceil(run.startDeadline.timeIntervalSince(now) / 60)))) min remaining.")
-                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
-                }
-            }
             if !model.candidateNotice.isEmpty {
                 Text(model.candidateNotice).font(Brand.bodyFont(15)).foregroundStyle(Brand.muted)
             }
@@ -397,9 +416,21 @@ struct ContentView: View {
                 Button("Try the newer approval again") { model.retryCandidateClaim() }
                     .buttonStyle(QuietAction())
             }
-            PhoneConnectionGuide()
+            PhoneConnectionGuide(checkInProgress: model.backupSettingCheckInProgress,
+                                 settingConfirmed: [.encrypted, .unencrypted].contains(model.backupEncryptionStatus))
+            BackupPasswordHelp()
             iPhoneCheckCard
-            privacyDetails
+            DisclosureGroup("Approval and privacy details") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if !run.collectionStarted {
+                        Text("Approval start window: about \(max(1, Int(ceil(run.startDeadline.timeIntervalSince(now) / 60)))) min remaining.")
+                        Text("Approval expires at \(run.claim.expiresAt.formatted(date: .abbreviated, time: .shortened)).")
+                    }
+                    privacyDetails
+                }
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted).padding(.top, 8)
+            }
+            .font(Brand.bodyFont(14))
         }
     }
 
@@ -547,10 +578,11 @@ struct ContentView: View {
     private var passwordPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Existing encrypted-backup password")
-                .font(Brand.headingFont(22))
+                .font(Brand.headingFont(28))
                 .foregroundStyle(Brand.heading)
-            Text("Enter your existing backup password, not your iPhone passcode. It stays on this Mac and is not saved. AMPLIFai cannot reset it.")
-                .font(Brand.bodyFont(18))
+            BackupPasswordHelp()
+            Text("Your password stays on this Mac and is not saved.")
+                .font(Brand.bodyFont(16))
             SecureField("Backup password", text: $model.password)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 14)
@@ -561,20 +593,22 @@ struct ContentView: View {
             Button("Continue locally") { model.submitPassword() }
                 .buttonStyle(LimeButton())
                 .disabled(model.password.isEmpty || model.password.count > 512)
+            Button("Stop on this Mac") { model.disconnect() }
+                .buttonStyle(SecondaryButton())
         }
         .panel()
     }
 
-    private func contactPanel(wellHeight: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 20) {
+    private func contactPanel(wellHeight: CGFloat?, compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
             currentSourceDetails
             if let workspace = model.workspace {
-                contactSelectionSummary
-                ContactReviewView(model: model, workspace: workspace, wellHeight: wellHeight,
+                contactSelectionSummary(compact: compact)
+                ContactReviewView(model: model, workspace: workspace, wellHeight: wellHeight, compact: compact,
                                   search: $search, showingGroupTools: $showingGroupTools,
                                   confirmingBulkMove: $confirmingBulkMove)
             } else {
-                contactSelectionSummary
+                contactSelectionSummary(compact: compact)
                 if model.suggestionScanning {
                     Text("Checking \(model.suggestionVisited) of \(model.totalContacts) contacts across all pages…")
                     Button("Stop and retry grouping") { model.cancelSuggestionScan() }
@@ -595,17 +629,26 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var currentSourceDetails: some View {
-        if !model.missingSources.isEmpty || !model.currentSourceDiagnostics.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(["calls", "messages"], id: \.self) { category in
-                    if model.missingSources.contains(category) {
-                        Label(category == "calls" ? "Calls unavailable" : "SMS activity unavailable",
-                              systemImage: "exclamationmark.circle")
-                            .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+        if !model.missingSources.isEmpty || !model.currentSourceDiagnostics.isEmpty || !model.sourceDiagnosticHistory.isEmpty {
+            HStack(spacing: Brand.Space.item) {
+                if !model.missingSources.isEmpty {
+                    Label(["calls", "messages"].filter { model.missingSources.contains($0) }
+                        .map { $0 == "calls" ? "Calls unavailable" : "SMS activity unavailable" }.joined(separator: " · "),
+                          systemImage: "exclamationmark.circle")
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                }
+                Button { showingSourceDetails = true } label: {
+                    if model.missingSources.isEmpty {
+                        Label(model.currentSourceDiagnostics.isEmpty ? "Previous run source details" : "Source details",
+                              systemImage: "info.circle").font(Brand.bodyFont(14))
+                    } else {
+                        Image(systemName: "info.circle").frame(width: 28, height: 28)
                     }
                 }
-                DisclosureGroup("Source details for this run") {
-                    VStack(alignment: .leading, spacing: 8) {
+                .buttonStyle(QuietAction()).accessibilityLabel("Current and previous source details")
+                .popover(isPresented: $showingSourceDetails) {
+                    ScrollView {
+                    VStack(alignment: .leading, spacing: Brand.Space.item) {
                         ForEach(["calls", "messages"], id: \.self) { category in
                             if model.missingSources.contains(category) {
                                 Text(model.unavailableDescription(category)).textSelection(.enabled)
@@ -617,18 +660,32 @@ struct ContentView: View {
                         if model.diagnosticRetention == .retained {
                             Text("These safe source details were retained on this Mac.")
                         }
+                        if !model.sourceDiagnosticHistory.isEmpty {
+                            Divider()
+                            previousSourceHistory
+                        }
                     }
-                    .foregroundStyle(Brand.muted)
-                    .padding(.top, 6)
+                    .padding(Brand.Space.section)
+                    }
+                    .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+                    .frame(width: 420, height: 320).background(Brand.panel)
                 }
-                .font(Brand.bodyFont(14))
             }
         }
     }
 
     private var previousSourceDetails: some View {
-        DisclosureGroup("Previous run source details") {
-            VStack(alignment: .leading, spacing: 12) {
+        Button("Previous run source details") { showingPreviousSourceDetails = true }
+            .buttonStyle(QuietAction())
+            .popover(isPresented: $showingPreviousSourceDetails) {
+                ScrollView { previousSourceHistory.padding(Brand.Space.section) }
+                    .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+                    .frame(width: 420, height: 320).background(Brand.panel)
+            }
+    }
+
+    private var previousSourceHistory: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
                 Text("Saved on this Mac for support. These previous results are not part of this collection or its account save.")
                     .foregroundStyle(Brand.muted)
                 ForEach(model.sourceDiagnosticHistory) { attempt in
@@ -643,17 +700,30 @@ struct ContentView: View {
                         }
                     }
                 }
-            }
-            .padding(.top, 6)
         }
-        .font(Brand.bodyFont(16))
-        .panel()
     }
 
-    private var contactActionDock: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: Brand.Space.section) { contactActionContent }
-            VStack(alignment: .leading, spacing: Brand.Space.item) { contactActionContent }
+    private func contactActionDock(compact: Bool) -> some View {
+        Group {
+            if compact {
+                VStack(alignment: .leading, spacing: Brand.Space.item) {
+                    contactActionSummary
+                    HStack(spacing: Brand.Space.item) {
+                        if model.phoneRun != nil { accountStopAction }
+                        Spacer(minLength: 0)
+                        contactContinueAction
+                    }
+                }
+            } else {
+                HStack(spacing: Brand.Space.section) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        contactActionSummary
+                        if model.phoneRun != nil { accountStopAction }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    contactContinueAction
+                }
+            }
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
@@ -661,9 +731,11 @@ struct ContentView: View {
         .frame(maxWidth: .infinity)
         .background(Brand.panel)
         .overlay(alignment: .top) { Rectangle().fill(Brand.border).frame(height: 1) }
+        .fixedSize(horizontal: false, vertical: true)
+        .layoutPriority(1)
     }
 
-    @ViewBuilder private var contactActionContent: some View {
+    private var contactActionSummary: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(contactActionHelp)
                 .font(Brand.bodyFont(13))
@@ -672,9 +744,10 @@ struct ContentView: View {
             if model.reviewPending {
                 Text("Reviewing selected contacts and activity…").font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
-            if model.phoneRun != nil { accountStopAction }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var contactContinueAction: some View {
         if model.canEditWorkspace {
             Button("Continue") { model.reviewWorkspace(continueToAccount: true) }
             .buttonStyle(LimeButton())
@@ -715,23 +788,38 @@ struct ContentView: View {
         return "Local review is retained"
     }
 
-    private var contactSelectionSummary: some View {
+    private func contactSelectionSummary(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 20) { contactTitle; Spacer(minLength: 0); contactTitleCount }
-                VStack(alignment: .leading, spacing: 8) { contactTitle; contactTitleCount }
+            HStack(alignment: .top, spacing: Brand.Space.item) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 20) { contactTitle; Spacer(minLength: 0); contactTitleCount }
+                    VStack(alignment: .leading, spacing: 8) { contactTitle; contactTitleCount }
+                }
+                if compact {
+                    Button { showingCollectionDetails = true } label: {
+                        Image(systemName: "info.circle").frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(QuietAction()).accessibilityLabel("Selection and collection details")
+                }
             }
-            Text("Main contacts start selected; Review contacts wait for you. Only the contacts you choose are saved.")
-                .font(Brand.bodyFont(15))
-            DisclosureGroup("Collection details") {
-                Text(model.statusDetail).font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
+            if !compact {
+                Text("Main contacts start selected; Review contacts wait for you. Only the contacts you choose are saved.")
+                    .font(Brand.bodyFont(15))
+                Button("Collection details") { showingCollectionDetails = true }.buttonStyle(QuietAction())
             }
-            .font(Brand.bodyFont(13))
             if !model.errorMessage.isEmpty && model.phase == .selecting {
                 Text(model.errorMessage).foregroundStyle(.red).textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .popover(isPresented: $showingCollectionDetails) {
+            VStack(alignment: .leading, spacing: Brand.Space.item) {
+                Text("Main contacts start selected; Review contacts wait for you. Only the contacts you choose are saved.")
+                Text(model.statusDetail).foregroundStyle(Brand.muted)
+            }
+            .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+            .padding(Brand.Space.section).frame(width: 360).background(Brand.panel)
+        }
     }
 
     private var contactTitle: some View {
@@ -850,17 +938,7 @@ struct ContentView: View {
                     Button("Retry account verification") { model.retryDestinationVerification() }
                         .buttonStyle(SecondaryButton())
                 }
-                if model.isPreparationRun {
-                    Button("Reopen account to finish saving") {
-                        returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
-                    }
-                    .buttonStyle(SecondaryButton())
-                } else {
-                    Button("Continue in browser") {
-                        returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
-                    }
-                    .buttonStyle(LimeButton())
-                }
+                BrowserReturnControls(model: model)
                 if model.phoneRun != nil && !model.accountSaveAwaitingBrowserReceipt { accountStopAction }
             } else if model.runBinding == .binding || model.accountLinkPending {
                 progressLine("Confirming with your AMPLIFai account…")

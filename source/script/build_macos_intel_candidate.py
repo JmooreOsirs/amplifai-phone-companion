@@ -22,9 +22,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "source"
 MINIMUM = "14.0"
-VERSION = "2026.10.21-rc33-intel1"
-BUILD = "261021331"
-RELEASE = "macos-2026.10.21-rc33-intel1-test"
+VERSION = "2026.10.21-rc34-intel1"
+BUILD = "261021341"
+RELEASE = "macos-2026.10.21-rc34-intel1-test"
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
@@ -92,7 +92,7 @@ def freeze_bytes(receipt: dict) -> bytes:
 
 
 def verify_release_policy(repo: Path = ROOT) -> dict:
-    policy = json.loads((repo / "docs/INTEL-RC33-BASELINE.json").read_text())
+    policy = json.loads((repo / "docs/INTEL-RC34-BASELINE.json").read_text())
     if (policy.get("schema") != 1 or policy.get("release") != RELEASE
             or policy.get("version") != VERSION or policy.get("build") != BUILD
             or policy.get("bundle_id") != "ai.satoris.amplifai.phone.intel-candidate"

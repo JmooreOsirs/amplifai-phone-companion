@@ -1,4 +1,17 @@
-# AMPLIFai Phone 2026.10.12-rc23 companion source
+# AMPLIFai Phone companion source
+
+## Current RC34 source candidate
+
+ARM candidate `2026.10.21-rc34` / `26102134`; Intel Test candidate
+`2026.10.21-rc34-intel1` / `261021341`. The native setup protocol verifies the
+signed-in account/course before explicit native consent and separate Start.
+It preserves legacy approvals, exact chosen-contact Save receipts, and the
+original browser tab. Source qualification is separate from signed packages,
+website activation and physical-device acceptance. See
+[the current delivery contract](docs/RELEASE-DELIVERY-CONTRACT.md) and
+[collector behavior](source/collector/README.md).
+
+## Historical RC23 source context
 
 This package is prepared for the matching `2026.10.12-rc23` Mac app, build
 `26101223`; publication and binary checksums are separate release steps. The

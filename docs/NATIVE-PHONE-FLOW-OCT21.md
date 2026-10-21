@@ -1,0 +1,79 @@
+# Native Phone flow — October 21 implementation contract
+
+## Work agreement
+
+- Outcome: deliver the approved native preparation, native consent, contact workspace, progress and original-browser return changes, then qualify and publish the next native release with the website owner.
+- Baseline: RC33 native `f9181b8509af81688dd457e8f93ddf3ee3d63b38`; working branch `codex/native-phone-flow-oct21` in the existing native checkout.
+- Setting: previous implementation/release setting GPT-6.1 Sol / High; this batch GPT-6 Astra / Max, applied by the coordinator's `send_message_to_thread` model/thinking override. Jeff's explicit top-model/Max direction is visible in coordinator turn `01a15f87-5195-76a3-a13f-9d099c049e0f`. This records the accepted task control, not an inferred subscription cost. Return milestone: qualified implementation and release closeout; no automatic restoration claimed.
+- Finite milestone: agreed cross-app protocol, written reference/impact contract, runnable native UI candidate and matched-window verification. Independent UI work proceeds while the server contract is reconciled.
+- Scope: native repository only. Website owner owns server/API/SQL and publication of website feeds. Coordinator owns media reconciliation and shared decisions. No repeat media analysis, installed-app changes, private capture, customer data/consent action or encryption-setting change.
+
+## Reference and impact contract
+
+Authority is the current RC33 source/rendered native design and approved Phone inventory B04/B06–B17. This implementation consumes the existing assisted-review inventory; it is not a fresh audiovisual rewatch.
+
+- Typography: retain `Brand.bodyFont` (bundled Open Sans, existing Arial fallback) and Arial bold headings. Existing action/headline hierarchy is 14/16/18/22/28; increase emphasis using that grammar.
+- Palette: existing `Brand` background #0f1525, panel #141d30, border #263146, heading #edeff3, body #c8cfd9, muted #a1a9b5, lime #a6e63d, blue #5c87df.
+- Spacing/radii/depth: retain `Brand.Space` 12/20/28, `Brand.Radius` 5/8/10/12, raised gradient and existing well/card shadows. Controls remain LimeButton, SecondaryButton and QuietAction; instructions/help use existing panels and disclosures.
+- Layout: preserve workspace maximum1440 and minimum contact card220. Existing1180×820 default is not the missing implementation. Verify restored geometry and clamp useful opening geometry to actual visible display bounds. Contact review keeps fixed context/actions and gives available height to its inner scroll region.
+- Motion: enlarge existing transport/local-reading primitives; honor reduced motion. Stage labels reflect actual model events. No percentage, ready, Saved or completion claim without its corresponding event/receipt.
+- Map: preparation/help → PhonePreparationGuide + existing DisclosureGroup/panel; handoff prominence → reviewPanel/LimeButton; original-browser activation → BrowserReturn; stable contact workspace → ContentView/ContactReviewView; opening geometry → existing scene/window bridge; native approval → explicit pending-setup model/service state after server contract agreement.
+- Preserve transport/page manifests/digests, full-size transfer, retry/refresh, source diagnostics, exact contact choice/grouping, legacy source-specific Save, final account receipts, retention and cleanup. Unsupported SMS size growth remains rejected.
+- Verification: source token comparison plus matched synthetic native windows at1180×820, narrow768 and375, and recorded restored-small/limited-display cases. Existing fixture must intercept browser/network/device actions. Responsive menus use native macOS menu semantics with Brand body type and the existing lime action color; detail popovers reuse panel/well tokens. A synthetic rendering is not physical acceptance. No installed app is launched.
+
+## Accepted native-consent protocol — implemented source candidate
+
+Contract authority: `/Users/jeffmoore/Documents/🗣️ Voice Orchestrators/outputs/google-segment-two/new-phone-process-2026-10-21/NATIVE-SETUP-WIRE-CONTRACT.md` and its JSON companion, accepted by the coordinator and website owner. The website owner implements the server transaction and activation allowlist. This native source implements the frozen `phone-native-setup-v1` contract; it is not evidence of a deployed server or qualified public binary.
+
+1. **Negotiation and launch.** Additive read-only `/v1/setup-capabilities` reports the exact running Mac identity and protocol under the existing loopback Host/Origin/CORS guards. Existing `/v1/status` is unchanged. Windows does not advertise Mac setup. The website must require live server support, qualified signed bytes, an exact channel/build allowlist and matching running identity. RC33 and unknown builds retain the legacy path. A plain app launch has no account identity.
+2. **Claim without consent.** Strict `amplifai-phone://setup?setup=<uuid>&bootstrap=<43-character-base64url-capability>` links redeem only at `https://amplifai.satoris.ai/api/v1/phone-setups/claim`. The app generates a separate setup capability and request ID, retains their exact request in memory, and validates the verified owner/course/enrollment/labels/categories/expiry/snapshot and pinned disclosure. No run or local collection authority exists at this stage. New setup cannot displace an approved or uncertain legacy run.
+3. **Deliberate native approval.** The native panel shows the verified destination, exact `phone-run-v3` disclosure and agreement, an unchecked checkbox, and the explicit approval button. Version v3 records the native approval location; its words and hash match the accepted policy. The app sends `/api/v1/phone-setups/approve` with the immutable snapshot/digest, a distinct run capability and request ID. Receipt parsing matches all request, claim, owner/course, top-level and nested preparation bindings. Duplicate JSON keys, unknown fields, malformed dates, wrong disclosure and unconfirmed success cannot enable collection.
+4. **Exact uncertain recovery.** All automatic and deliberate retries resend identical bytes. Lost, malformed or unexpected-success replies retain both capabilities and the original approval request, including after setup expiry when the server may recover an already committed still-current run. Not now cannot discard an in-flight or uncertain approval. Server cancellation belongs to the original signed-in tab. Pending setup defers app updates.
+5. **Preserved collection and Save admission.** A confirmed native receipt creates a preparation run only; explicit Start still requires the existing current-status and operation admission checks. The exact chosen-contact handoff, manifests/digests, destination verification and final Save receipt remain required. New v3 is accepted only through the native setup path; legacy claim/status/bind cannot relabel old approval as v3. Existing run/preparation routes retain their fixed authority and original response bounds.
+
+The 10-minute setup TTL is admission expiry only. A committed approval uses its existing 12-hour run expiry; native Start and Save do not require re-approval after the setup TTL. The original website tab must discover that same still-authorized run after 10 minutes; the website owner owns that GET/reload qualification. Expired or revoked run/session authority still denies.
+
+Claim and approval replies are capped while streaming at 8,192/16,384 bytes; existing run routes remain 2,048. Requests remain 1,024 bytes with cookies/cache/credential storage disabled and redirects refused. Capabilities are not persisted or logged. Setup capability is routing authority, not hardware or binary attestation. Required activation order remains dormant compatible server → signed native bytes/feed under shared lease → exact allowlist activation.
+
+## Browser return contract
+
+Primary final return activates the existing originating browser application and opens no URL. Copy directs the person to the existing AMPLIFai account tab; macOS cannot guarantee exact tab/profile selection. Missing/closed-tab recovery is a separate explicit Open account action. Completed-return recovery uses only the existing bound report URL; it cannot re-pair, recollect or Save. Keep local-ready, browser-received, save-reported and final Saved receipt states distinct.
+
+## Current progress
+
+- Primary browser return uses the captured running HTTPS handler and activates it without a URL. Missing/closed browser fails without default-browser navigation. Explicit recovery retains the existing bound URL. Added injected-boundary checks; no real browser was activated.
+- Default geometry remains 1180×820; the existing window adapter now enlarges an undersized restored frame once per window and clamps it to the visible display. Later user resizing is preserved. Pure geometry, a real never-shown window sizing/reattachment check and 40 offscreen AppKit lifecycle cycles pass. The sizing check confirms an actual later resize survives reattachment; an installed cold-launch restoration has not been observed.
+- Review now uses a fixed shell and the available height for its contact grid. Responsive selection/group actions retain exact model semantics. The first matched renders exposed footer overflow at 375×844 and a cramped grid at 820×640; the responsive footer/controls were corrected. The final matrix passed 14 states across six viewports and 30 scroll checks; the smallest tested contact viewport is 70 points tall.
+- Added actual offscreen scroll movement checks: one contact scroll region, viewport inside the host, usable viewport height and fixed viewport during scrolling. This creates no window and activates no application.
+- Setup instructions now initiate Check before any expected Trust prompt. Backup-password help uses existing branded wells/disclosures and distinguishes the encrypted computer-backup password. Apple references verified October21: https://support.apple.com/108353 and https://support.apple.com/108313. No password recovery or device-setting operation is added.
+- Progress uses existing colors, wells and symbols with larger transport and local-reading indicators. Actual processing/receipt state governs labels; repeated waiting copy removed.
+- First release Swift build passed. Existing source-diagnostic, flow, preparation wire/admission/recovery suites passed. The final UI matrix and release Swift build passed. Later targeted cleanup removes duplicate password prompt copy and labels prior-source help; its two affected states passed targeted rendering at all six sizes, with six renewed history scroll checks.
+- The accepted setup contract is now implemented in native source. Focused wire, explicit consent, exact retry, mismatch, cancellation, legacy and synthetic selected-Save checks pass. The additive loopback route passes Mac ARM/Intel identity and Host/Origin/method checks. Native consent was rendered offscreen in nine states at six sizes; resolved native style tokens match the baseline. RC33 still cannot parse setup links, and production activation remains gated on server and qualified signed bytes.
+- The late Brian model reply belongs to the completed Oct20 reset. Coordinator confirmed it is stale; no repeated residual check, reset or model rerouting occurred.
+- No release identity is reserved, signed bytes changed, installed app launched or customer/phone action performed in this batch.
+
+### Candidate render evidence
+
+- Baseline: `/private/tmp/amplifai-mac-visual.oct21-phone-before`.
+- Intermediate candidates: `/private/tmp/amplifai-mac-visual.oct21-phone-ui-v1`, `...-v2`, `...-v3`; failures are retained as bounded fixture evidence and are not release acceptance.
+- Scroll probe: `/private/tmp/amplifai-mac-visual.oct21-phone-scroll-probe`; detected the 820×640 viewport-height issue.
+- Final matrix: `/private/tmp/amplifai-mac-visual.oct21-phone-ui-final` — 14 states, six viewports, 30 actual scroll checks, 97 PNGs. Native style-token readback matches baseline exactly.
+- Targeted final cleanup: `/private/tmp/amplifai-mac-visual.oct21-phone-ui-cleanup` — history and password states, all six viewports passed. The password prompt retains Stop without the duplicate status panel; prior-source help has a visible label.
+- Coordinator visual consistency spot-check of v5: `/Users/jeffmoore/Documents/🗣️ Voice Orchestrators/outputs/google-segment-two/new-phone-process-2026-10-21/NATIVE-CONSISTENCY-SPOT-CHECK.json` confirms the approved native grammar and visible primary Continue at 1180×820 and 820×640. This is visual evidence, not native-consent or customer acceptance.
+
+## UI milestone limits and next action
+
+The UI candidate is a source milestone, not a published release. Ordinary real-browser focus/tab return, physical iPhone transfer, final account Save/report and installed cold-launch behavior are unobserved in this batch. Native controls and menu semantics are preserved; a live keyboard navigation session was not run. No real device, private capture, customer account or browser was operated.
+
+Next: finish changed-source qualification and server integration, qualify both release architectures, and coordinate signed publication/feed deployment and exact allowlist activation with the sole website owner. No native consent is inferred from existing web approval. Native approval fixture evidence does not prove a real customer approved, a physical transfer completed, or the original waiting browser tab recovered.
+
+### Native consent render evidence
+
+- `/private/tmp/amplifai-mac-visual.oct21-native-consent`: nine states at six viewports, 55 PNGs, no window/app activation/helper/account action. Checked desktop consent, narrow consent and short-window uncertain recovery directly. Short windows use the existing outer setup scroll view. Detached rendering has no usable scroll-document measurement. The final qualification below attaches synthetic views to never-shown windows to verify actual scroll access.
+- `/private/tmp/amplifai-mac-visual.oct21-native-consent-qualified`: nine states at six sizes, 68 PNGs, 48 native setup viewport checks and 13 overflowing documents scrolled to their bottom controls. These use real but never-shown windows, with app activation prohibited. No physical screen capture, installed-app launch, helper, update controller, account or device operation. Narrow consent and short-window recovery bottom states were inspected. All setup states keep collection disabled; resolved style tokens still match the baseline.
+- Full native model qualification passed with the pinned cached Python stack: 311,149 synthetic records in 3,114 pages, two real 30-second periodic refresh cycles, 65-second watchdog, exact operation/retries and receipt gates. The initial system Python lacked the dependency; the qualification was rerun inside the cached pinned environment and passed.
+- Sparkle busy discovery, manual-dialog, relaunch, install-on-quit deferral, strict status events and real closed-stdin subprocess checks passed. The Python loopback suite passed 16 tests; its two Windows-only socket checks were skipped on this Mac.
+
+## Reserved RC34 qualification identities
+
+The coordinator reserved ARM `2026.10.21-rc34` / `26102134` / `macos-2026.10.21-rc34-release` and Intel Test `2026.10.21-rc34-intel1` / `261021341` / `macos-2026.10.21-rc34-intel1-test` after source milestone `203f734`. These are candidate reservations. Normal protected source/control merges, exact candidate qualification, signing/notarization and coordinated publication still apply. Source/channel/bundle trust and existing dependency inputs remain unchanged.

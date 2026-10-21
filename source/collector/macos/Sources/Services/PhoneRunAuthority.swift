@@ -1,19 +1,17 @@
 import Foundation
 import Security
 
-/// The one-approval phone run, native side. The owner agrees once, in the signed-in AMPLIFai account, to this one
-/// collection and to automatically saving the contacts they later choose. The website hands the app a short-lived
-/// one-use bootstrap through an app link. The app redeems it here with a run capability it generates and keeps,
-/// binds the helper's handoff after the owner chooses contacts, and checks the helper's pending connect intent
-/// against the run before answering it.
+/// The one-approval phone run, native side. Legacy runs arrive already approved by the signed-in owner.
+/// Native setup records a new v3 approval before entering the same prepared run/operation pipeline. The app
+/// keeps its own run capability, binds the helper's exact chosen-contact handoff and verifies connect intent.
 ///
 /// Three identifiers stay distinct and are only ever associated, never reused for one another:
 /// - the server run id (`runID`, with its `approvalID`) that the website created;
 /// - the native per-run local collection approval id (`CollectorModel.collectionApprovalRunID`);
 /// - the helper bridge `handoffId` for the chosen contacts.
 ///
-/// Fixed TLS authority only: the same host the helper uses for connect intents, no browser cookie, no account id
-/// and never a URL taken from a page, a link or a response.
+/// Fixed TLS authorities only: existing run routes use the helper's connect-intent host; setup routes use the
+/// agreed account host. No browser cookies or URLs taken from a page, link or response.
 enum PhoneRunContract {
     static let host = "amplifai-database-engine.vercel.app"
     static let claimPath = "/api/v1/phone-run-approvals/claim"
@@ -29,12 +27,12 @@ enum PhoneRunContract {
     static let preparationProtocol = "phone-start-v1"
     /// The website's combined collection-and-save disclosure. Older collection-only receipts never stand in for it.
     static let disclosureVersion = "phone-run-v2"
-    static let supportedDisclosureVersions: Set<String> = ["phone-run-v1", "phone-run-v2"]
+    static let supportedDisclosureVersions: Set<String> = ["phone-run-v1", "phone-run-v2", "phone-run-v3"]
     static func privacyURL(disclosureVersion: String) -> URL? {
         // v1 shipped against the immutable v6 account notice; never relabel that receipt as v2/v7.
         guard supportedDisclosureVersions.contains(disclosureVersion) else { return nil }
         let policy = disclosureVersion == "phone-run-v1" ? "account-2026-10-v6" : "account-2026-10-v7"
-        let fragment = disclosureVersion == "phone-run-v2" ? "#phone-collection-and-saving" : ""
+        let fragment = disclosureVersion == "phone-run-v1" ? "" : "#phone-collection-and-saving"
         return URL(string: "https://amplifai.satoris.ai/experience/account-privacy?version=\(policy)\(fragment)")
     }
     static let categories = ["contacts", "calls", "messages"]
@@ -92,8 +90,8 @@ enum PhoneRunContract {
     }
 
     /// Strict object: within the size cap, exactly these keys, nothing else.
-    static func object(_ body: Data?, keys: Set<String>) -> [String: Any]? {
-        guard let body, body.count <= maximumResponseBytes,
+    static func object(_ body: Data?, keys: Set<String>, maximumBytes: Int = maximumResponseBytes) -> [String: Any]? {
+        guard let body, body.count <= maximumBytes,
               let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               Set(object.keys) == keys else { return nil }
         return object
@@ -128,6 +126,7 @@ enum PhoneRunContract {
 
     static func status(_ body: Data?) -> PhoneRunStatus? {
         guard let fields = object(body, keys: claimKeys.union(["startExpiresAt", "state"])),
+              fields["disclosureVersion"] as? String != PhoneSetupContract.disclosureVersion,
               let stateName = fields["state"] as? String, let state = PhoneRunStatus.State(rawValue: stateName),
               let claim = claimFields(fields, startRequired: true) else { return nil }
         return PhoneRunStatus(claim: claim, state: state)
@@ -150,6 +149,7 @@ enum PhoneRunContract {
 
     static func boundApproval(_ body: Data?) -> PhoneRunBoundApproval? {
         guard let fields = object(body, keys: claimKeys.union(["previousApprovalId"])),
+              fields["disclosureVersion"] as? String != PhoneSetupContract.disclosureVersion,
               let previous = fields["previousApprovalId"] as? String, isID(previous),
               let claim = claimFields(fields, startRequired: false) else { return nil }
         return PhoneRunBoundApproval(previousApprovalID: previous, claim: claim)
@@ -158,7 +158,8 @@ enum PhoneRunContract {
     static func preparationStatus(_ body: Data?) -> PhonePreparationStatus? {
         guard let fields = object(body, keys: claimKeys.union(["protocol", "state", "operation"])),
               fields["protocol"] as? String == preparationProtocol,
-              fields["disclosureVersion"] as? String == disclosureVersion,
+              let version = fields["disclosureVersion"] as? String,
+              [disclosureVersion, PhoneSetupContract.disclosureVersion].contains(version),
               let stateName = fields["state"] as? String, let state = PhoneRunStatus.State(rawValue: stateName),
               preparationDate(fields["expiresAt"]) != nil,
               let claim = claimFields(fields, startRequired: false) else { return nil }
@@ -175,7 +176,7 @@ enum PhoneRunContract {
         return PhonePreparationStatus(claim: claim, state: state, operation: operation)
     }
 
-    private static func preparationDate(_ raw: Any?) -> Date? {
+    static func preparationDate(_ raw: Any?) -> Date? {
         guard let text = raw as? String, text.utf8.count <= 40,
               text.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-](0[0-9]|1[0-9]|2[0-3]):[0-5][0-9])\z"#,
                          options: .regularExpression) != nil,
@@ -207,7 +208,7 @@ enum PhoneRunContract {
     }
 
     /// Fixed request bytes: prepared once, then sent unchanged on every attempt.
-    static func body(_ fields: [String: String]) -> Data? {
+    static func body(_ fields: [String: Any]) -> Data? {
         guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]),
               data.count <= maximumRequestBytes else { return nil }
         return data
@@ -392,7 +393,7 @@ enum PhoneRunOutcome<Value: Equatable>: Equatable {
 }
 
 enum PhoneRunTransportResult: Equatable {
-    /// `body` is nil when the reply was unreadable or exceeded the 2,048-byte cap.
+    /// `body` is nil when the reply was unreadable or exceeded the route's byte cap.
     case response(status: Int, contentType: String?, body: Data?)
     case failed
 }
@@ -404,6 +405,10 @@ enum PhoneRunTransportResult: Equatable {
 /// The injectable run authority the model uses. Production: `PhoneRunAuthorityClient.production()`.
 @MainActor protocol RunAuthority: AnyObject {
     var admissionProtocol: PhoneRunAdmissionProtocol { get }
+    func claimSetup(_ request: PhoneSetupClaimRequest,
+                    completion: @escaping @MainActor (PhoneRunOutcome<PhoneSetupClaim>) -> Void)
+    func approveSetup(_ request: PhoneSetupApprovalRequest,
+                      completion: @escaping @MainActor (PhoneRunOutcome<PhoneSetupApprovalReceipt>) -> Void)
     func claim(_ request: PhoneRunClaimRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void)
     func status(_ request: PhoneRunStatusRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunStatus>) -> Void)
     func bind(_ request: PhoneRunBindRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunBoundApproval>) -> Void)
@@ -421,6 +426,14 @@ enum PhoneRunTransportResult: Equatable {
 
 extension RunAuthority {
     var admissionProtocol: PhoneRunAdmissionProtocol { .legacy }
+    func claimSetup(_ request: PhoneSetupClaimRequest,
+                    completion: @escaping @MainActor (PhoneRunOutcome<PhoneSetupClaim>) -> Void) {
+        completion(.refused(status: 404, code: "phone_setup_unavailable"))
+    }
+    func approveSetup(_ request: PhoneSetupApprovalRequest,
+                      completion: @escaping @MainActor (PhoneRunOutcome<PhoneSetupApprovalReceipt>) -> Void) {
+        completion(.refused(status: 404, code: "phone_setup_unavailable"))
+    }
     func preparationClaim(_ request: PhoneRunClaimRequest,
                           completion: @escaping @MainActor (PhoneRunOutcome<PhonePreparationStatus>) -> Void) {
         completion(.refused(status: 404, code: "phone_run_unavailable"))
@@ -468,6 +481,18 @@ extension RunAuthority {
     }
     /// Test and fixture seam: retry at once, synchronously.
     static let immediate: Schedule = { _, work in work() }
+
+    func claimSetup(_ request: PhoneSetupClaimRequest,
+                    completion: @escaping @MainActor (PhoneRunOutcome<PhoneSetupClaim>) -> Void) {
+        send(PhoneSetupContract.claimPath, request.body,
+             parse: { PhoneSetupContract.claim($0, request: request) }, attempt: 1, completion: completion)
+    }
+
+    func approveSetup(_ request: PhoneSetupApprovalRequest,
+                      completion: @escaping @MainActor (PhoneRunOutcome<PhoneSetupApprovalReceipt>) -> Void) {
+        send(PhoneSetupContract.approvePath, request.body,
+             parse: { PhoneSetupContract.approval($0, request: request) }, attempt: 1, completion: completion)
+    }
 
     func claim(_ request: PhoneRunClaimRequest, completion: @escaping @MainActor (PhoneRunOutcome<PhoneRunClaim>) -> Void) {
         send(PhoneRunContract.claimPath, request.body, parse: PhoneRunContract.claim, attempt: 1, completion: completion)
@@ -520,8 +545,11 @@ extension RunAuthority {
             case .failed:
                 malformed = false
             case let .response(status, contentType, data):
-                if status == 200 {
+                if status == 200 || (path == PhoneSetupContract.approvePath && status == 201) {
                     if Self.isJSON(contentType), let value = parse(data) { completion(.accepted(value)); return }
+                    malformed = true
+                } else if PhoneSetupContract.responseLimit(path: path) != nil && (200...299).contains(status) {
+                    // An unexpected success may have committed the one-use setup. Preserve exact recovery.
                     malformed = true
                 } else if status >= 500 && status <= 599 {
                     malformed = false
@@ -556,7 +584,7 @@ extension RunAuthority {
 }
 
 /// Production transport: HTTPS POST to the fixed host on an ephemeral session with no cookies, cache or credential
-/// storage. Redirects are refused, the reply must be JSON and is capped at 2,048 bytes.
+/// storage. Redirects are refused. Each allowlisted route has a fixed authority and bounded response.
 @MainActor final class URLSessionPhoneRunTransport: PhoneRunTransport {
     nonisolated static func configuration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
@@ -574,12 +602,12 @@ extension RunAuthority {
         return configuration
     }
 
-    /// Only the allowlisted paths on the fixed host can ever be requested.
+    /// Only allowlisted paths on their fixed authorities can ever be requested.
     nonisolated static func request(path: String, body: Data) -> URLRequest? {
-        guard PhoneRunContract.paths.contains(path), body.count <= PhoneRunContract.maximumRequestBytes else { return nil }
+        guard let route = route(path: path), body.count <= PhoneRunContract.maximumRequestBytes else { return nil }
         var components = URLComponents()
         components.scheme = "https"
-        components.host = PhoneRunContract.host
+        components.host = route.host
         components.path = path
         guard let url = components.url else { return nil }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 10)
@@ -592,11 +620,21 @@ extension RunAuthority {
     }
 
     func post(path: String, body: Data, completion: @escaping @MainActor (PhoneRunTransportResult) -> Void) {
-        guard let request = Self.request(path: path, body: body) else { completion(.failed); return }
-        let delegate = PhoneRunRequestDelegate(completion: completion)
+        guard let route = Self.route(path: path), let request = Self.request(path: path, body: body) else {
+            completion(.failed)
+            return
+        }
+        let delegate = PhoneRunRequestDelegate(host: route.host, maximumResponseBytes: route.maximumResponseBytes,
+                                              completion: completion)
         let session = URLSession(configuration: Self.configuration(), delegate: delegate, delegateQueue: .main)
         session.dataTask(with: request).resume()
         session.finishTasksAndInvalidate()
+    }
+
+    nonisolated static func route(path: String) -> (host: String, maximumResponseBytes: Int)? {
+        if PhoneRunContract.paths.contains(path) { return (PhoneRunContract.host, PhoneRunContract.maximumResponseBytes) }
+        if let limit = PhoneSetupContract.responseLimit(path: path) { return (PhoneSetupContract.host, limit) }
+        return nil
     }
 }
 
@@ -608,8 +646,12 @@ private final class PhoneRunRequestDelegate: NSObject, URLSessionDataDelegate, @
     private var body = Data()
     private var oversized = false
     private var finished = false
+    private let host: String
+    private let maximumResponseBytes: Int
 
-    init(completion: @escaping @MainActor (PhoneRunTransportResult) -> Void) {
+    init(host: String, maximumResponseBytes: Int, completion: @escaping @MainActor (PhoneRunTransportResult) -> Void) {
+        self.host = host
+        self.maximumResponseBytes = maximumResponseBytes
         self.completion = completion
     }
 
@@ -617,7 +659,7 @@ private final class PhoneRunRequestDelegate: NSObject, URLSessionDataDelegate, @
                            _ handler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         // Default TLS server-trust evaluation only; never answer an HTTP credential challenge.
         if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           challenge.protectionSpace.host == PhoneRunContract.host {
+           challenge.protectionSpace.host == host {
             handler(.performDefaultHandling, nil)
         } else {
             handler(.cancelAuthenticationChallenge, nil)
@@ -641,13 +683,13 @@ private final class PhoneRunRequestDelegate: NSObject, URLSessionDataDelegate, @
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard let http = response as? HTTPURLResponse, http.url?.host == PhoneRunContract.host else {
+        guard let http = response as? HTTPURLResponse, http.url?.host == host, http.url?.scheme == "https" else {
             completionHandler(.cancel)
             return
         }
         status = http.statusCode
         contentType = http.value(forHTTPHeaderField: "Content-Type")
-        if http.expectedContentLength > Int64(PhoneRunContract.maximumResponseBytes) {
+        if http.expectedContentLength > Int64(maximumResponseBytes) {
             oversized = true
             completionHandler(.cancel)
             return
@@ -658,7 +700,7 @@ private final class PhoneRunRequestDelegate: NSObject, URLSessionDataDelegate, @
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard !oversized else { return }
         body.append(data)
-        if body.count > PhoneRunContract.maximumResponseBytes {
+        if body.count > maximumResponseBytes {
             oversized = true
             body = Data()
             dataTask.cancel()

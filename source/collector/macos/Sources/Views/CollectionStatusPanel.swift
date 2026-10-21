@@ -30,7 +30,7 @@ struct CollectionStatusPanel: View {
             if showsActivity { activityWidget }
             else {
                 Text(model.statusTitle)
-                    .font(Brand.headingFont(model.phase == .error ? 26 : 21))
+                    .font(Brand.headingFont(model.phase == .error || model.phase == .completed ? 28 : 21))
                     .foregroundStyle(Brand.heading)
                     .accessibilityAddTraits(.isHeader)
                 Text(model.statusDetail).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
@@ -147,15 +147,7 @@ struct CollectionStatusPanel: View {
                         VStack(alignment: .leading, spacing: Brand.Space.item) { stopActions }
                     }
                 }
-                HStack(spacing: 10) {
-                    Image(systemName: "iphone.gen3")
-                    Rectangle().fill(Brand.blue).frame(maxWidth: .infinity).frame(height: 2)
-                    Image(systemName: "desktopcomputer")
-                }
-                .font(.system(size: 26))
-                .foregroundStyle(Brand.blue)
-                .padding(.horizontal, 18)
-                .accessibilityLabel("Local iPhone to Mac collection; this illustration is not a progress meter")
+                collectionIllustration
                 stageChips
                 if model.collectionStartedAt != nil || (model.transferIsKnown && model.phase != .completing) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Brand.Space.item)],
@@ -177,7 +169,7 @@ struct CollectionStatusPanel: View {
                                 .frame(width: geometry.size.width * model.progress / 100)
                         }
                     }
-                    .frame(height: 10)
+                    .frame(height: 14)
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: model.progress)
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("iPhone-reported backup transfer")
@@ -185,16 +177,20 @@ struct CollectionStatusPanel: View {
                     Text("\(Int(model.progress))% reported by iPhone · backup transfer only")
                         .font(Brand.bodyFont(16).weight(.bold)).foregroundStyle(Brand.heading)
                 } else if model.phase != .completing {
-                    HStack(spacing: 7) {
-                        ForEach(0..<3) { index in
-                            Circle().fill(hasRecentMeasuredActivity(at: context.date) && !reduceMotion
-                                          && index == Int(context.date.timeIntervalSince1970) % 3
-                                          ? Brand.lime : Brand.blue.opacity(0.45))
-                                .frame(width: 7, height: 7)
+                    HStack(spacing: Brand.Space.item) {
+                        HStack(spacing: 10) {
+                            ForEach(0..<3) { index in
+                                Circle().fill(hasRecentMeasuredActivity(at: context.date) && !reduceMotion
+                                              && index == Int(context.date.timeIntervalSince1970) % 3
+                                              ? Brand.lime : Brand.blue.opacity(0.45))
+                                    .frame(width: 12, height: 12)
+                            }
                         }
                         Text(activityLabel(at: context.date))
-                            .foregroundStyle(Brand.muted)
+                            .font(Brand.bodyFont(16).weight(.semibold)).foregroundStyle(Brand.body)
                     }
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .brandWell()
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(activityLabel(at: context.date))
                 }
@@ -223,9 +219,6 @@ struct CollectionStatusPanel: View {
                             .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
                     }
                 }
-                if model.phase == .processing && model.processedBytes == 0 {
-                    Text("Waiting for the first local parsing measurement.").foregroundStyle(Brand.muted)
-                }
                 if model.phase == .completing {
                     Text("Account save acknowledged · finishing local cleanup").foregroundStyle(Brand.body)
                 } else {
@@ -240,6 +233,32 @@ struct CollectionStatusPanel: View {
             }
             .font(Brand.bodyFont(15))
         }
+    }
+
+    private var collectionIllustration: some View {
+        VStack(spacing: Brand.Space.item) {
+            HStack(spacing: Brand.Space.section) {
+                Image(systemName: model.phase == .processing ? "externaldrive" : "iphone.gen3")
+                    .frame(maxWidth: .infinity)
+                Image(systemName: "arrow.right").font(.system(size: 28, weight: .semibold))
+                Image(systemName: model.phase == .processing ? "doc.text.magnifyingglass" : "desktopcomputer")
+                    .frame(maxWidth: .infinity)
+            }
+            .font(.system(size: 46)).foregroundStyle(Brand.blue)
+            .accessibilityHidden(true)
+            if model.phase == .processing {
+                Label("Backup received · reading on this Mac", systemImage: "checkmark.circle.fill")
+                    .font(Brand.bodyFont(16).weight(.semibold)).foregroundStyle(Brand.lime)
+            } else if model.phase == .completing {
+                Text("Account receipt confirmed · finishing local cleanup")
+                    .font(Brand.bodyFont(16).weight(.semibold)).foregroundStyle(Brand.lime)
+            } else {
+                Text("iPhone → this Mac")
+                    .font(Brand.bodyFont(16)).foregroundStyle(Brand.body)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 112)
+        .brandWell()
     }
 
     private var stageChips: some View {
@@ -277,7 +296,7 @@ struct CollectionStatusPanel: View {
             Text("ON THIS MAC · STAGE \(activeStage + 1) OF \(stages.count)")
                 .font(Brand.bodyFont(13).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
             Text(activityTitle(at: date))
-                .font(Brand.headingFont(23)).foregroundStyle(Brand.heading)
+                .font(Brand.headingFont(28)).foregroundStyle(Brand.heading)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             Text(activityDetail(at: date)).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
@@ -384,13 +403,9 @@ struct CollectionStatusPanel: View {
                 Button("Check temporary data") { model.inspectResidue() }.buttonStyle(SecondaryButton())
             }
             if model.phase == .completed {
-                Button("Continue to Signed in Account") {
-                    model.continueToSignedInAccount { url, browser in
-                        returnToBrowser(url, preferredBrowserBundleID: browser)
-                    }
+                if model.canContinueToSignedInAccount {
+                    BrowserReturnControls(model: model)
                 }
-                    .buttonStyle(LimeButton())
-                    .disabled(!model.canContinueToSignedInAccount)
                 Button("Close") { NSApp.keyWindow?.performClose(nil) }
                     .buttonStyle(SecondaryButton())
             }

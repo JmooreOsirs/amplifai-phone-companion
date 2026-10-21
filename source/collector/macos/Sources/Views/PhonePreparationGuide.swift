@@ -3,14 +3,16 @@ import SwiftUI
 
 /// Instructions, not a device-status meter. Only the model's read result can confirm readiness.
 struct PhoneConnectionGuide: View {
+    var checkInProgress = false
+    var settingConfirmed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
             PhoneConnectionIllustration(reduceMotion: reduceMotion)
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: Brand.Space.section) { instructions }
-                VStack(alignment: .leading, spacing: Brand.Space.item) { instructions }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Brand.Space.section, alignment: .topLeading)],
+                      alignment: .leading, spacing: Brand.Space.item) {
+                instructions
             }
         }
         .brandControls()
@@ -19,7 +21,13 @@ struct PhoneConnectionGuide: View {
     @ViewBuilder private var instructions: some View {
         instruction(1, "Connect", "Use a data-capable USB cable.")
         instruction(2, "Unlock", "Keep your iPhone unlocked to connect.")
-        instruction(3, "Trust when asked", "Tap Trust if your iPhone asks.")
+        if checkInProgress {
+            instruction(3, "Trust if asked", "Tap Trust and enter your iPhone passcode only if prompted. An already-trusted iPhone may not ask.")
+        } else if settingConfirmed {
+            instruction(3, "Continue below", "Your backup setting is checked. Keep the iPhone connected.")
+        } else {
+            instruction(3, "Check iPhone below", "Start the check here. Answer any Trust prompt on your iPhone when it appears.")
+        }
     }
 
     private func instruction(_ number: Int, _ title: String, _ detail: String) -> some View {
@@ -30,6 +38,37 @@ struct PhoneConnectionGuide: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
+    }
+}
+
+struct BackupPasswordHelp: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
+            HStack(alignment: .top, spacing: Brand.Space.item) {
+                Image(systemName: "externaldrive.badge.person.crop")
+                    .font(.system(size: 30)).foregroundStyle(Brand.blue).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Encrypted backup? Keep its password ready.")
+                        .font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
+                    Text("Use the password chosen for encrypted computer backups. Your iPhone passcode unlocks the phone instead.")
+                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
+                }
+            }
+            DisclosureGroup("About this password") {
+                VStack(alignment: .leading, spacing: Brand.Space.item) {
+                    Label("Finder → your iPhone → General → Encrypt local backup", systemImage: "lock.rectangle")
+                        .font(Brand.bodyFont(14).weight(.semibold)).foregroundStyle(Brand.heading)
+                    Text("That checkbox shows whether encryption is on; Finder does not reveal the password. AMPLIFai cannot recover or reset it.")
+                    Text("If you forgot it, read Apple's guidance before changing device settings. A new password cannot unlock an older encrypted backup.")
+                    Link("Apple's forgotten backup password guidance", destination: URL(string: "https://support.apple.com/108313")!)
+                        .buttonStyle(QuietAction())
+                }
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.body).padding(.top, 8)
+            }
+            .font(Brand.bodyFont(14))
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .brandWell()
     }
 }
 
