@@ -4,6 +4,10 @@ The producer digest is compared with the exact ciphertext consumed by the
 decrypting copy. The private copy is independently hashed while written and
 again inside a bounded read-only worker. No sidecar may accompany the main.
 Only fixed validation codes cross the worker boundary.
+
+A larger encrypted Messages copy can collect the same proof facts for diagnosis,
+but is never admitted. Ciphertext/copy checksums cannot explain a contradictory
+manifest size, even when the difference happens to be one SQLite page.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ SUCCESS = {
 }
 OUTCOMES = contacts.OUTCOMES | messages.OUTCOMES | {
     "copy_checksum_mismatch", "sidecar_present", "schema_unsupported",
-    "validated_call_database",
+    "validated_call_database", "unsupported_size_growth",
 }
 
 
@@ -161,7 +165,12 @@ def validate_encrypted_size_difference(
             return result("insufficient_manifest")
         if entry.file_id != expected_id or Path(entry.real_path) != source or not isinstance(entry.encryption_key, bytes) or not entry.encryption_key:
             return result("unsafe")
-        if type(actual_size) is not int or type(entry.size) is not int or not 512 <= actual_size < entry.size < 2**63:
+        if (type(actual_size) is not int or type(entry.size) is not int
+                or not 512 <= actual_size < 2**63 or not 512 <= entry.size < 2**63
+                or actual_size == entry.size):
+            return result("insufficient_manifest")
+        growing = actual_size > entry.size
+        if growing and category != "messages":
             return result("insufficient_manifest")
         if type(raw_size) is not int or raw_size != (actual_size // 16 + 1) * 16:
             return result("unsafe")
@@ -224,11 +233,16 @@ def validate_encrypted_size_difference(
             return result("unavailable")
         if code in SUCCESS.values() and code != SUCCESS[category]:
             return result("unavailable")
+        # Growth is diagnostic-only, including if a faulty worker reports a
+        # success code. Never let it widen the existing acceptance boundary.
+        if growing and code in SUCCESS.values():
+            return result("unavailable")
         if contacts._identity(before_copy) != contacts._identity(contacts._regular_info(destination)):
             return result("unsafe")
         if contacts._identity(source_before) != contacts._identity(contacts._regular_info(source)):
             return result("unsafe")
-        if not _sidecars_absent(connection, Path(backup.path), destination, relative, workspace):
+        sidecars_absent = _sidecars_absent(connection, Path(backup.path), destination, relative, workspace)
+        if not sidecars_absent:
             return result("sidecar_present")
         if bound_callback is not None:
             bound_callback()
@@ -300,7 +314,10 @@ def _validate(request: object) -> tuple[str, bool | None]:
         return "unsafe", None
     category, actual, declared = request["category"], request["actual_size"], request["manifest_size"]
     digest = request["copied_sha256"]
-    if category not in PATHS or type(actual) is not int or type(declared) is not int or not 512 <= actual < declared < 2**63 or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    if (category not in PATHS or type(actual) is not int or type(declared) is not int
+            or not 512 <= actual < 2**63 or not 512 <= declared < 2**63
+            or actual == declared or (actual > declared and category != "messages")
+            or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
         return "unsafe", None
     path = Path(request["path"])
     if not contacts._frozen_owned_path(path):
@@ -320,7 +337,11 @@ def _validate(request: object) -> tuple[str, bool | None]:
     matched = hmac.compare_digest(sha256.hexdigest(), digest)
     if not matched:
         return "copy_checksum_mismatch", False
-    if category == "calls":
+    if actual > declared:
+        # Do not parse or truncate the contradictory copy. This worker proves
+        # only that its bytes still match the copy made during decryption.
+        code = "unsupported_size_growth"
+    elif category == "calls":
         code = _call_integrity(path, actual, declared, deadline)
     else:
         code = (contacts if category == "contacts" else messages)._validate({

@@ -30,6 +30,7 @@ from .backup_watchdog import (
     BackupTimeLimit,
 )
 from .bridge import BridgeError, BridgeServer
+from .call_accounting import CallAccountingHistory, call_accounting, validate_call_accounting
 from .capture_runtime import run_local_capture
 from .ios_backup import (
     BackupEncryptionPreflightError, IPhoneCapture, capture_source_diagnostics, collect_iphone,
@@ -240,11 +241,26 @@ def run_connect(
     collector: Callable[..., Awaitable[IPhoneCapture]] = collect_iphone,
     require_encrypted_backup: bool = False,
     *, diagnostic_history: DiagnosticHistory | None = None,
+    call_accounting_history: CallAccountingHistory | None = None,
 ) -> int:
     _emit(sink, {"kind": "state", "state": "connecting"})
     capture_stage = "connecting"
     attempt_id = str(uuid4())
     diagnostics: dict[tuple[str, str], dict[str, object]] = {}
+    diagnostic_storage_failures: set[str] = set()
+
+    def diagnostic_storage_result(history: str, *, failed: bool) -> None:
+        was_failed = bool(diagnostic_storage_failures)
+        if failed:
+            diagnostic_storage_failures.add(history)
+        else:
+            diagnostic_storage_failures.discard(history)
+        if diagnostic_storage_failures:
+            _emit(sink, {"kind": "diagnostic-storage", "state": "failed",
+                         "code": "diagnostics_unavailable"})
+        elif history == "source" or was_failed:
+            _emit(sink, {"kind": "diagnostic-storage", "state": "retained",
+                         "attemptId": attempt_id})
 
     def password_provider() -> str:
         nonlocal capture_stage
@@ -291,15 +307,29 @@ def run_connect(
                 try:
                     diagnostic_history.record(attempt_id, list(diagnostics.values()))
                 except DiagnosticsStorageError:
-                    _emit(sink, {"kind": "diagnostic-storage", "state": "failed",
-                                 "code": "diagnostics_unavailable"})
+                    diagnostic_storage_result("source", failed=True)
                 else:
-                    _emit(sink, {"kind": "diagnostic-storage", "state": "retained",
-                                 "attemptId": attempt_id})
+                    diagnostic_storage_result("source", failed=False)
 
     bridge: BridgeServer | None = None
     capture: IPhoneCapture | None = None
     selected_ids: set[int] | SelectionSnapshot | None = None
+    last_call_accounting: dict[str, int | None] | None = None
+
+    def retain_call_accounting(selected_rows: int | None = None, *, measured=None) -> None:
+        nonlocal last_call_accounting
+        current = (call_accounting(capture.calls, selected_rows) if measured is None
+                   else validate_call_accounting(measured))
+        if current is None or current == last_call_accounting:
+            return
+        if call_accounting_history is not None:
+            try:
+                call_accounting_history.record(attempt_id, current)
+            except DiagnosticsStorageError:
+                diagnostic_storage_result("calls", failed=True)
+                return
+            diagnostic_storage_result("calls", failed=False)
+        last_call_accounting = current
     try:
         collector_options: dict[str, object] = {
             "password_provider": password_provider,
@@ -313,6 +343,7 @@ def run_connect(
         capture = run_local_capture(collector(**collector_options))
         capture_stage = "review"
         captured_diagnostics = capture_source_diagnostics(capture)
+        retain_call_accounting()
         for record in captured_diagnostics:
             payload_diagnostic(record)
         _emit(
@@ -427,6 +458,8 @@ def run_connect(
                         bridge = None
                     _emit(sink, {"kind": "error", "code": "bridge_unavailable"})
                     continue
+                if capture.calls.call_accounting is not None and bridge.call_accounting is not None:
+                    retain_call_accounting(measured=bridge.call_accounting)
                 _emit(
                     sink,
                     {
@@ -469,8 +502,10 @@ def run_connect(
                              "nextCursor": cursor + len(ids)})
                 if snapshot is not None:
                     selected_ids = snapshot
+                    review = review_snapshot(capture, snapshot)
+                    retain_call_accounting(review["matched_calls"])
                     _emit(sink, {"kind": "review", "reviewId": review_id,
-                                 **review_snapshot(capture, snapshot)})
+                                 **review})
                 continue
             if action != "review":
                 raise ValueError("Unexpected action")
@@ -510,6 +545,7 @@ def run_connect(
                 _emit(sink, {"kind": "error", "code": "selection"})
                 continue
             selected_ids = set(ids)
+            retain_call_accounting(review["matched_calls"])
             _emit(
                 sink,
                 {
@@ -625,6 +661,7 @@ def main() -> int:
     parser.add_argument("--require-encrypted-backup", action="store_true")
     args = parser.parse_args()
     diagnostic_history = DiagnosticHistory()
+    call_accounting_history = CallAccountingHistory()
     if args.mode != "connect":
         return run_admin(args.mode, sys.stdout, diagnostic_history=diagnostic_history)
 
@@ -636,6 +673,7 @@ def main() -> int:
         sys.stdin, sys.stdout,
         require_encrypted_backup=args.require_encrypted_backup,
         diagnostic_history=diagnostic_history,
+        call_accounting_history=call_accounting_history,
     )
 
 

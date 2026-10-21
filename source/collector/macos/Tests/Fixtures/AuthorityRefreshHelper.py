@@ -12,6 +12,7 @@ import sys
 
 from amplifai_phone import agent
 from amplifai_phone.bridge import BRIDGE_PORT, BridgeServer
+from amplifai_phone.call_accounting import CallAccounting, CallAccountingHistory
 from amplifai_phone.ios_backup import IPhoneCapture
 from amplifai_phone.metadata import Contact, Interaction, SourceResult
 from amplifai_phone.record_store import RecordStore
@@ -32,7 +33,8 @@ def build_capture(root: Path, small: bool = False) -> IPhoneCapture:
             phone = f"+1555{1 + (index - 1) % counts['contacts']:07d}"
             store.add(category, Interaction(index, kind, "sms" if kind == "message" else "call", "2026-10-19T00:00:00Z",
                                            "incoming", (phone,), 30 if kind == "call" else None))
-    sources = [SourceResult(counts[key], store.collection(key), 0)
+    sources = [SourceResult(counts[key], store.collection(key), 0,
+                            CallAccounting(counts[key], 0, 0, 0, counts[key]) if key == "calls" else None)
                for key in ("contacts", "calls", "messages")]
     return IPhoneCapture(*sources, "2026-10-19T01:00:00Z", "2026-04-19T00:00:00Z",
                          (), workspace, store, backup_encrypted=True)
@@ -73,7 +75,8 @@ def main() -> int:
 
     # Constructor dependency injection changes only the external account-proof boundary.
     agent.BridgeServer = partial(BridgeServer, account_proof=proof)
-    return agent.run_connect(sys.stdin, sys.stdout, collector=capture, require_encrypted_backup=True)
+    return agent.run_connect(sys.stdin, sys.stdout, collector=capture, require_encrypted_backup=True,
+                             call_accounting_history=CallAccountingHistory(root / "sessions"))
 
 
 if __name__ == "__main__":
