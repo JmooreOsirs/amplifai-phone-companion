@@ -6,11 +6,14 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from build_windows_candidate import file_records
-from build_windows_msi import NS, UPGRADE_CODE, VERSION, author_xml, checked_records
+from build_windows_msi import NS, PROTOCOL_KEY, UPGRADE_CODE, VERSION, author_xml, checked_records
+from verify_windows_install import verify_setup_protocol
 
 
 class InstallerAuthoringTests(unittest.TestCase):
@@ -74,6 +77,52 @@ class InstallerAuthoringTests(unittest.TestCase):
         (self.package / "AmplifaiPhone.exe").write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "does not match"):
             checked_records(self.package, self.receipt)
+
+    def test_setup_protocol_is_per_user_and_quotes_the_installed_launcher_and_uri(self) -> None:
+        _, records = checked_records(self.package, self.receipt)
+        tree = author_xml(records, self.package)
+        ns = {"w": NS}
+        values = tree.findall(".//w:RegistryValue", ns)
+        protocol = [item.attrib for item in values if item.attrib["Key"].startswith(PROTOCOL_KEY)]
+        self.assertEqual(protocol, [
+            {"Root": "HKCU", "Key": PROTOCOL_KEY, "Value": "URL:AMPLIFai Phone setup", "Type": "string"},
+            {"Root": "HKCU", "Key": PROTOCOL_KEY, "Name": "URL Protocol", "Value": "", "Type": "string"},
+            {"Root": "HKCU", "Key": PROTOCOL_KEY + r"\shell\open\command",
+             "Value": '"[INSTALLFOLDER]AmplifaiPhone.exe" "%1"', "Type": "string"},
+        ])
+        self.assertIsNone(tree.find(".//w:RegistryKey[@ForceDeleteOnUninstall='yes']", ns))
+
+    def test_installed_protocol_rejects_missing_stale_or_unremoved_registration(self) -> None:
+        entries = {
+            (PROTOCOL_KEY, ""): ("URL:AMPLIFai Phone setup", 1),
+            (PROTOCOL_KEY, "URL Protocol"): ("", 1),
+            (PROTOCOL_KEY + r"\shell\open\command", ""): (f'"{self.package / "AmplifaiPhone.exe"}" "%1"', 1),
+        }
+
+        def query(key: str, name: str) -> tuple[str, int]:
+            try:
+                return entries[(key, name)]
+            except KeyError:
+                raise FileNotFoundError from None
+
+        registry = SimpleNamespace(HKEY_CURRENT_USER="HKCU", REG_SZ=1,
+                                   OpenKey=lambda root, key: nullcontext(key), QueryValueEx=query)
+        with patch.dict("sys.modules", {"winreg": registry}):
+            self.assertEqual(verify_setup_protocol(self.package, removed=False),
+                             {"setup_protocol_registered": True})
+            with self.assertRaisesRegex(ValueError, "remains"):
+                verify_setup_protocol(self.package, removed=True)
+            command_key = (PROTOCOL_KEY + r"\shell\open\command", "")
+            original = entries[command_key]
+            for changed in (('"C:\\stale\\AmplifaiPhone.exe" "%1"', 1), (original[0], 2)):
+                entries[command_key] = changed
+                with self.assertRaisesRegex(ValueError, "differs"):
+                    verify_setup_protocol(self.package, removed=False)
+            entries.clear()
+            with self.assertRaisesRegex(ValueError, "missing"):
+                verify_setup_protocol(self.package, removed=False)
+            self.assertEqual(verify_setup_protocol(self.package, removed=True),
+                             {"setup_protocol_registered": False})
 
     def test_missing_legal_fails_even_with_fresh_receipt(self) -> None:
         (self.package / "resources/legal/LICENSE").unlink()

@@ -17,6 +17,7 @@ NS = "http://schemas.microsoft.com/wix/2006/wi"
 ET.register_namespace("", NS)
 UPGRADE_CODE = "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871"
 VERSION = "1.0.19"
+PROTOCOL_KEY = r"Software\Classes\amplifai-phone"
 
 
 def tag(name: str) -> str:
@@ -113,6 +114,15 @@ def author_xml(records: list[dict], package: Path) -> ET.ElementTree:
             "Id": "R" + identity, "Directory": directories[path].attrib["Id"], "On": "uninstall",
         })
         components[path] = component
+    for key, name, value in (
+        (PROTOCOL_KEY, None, "URL:AMPLIFai Phone setup"),
+        (PROTOCOL_KEY, "URL Protocol", ""),
+        (PROTOCOL_KEY + r"\shell\open\command", None, '"[INSTALLFOLDER]AmplifaiPhone.exe" "%1"'),
+    ):
+        attributes = {"Root": "HKCU", "Key": key, "Value": value, "Type": "string"}
+        if name is not None:
+            attributes["Name"] = name
+        ET.SubElement(components[""], tag("RegistryValue"), attributes)
     for index, item in enumerate(records, 1):
         relative = item["path"]
         parent_name = Path(relative).parent.as_posix()
