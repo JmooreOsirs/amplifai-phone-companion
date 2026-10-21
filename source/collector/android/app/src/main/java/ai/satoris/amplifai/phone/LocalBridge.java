@@ -39,7 +39,7 @@ public final class LocalBridge implements AutoCloseable {
     }
     record Destination(String intentId, String email, String course) {}
     public static final int PORT = 48751;
-    public static final String ACCOUNT_ORIGIN = "https://amplifai-database-engine.vercel.app";
+    public static final String ACCOUNT_ORIGIN = "https://amplifai.satoris.ai";
     private static final int MAX_HEADER_BYTES = 8192;
     private static final int MAX_REQUEST_BYTES = 1024;
     private static final int PAGE_BYTES = 128 * 1024;
@@ -90,6 +90,7 @@ public final class LocalBridge implements AutoCloseable {
     private boolean savedAcknowledged;
     private String destinationIntentId;
     private String destinationCapability;
+    private String destinationReleaseCode;
     private String destinationEmail;
     private String destinationCourse;
     private volatile String destinationState;
@@ -320,19 +321,31 @@ public final class LocalBridge implements AutoCloseable {
         String body = command(request, input);
         Matcher match = body == null ? null : RELEASE.matcher(body);
         if (match == null || !match.matches()) { reply(output, 400, true, empty()); return; }
-        if (!"approved".equals(destinationState) || token != null ||
-                !constantTimeEquals(destinationIntentId, match.group(1)) ||
-                !constantTimeEquals(destinationCapability, match.group(2))) {
-            reply(output, 403, true, empty()); return;
+        synchronized (this) {
+            if (closed || clock.getAsLong() >= expiresAt) { reply(output, 410, true, empty()); return; }
+            if ((!"approved".equals(destinationState) && !"released".equals(destinationState)) ||
+                    !constantTimeEquals(destinationIntentId, match.group(1)) ||
+                    !constantTimeEquals(destinationCapability, match.group(2)) ||
+                    (destinationReleaseCode != null && !constantTimeEquals(destinationReleaseCode, match.group(3)))) {
+                reply(output, 403, true, empty()); return;
+            }
+            // Retain the exact grant even if the authority's consume response is lost.
+            destinationReleaseCode = match.group(3);
         }
-        if (!accountProof.consume(match.group(1), match.group(2), match.group(3), handoffId, payloadSha256)) {
-            reply(output, 409, true, empty()); return;
+        boolean consumed = accountProof.consume(match.group(1), match.group(2), match.group(3), handoffId, payloadSha256);
+        String response;
+        synchronized (this) {
+            if (closed || clock.getAsLong() >= expiresAt) { reply(output, 410, true, empty()); return; }
+            if (!consumed) { reply(output, 409, true, empty()); return; }
+            if (token == null) {
+                issueToken();
+                destinationState = "released";
+                renew();
+            }
+            // Every retry revalidates authority without replacing the token or extending its deadline.
+            response = pairResponse();
         }
-        if (closed || clock.getAsLong() >= expiresAt) { reply(output, 410, true, empty()); return; }
-        issueToken();
-        destinationState = "released";
-        reply(output, 200, true, pairResponse().getBytes(StandardCharsets.US_ASCII));
-        renew();
+        reply(output, 200, true, response.getBytes(StandardCharsets.US_ASCII));
     }
 
     private static boolean validDestination(String text, int maxLength) {
@@ -674,7 +687,9 @@ public final class LocalBridge implements AutoCloseable {
             }
             token = null;
             destinationState = null;
+            destinationIntentId = null;
             destinationCapability = null;
+            destinationReleaseCode = null;
             destinationEmail = null;
             destinationCourse = null;
             Arrays.fill(payload, (byte) 0);

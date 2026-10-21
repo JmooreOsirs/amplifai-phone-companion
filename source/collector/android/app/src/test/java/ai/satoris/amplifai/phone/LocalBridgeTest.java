@@ -23,6 +23,7 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -30,7 +31,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class LocalBridgeTest {
-    private static final String ORIGIN = "https://amplifai-database-engine.vercel.app";
+    private static final String ORIGIN = "https://amplifai.satoris.ai";
 
     private static String send(int port, String origin, String method, String path,
                                String extraHeaders, String body) throws Exception {
@@ -89,6 +90,7 @@ public final class LocalBridgeTest {
     }
 
     @Test public void accountConfirmedConnectRequiresNativeDecisionAndServerConsumeBeforePreview() throws Exception {
+        assertEquals(ORIGIN, LocalBridge.ACCOUNT_ORIGIN);
         SyntheticPages pages = new SyntheticPages();
         AtomicInteger claims = new AtomicInteger();
         AtomicInteger consumes = new AtomicInteger();
@@ -121,6 +123,9 @@ public final class LocalBridgeTest {
             String json = "Content-Type: application/json\r\n";
             assertTrue(sendWithHost(bridge.port(), "localhost:" + bridge.port(), ORIGIN, "POST", "/v3/connect", json, binding).startsWith("HTTP/1.1 403"));
             assertTrue(send(bridge.port(), "https://other.example", "POST", "/v3/connect", json, binding).startsWith("HTTP/1.1 403"));
+            String legacy = send(bridge.port(), "https://amplifai-database-engine.vercel.app", "POST", "/v3/connect", json, binding);
+            assertTrue(legacy.startsWith("HTTP/1.1 403"));
+            assertFalse(legacy.contains("Access-Control-Allow-Origin"));
             assertEquals(0, claims.get());
             assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/connect", json,
                     binding.replace(pages.manifestSha256(), "0".repeat(64))).startsWith("HTTP/1.1 409"));
@@ -138,16 +143,158 @@ public final class LocalBridgeTest {
             assertEquals(0, consumes.get());
             assertTrue(bridge.decideDestination(intent, true));
             assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/status", auth, "").contains("\"approved\""));
-            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/release", json,
-                    release.replace(releaseCode, "D".repeat(43))).startsWith("HTTP/1.1 409"));
-            assertEquals(1, consumes.get());
             String paired = send(bridge.port(), ORIGIN, "POST", "/v3/release", json, release);
             assertTrue(paired.startsWith("HTTP/1.1 200"));
             assertTrue(paired.contains("\"format\":\"paged-records-v2\""));
             assertTrue(paired.contains("\"payloadSha256\":\"" + pages.manifestSha256() + "\""));
-            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/release", json, release).startsWith("HTTP/1.1 403"));
+            String retried = send(bridge.port(), ORIGIN, "POST", "/v3/release", json, release);
+            assertTrue(retried.startsWith("HTTP/1.1 200"));
+            assertEquals(jsonString(paired, "token"), jsonString(retried, "token"));
+            assertEquals(2, consumes.get());
             assertTrue(send(bridge.port(), ORIGIN, "GET", "/v3/discover", "", "").startsWith("HTTP/1.1 410"));
             assertTrue(send(bridge.port(), ORIGIN, "GET", "/v2/source/contacts?cursor=0", "", "").startsWith("HTTP/1.1 403"));
+        }
+    }
+
+    private static String jsonString(String response, String key) {
+        Matcher value = Pattern.compile("\"" + key + "\":\"([^\"]+)\"").matcher(response);
+        assertTrue("Missing response field: " + key, value.find());
+        return value.group(1);
+    }
+
+    private static final class AccountSession implements AutoCloseable {
+        final String intent = "12345678-1234-4234-8234-123456789abc";
+        final String capability = "A".repeat(43);
+        final String releaseCode = "B".repeat(43);
+        final String json = "Content-Type: application/json\r\n";
+        final AtomicLong clock = new AtomicLong();
+        final AtomicInteger consumes = new AtomicInteger();
+        final AtomicBoolean authorityCurrent = new AtomicBoolean(true);
+        final AtomicReference<Runnable> duringConsume = new AtomicReference<>(() -> {});
+        final SyntheticPages pages = new SyntheticPages();
+        final LocalBridge bridge;
+        final String release = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                "\",\"releaseCode\":\"" + releaseCode + "\"}";
+        final String handoffId;
+        final String binding;
+
+        AccountSession() throws Exception {
+            LocalBridge.AccountProof proof = new LocalBridge.AccountProof() {
+                @Override public LocalBridge.Destination claim(String id, String cap, String handoff, String digest) {
+                    assertEquals(intent, id); assertEquals(capability, cap);
+                    assertEquals(handoffId, handoff); assertEquals(pages.manifestSha256(), digest);
+                    return new LocalBridge.Destination(id, "synthetic@example.test", "Synthetic course");
+                }
+                @Override public boolean consume(String id, String cap, String code, String handoff, String digest) {
+                    assertEquals(intent, id); assertEquals(capability, cap); assertEquals(releaseCode, code);
+                    assertEquals(handoffId, handoff); assertEquals(pages.manifestSha256(), digest);
+                    consumes.incrementAndGet();
+                    duringConsume.get().run();
+                    return authorityCurrent.get();
+                }
+            };
+            bridge = new LocalBridge(pages, ORIGIN, 0, clock::get, reason -> {},
+                    () -> {}, ignored -> {}, proof, () -> {});
+            bridge.start();
+            handoffId = jsonString(send(bridge.port(), ORIGIN, "GET", "/v3/discover", "", ""), "handoffId");
+            binding = "{\"intentId\":\"" + intent + "\",\"capability\":\"" + capability +
+                    "\",\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + pages.manifestSha256() + "\"}";
+            assertTrue(send(bridge.port(), ORIGIN, "POST", "/v3/connect", json, binding).startsWith("HTTP/1.1 200"));
+            assertTrue(bridge.decideDestination(intent, true));
+        }
+
+        String release() throws Exception { return release(release); }
+        String release(String command) throws Exception {
+            return send(bridge.port(), ORIGIN, "POST", "/v3/release", json, command);
+        }
+        @Override public void close() { bridge.close(); }
+    }
+
+    @Test public void lostConsumeResponsePinsExactGrantUntilItCanBeRevalidated() throws Exception {
+        try (AccountSession session = new AccountSession()) {
+            session.authorityCurrent.set(false);
+            assertTrue(session.release().startsWith("HTTP/1.1 409"));
+            assertEquals(1, session.consumes.get());
+            session.authorityCurrent.set(true);
+            for (String changed : List.of(
+                    session.release.replace(session.intent, "87654321-1234-4234-8234-123456789abc"),
+                    session.release.replace(session.capability, "C".repeat(43)),
+                    session.release.replace(session.releaseCode, "D".repeat(43)))) {
+                assertTrue(session.release(changed).startsWith("HTTP/1.1 403"));
+            }
+            assertEquals(1, session.consumes.get());
+            assertTrue(session.release().startsWith("HTTP/1.1 200"));
+            assertEquals(2, session.consumes.get());
+        }
+    }
+
+    @Test public void releaseRetryRevalidatesAuthorityAndKeepsTheOriginalTokenAndDeadline() throws Exception {
+        try (AccountSession session = new AccountSession()) {
+            String paired = session.release();
+            assertTrue(paired.startsWith("HTTP/1.1 200"));
+            session.clock.addAndGet(TimeUnit.MINUTES.toNanos(6));
+            long remaining = session.bridge.remainingMillis();
+            session.authorityCurrent.set(false);
+            String rejected = session.release();
+            assertTrue(rejected.startsWith("HTTP/1.1 409"));
+            assertFalse(rejected.contains("\"token\""));
+            session.authorityCurrent.set(true);
+            String retried = session.release();
+            assertTrue(retried.startsWith("HTTP/1.1 200"));
+            for (String key : List.of("token", "handoffId", "payloadSha256")) {
+                assertEquals(jsonString(paired, key), jsonString(retried, key));
+            }
+            assertEquals(3, session.consumes.get());
+            assertEquals(remaining, session.bridge.remainingMillis());
+            assertTrue(send(session.bridge.port(), ORIGIN, "POST", "/v3/connect", session.json,
+                    session.binding).startsWith("HTTP/1.1 409"));
+            assertTrue(send(session.bridge.port(), ORIGIN, "POST", "/v1/pair", session.json,
+                    "{\"code\":\"" + session.bridge.code() + "\"}").startsWith("HTTP/1.1 409"));
+        }
+    }
+
+    @Test public void releaseProofReturningAfterExpiryCannotIssueOrReplayAToken() throws Exception {
+        for (boolean released : List.of(false, true)) {
+            try (AccountSession session = new AccountSession()) {
+                if (released) assertTrue(session.release().startsWith("HTTP/1.1 200"));
+                session.duringConsume.set(() -> session.clock.addAndGet(
+                        TimeUnit.MILLISECONDS.toNanos(session.bridge.remainingMillis())));
+                String expired = session.release();
+                assertTrue(expired.startsWith("HTTP/1.1 410"));
+                assertFalse(expired.contains("\"token\""));
+            }
+        }
+    }
+
+    @Test public void cancellationDuringReleaseProofCannotReplayIntoAReplacementBridge() throws Exception {
+        try (AccountSession session = new AccountSession()) {
+            assertTrue(session.release().startsWith("HTTP/1.1 200"));
+            session.duringConsume.set(session.bridge::close);
+            try {
+                assertFalse(session.release().contains("\"token\""));
+            } catch (java.net.SocketException cancelledConnection) {
+                // Cancellation may reset the in-flight socket before its response.
+            }
+            assertClosed(session.bridge.port());
+            assertTrue(session.pages.closed);
+            AtomicInteger claims = new AtomicInteger();
+            LocalBridge.AccountProof proof = new LocalBridge.AccountProof() {
+                @Override public LocalBridge.Destination claim(String id, String cap, String handoff, String digest) {
+                    claims.incrementAndGet(); return null;
+                }
+                @Override public boolean consume(String id, String cap, String code, String handoff, String digest) {
+                    throw new AssertionError("A replacement bridge must not reuse cancelled authority");
+                }
+            };
+            try (LocalBridge replacement = new LocalBridge(new SyntheticPages(), ORIGIN, 0, System::nanoTime,
+                    reason -> {}, () -> {}, ignored -> {}, proof, () -> {})) {
+                replacement.start();
+                assertTrue(send(replacement.port(), ORIGIN, "POST", "/v3/connect", session.json,
+                        session.binding).startsWith("HTTP/1.1 409"));
+                assertTrue(send(replacement.port(), ORIGIN, "POST", "/v3/release", session.json,
+                        session.release).startsWith("HTTP/1.1 403"));
+                assertEquals(0, claims.get());
+            }
         }
     }
 

@@ -232,8 +232,12 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
                     require(request(bridge.port(), "GET", "/v2/source/contacts?cursor=0",
                             "Authorization: Bearer " + pairing.getString("token") + "\r\n", "").startsWith("HTTP/1.1 200"),
                             "approved Android v3 did not expose the reviewed page");
-                    require(request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n",
-                            release).startsWith("HTTP/1.1 403"), "v3 token release replayed");
+                    String retried = request(bridge.port(), "POST", "/v3/release", "Content-Type: application/json\r\n", release);
+                    require(retried.startsWith("HTTP/1.1 200"), "exact v3 release response could not be recovered");
+                    JSONObject recovered = new JSONObject(retried.substring(retried.indexOf("\r\n\r\n") + 4));
+                    for (String key : new String[]{"token", "handoffId", "payloadSha256", "manifestJson"}) {
+                        require(pairing.getString(key).equals(recovered.getString(key)), "v3 release recovery changed " + key);
+                    }
                 }
             }
         }
