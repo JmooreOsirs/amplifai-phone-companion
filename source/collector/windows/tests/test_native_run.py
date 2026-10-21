@@ -1,12 +1,15 @@
 """Synthetic authority boundaries; never contact an account or collect a device."""
 import copy
 import json
+import threading
 import unittest
 from datetime import timedelta
 from unittest.mock import Mock, patch
+from urllib.parse import parse_qs, urlsplit
 
 from native_run import (BIND_PATH, CLAIM_PATH, STATUS_PATH, VERIFY_PATH,
-                        NativeRun, NativeTransport, Operation, Outcome)
+                        AuthorityWorker, CompletionBinding, NativeRun, NativeTransport, Operation, Outcome,
+                        account_continue_url, account_control_url)
 from native_setup import SetupProtocolError, request_body, timestamp
 from test_native_setup import CLIENT, FIXTURE, LINK_TEXT
 
@@ -74,6 +77,51 @@ def bound():
 
 
 class NativeRunTests(unittest.TestCase):
+    def test_account_returns_have_exact_non_secret_bindings(self):
+        run, _ = bound()
+        enrollment, run_id = run.run.scope.enrollment_id, run.run.run_id
+        expected = {"continue": ["reviewed"], "enrollmentId": [enrollment], "week": ["phone"]}
+        self.assertEqual(parse_qs(urlsplit(run.continue_url).query), expected)
+        self.assertEqual(parse_qs(urlsplit(run.account_url).query),
+            {"phoneRunControl": [run_id], "enrollmentId": [enrollment], "week": ["phone"]})
+        run.handoff_expired()
+        self.assertIsNone(run.continue_url)
+        self.assertEqual(parse_qs(urlsplit(run.account_url).query),
+            {"enrollmentId": [enrollment], "week": ["phone"], "completedHandoffId": [HANDOFF],
+             "completedPayloadSha256": ["d" * 64]})
+        for url in (account_continue_url(enrollment), account_control_url(run_id, enrollment), run.account_url):
+            self.assertEqual(urlsplit(url)._replace(query="").geturl(), "https://amplifai.satoris.ai/phone/account")
+            self.assertNotIn(run.run.capability, url)
+
+    def test_account_return_builders_reject_unvalidated_identifiers_and_digests(self):
+        for value in ("", "https://example.test", HANDOFF + "&continue=reviewed", INTENT.upper(), None):
+            with self.assertRaises(SetupProtocolError):
+                account_continue_url(value)
+            with self.assertRaises(SetupProtocolError):
+                account_control_url(value, HANDOFF)
+            with self.assertRaises(SetupProtocolError):
+                CompletionBinding(HANDOFF, HANDOFF, value)
+
+    def test_saved_receipt_clears_capabilities_but_keeps_exact_report_return(self):
+        run, _ = bound()
+        enrollment = run.run.scope.enrollment_id
+        stale = run.refresh()
+        late = response(run, stale.action)
+        with self.assertRaises(SetupProtocolError):
+            run.record_saved(INTENT)
+        self.assertIsNone(run.completion)
+        run.record_saved(HANDOFF)
+        for name in ("claim_request", "claim", "approval_request", "run", "pending", "start_body", "bind_body", "continued_selection"):
+            self.assertIsNone(getattr(run, name), name)
+        self.assertEqual(vars(run.completion), {"enrollment_id": enrollment, "handoff_id": HANDOFF, "payload_sha256": "d" * 64})
+        self.assertNotIn("continue=", run.account_url)
+        self.assertIsNone(run.continue_url)
+        self.assertFalse(run.current)
+        self.assertIsNone(run.complete(stale, Outcome("accepted", late)))
+        run.record_saved(HANDOFF)  # The same receipt remains idempotent after cleanup.
+        with self.assertRaises(SetupProtocolError):
+            run.retry()
+
     def test_bounded_server_clock_skew_and_monotonic_claim_lifetime(self):
         for skew in (-45, 45):
             clock = Clock()
@@ -196,16 +244,9 @@ class NativeRunTests(unittest.TestCase):
         run.complete(operation, Outcome("uncertain"))
         with self.assertRaises(SetupProtocolError):
             run.continue_review((1, 7))
-        self.assertEqual(accept(run, run.continue_review((1, 4))), "pair")
+        self.assertEqual(accept(run, run.retry()), "pair")
         with self.assertRaises(SetupProtocolError):
             run.continue_review((1, 4))
-
-    def test_selection_change_retires_pending_continue_callback(self):
-        run, _ = started()
-        operation = run.continue_review((1, 4))
-        run.selection_changed()
-        self.assertIsNone(accept(run, operation))
-        self.assertEqual(accept(run, run.continue_review((2, 9))), "pair")
 
     def test_bind_loss_rechecks_current_authority_and_reuses_exact_binding(self):
         run, _ = started()
@@ -269,6 +310,32 @@ class NativeRunTests(unittest.TestCase):
 
 
 class NativeTransportTests(unittest.TestCase):
+    def test_worker_bounds_stalled_requests_and_rejects_work_after_shutdown(self):
+        worker = AuthorityWorker()
+        entered, release = threading.Event(), threading.Event()
+        def post(_operation):
+            entered.set()
+            release.wait(1)
+            return Outcome("uncertain")
+        worker.transport = Mock(post=post)
+        operation = Operation("claim", CLAIM_PATH, b"{}")
+        self.assertTrue(worker.submit(operation))
+        self.assertTrue(entered.wait(1))
+        self.assertFalse(worker.submit(operation))
+        release.set()
+        worker.thread.join(1)
+        self.assertFalse(worker.idle)  # The single result must be consumed first.
+        self.assertEqual(worker.results.get_nowait()[0], operation)
+        self.assertTrue(worker.idle)
+        worker.close()
+        self.assertFalse(worker.submit(operation))
+
+    def test_thread_resource_failure_leaves_retry_available(self):
+        worker = AuthorityWorker()
+        with patch("native_run.threading.Thread.start", side_effect=RuntimeError("synthetic thread limit")):
+            self.assertFalse(worker.submit(Operation("claim", CLAIM_PATH, b"{}")))
+        self.assertTrue(worker.idle)
+
     def post(self, status=200, body=b"{}", headers=None, path=CLAIM_PATH):
         response = Mock(status=status)
         values = {"Content-Type": "application/json", **(headers or {})}

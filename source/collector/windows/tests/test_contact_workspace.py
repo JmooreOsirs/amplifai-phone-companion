@@ -10,7 +10,7 @@ class ContactWorkspaceTests(unittest.TestCase):
     def window(self):
         view = source_window()
         for name in ("workspace_coverage", "workspace_status", "review_button", "pair_button", "contacts",
-                     "details_pane", "contact_workspace", "details_canvas", "details_content",
+                     "details_pane", "contact_workspace", "native_pane", "details_canvas", "details_content",
                      "account_details_label", "status_details_label"):
             setattr(view, name, Mock())
         view.workspace_buttons = {name: Mock() for name in ("contacts", "setup", "details")}

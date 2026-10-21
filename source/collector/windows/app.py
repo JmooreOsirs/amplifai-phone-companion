@@ -15,6 +15,9 @@ from amplifai_phone.companion_status import CompanionIdentity, CompanionStatusSe
 from updater import BUNDLE_ID, BUILD, CHANNEL, VERSION, PreparedUpdate, UpdateError, check_update, cleanup_owned_updates
 
 from helper_process import HelperProcess, bundled_resources
+from native_run import AuthorityWorker, NativeRun, Operation, Outcome
+from native_setup import ClientIdentity, DISCLOSURE, SetupLink, SetupProtocolError
+from setup_delivery import DeliveryError, SetupDelivery, launch_uri
 from session import BACKUP_CHECK_MODE, DISCLOSURE_VERSION, WEBSITE_ORIGIN, ProtocolError, Session, contact_source_details
 
 # Exact values from collector/macos/Sources/Support/Brand.swift.
@@ -135,10 +138,17 @@ def workspace_summary(state: Session) -> tuple[str, str]:
 
 
 class PhoneWindow:
-    def __init__(self, window: tk.Tk, helper: Path, logo: Path) -> None:
+    def __init__(self, window: tk.Tk, helper: Path, logo: Path, *, delivery=None) -> None:
         self.window, self.state = window, Session()
         self.events: queue.Queue = queue.Queue(maxsize=8)
         self.helper = HelperProcess([str(helper)], self.events.put)
+        self.native = NativeRun(ClientIdentity(VERSION, BUILD))
+        self.native_worker = AuthorityWorker()
+        self.delivery = delivery
+        self._native_authority_sent = None
+        self.native_checked = tk.BooleanVar(value=False)
+        self.native_scope = tk.StringVar(value="Waiting for the authenticated setup destination.")
+        self.native_status = tk.StringVar()
         self.checked = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value=self.state.status)
         self.transfer_status = tk.StringVar(value=self.state.transfer_status)
@@ -171,6 +181,7 @@ class PhoneWindow:
         self.status_server = CompanionStatusServer(
             CompanionIdentity("windows", "x86_64", CHANNEL, BUNDLE_ID, VERSION, BUILD),
             status=lambda: dict(self._status_snapshot), request_update_check=self.enqueue_update_check,
+            native_setup_v2=delivery is not None,
         )
         self.window.title(WINDOW_TITLE)
         self.window.geometry("920x800")
@@ -192,6 +203,277 @@ class PhoneWindow:
         else:
             cleanup_owned_updates()
             self.start("inspect")
+
+    @property
+    def native_active(self):
+        return getattr(self, "native", None) is not None and self.native.active
+
+    @property
+    def native_busy(self):
+        return self.native_active and self.native.phase not in ("cancelled", "refused", "complete")
+
+    @property
+    def native_selection_locked(self):
+        return self.native_active and self.native.continued_selection is not None
+
+    @property
+    def can_return_to_browser(self):
+        return (self.native_active and self.native.continue_url is not None
+                and self.state.handoff_id == self.native.handoff_id
+                and not self.state._browser_received and not self.state.save_receipt_pending
+                and not self.state.saved_acknowledged and not self.state._stopping)
+
+    def open_account(self):
+        url = self.native.account_url if self.native_active else WEBSITE_ORIGIN + "/phone/account"
+        try:
+            opened = webbrowser.open(url)
+        except OSError:
+            opened = False
+        if self.native_active and not opened:
+            self.native.message = "The browser did not open. Return to your original account tab."
+            self.refresh()
+
+    def continue_in_browser(self):
+        if not self.can_return_to_browser:
+            return
+        try:
+            opened = webbrowser.open(self.native.continue_url)
+        except OSError:
+            opened = False
+        self.native.message = ("Return to your account tab to finish saving. Browser recovery may open another tab or profile. Keep this review open until the save receipt arrives."
+            if opened else "The browser did not open. Return to your original account tab to finish saving. Keep this review open until the save receipt arrives.")
+        self.refresh()
+
+    def receive_setup(self, uri):
+        if uri is None:
+            self.window.deiconify()
+            return "accepted"
+        try:
+            link = SetupLink.parse(uri)
+            if (self.native.claim_request is not None and link == self.native.claim_request.link
+                    and self.native.phase not in ("cancelled", "refused")):
+                self.show_workspace("setup")
+                return "duplicate"
+            inspecting = self.state.running and self.state.mode == "inspect" and not self.state._capture_received
+            if (self.native_busy or not self.native_worker.idle or not self.status_owned
+                    or self.update_state == "installing"
+                    or not ((self.state.can_update and not self.native_busy) or inspecting)):
+                return "busy"
+            self.native = NativeRun(ClientIdentity(VERSION, BUILD))
+            self.state.approve(False)
+            self.checked.set(False)
+            self.native_checked.set(False)
+            self._native_authority_sent = None
+            self.dispatch_native(self.native.claim_link(uri))
+            self.show_workspace("setup")
+            self.refresh()
+            return "accepted"
+        except SetupProtocolError:
+            return "unavailable"
+
+    def dispatch_native(self, operation):
+        if operation is not None and not self.native_worker.submit(operation):
+            self.native.complete(operation, Outcome("uncertain"))
+        self.sync_native_authority()
+
+    def native_action(self, method):
+        if self.native.pending is not None or not self.native_worker.idle:
+            return
+        try:
+            self.dispatch_native(method())
+        except SetupProtocolError as error:
+            self.native.message = str(error)
+        self.refresh()
+
+    def approve_native(self):
+        self.native.agree(self.native_checked.get())
+        self.native_action(self.native.approve)
+
+    def toggle_native_agreement(self):
+        self.native.agree(self.native_checked.get())
+        self.refresh()
+
+    def start_native(self):
+        if (not self.state.inspected or self.state.needs_inspection or self.state.residue or self.state.running
+                or not self.status_owned or self.update_state == "installing"):
+            return
+        self.native_action(self.native.start)
+
+    def cancel_native(self):
+        if self.state.running and self.state.mode == "connect":
+            self.stop()
+            return
+        self.native.cancel()
+        self.native_checked.set(False)
+        self.sync_native_authority()
+        self.refresh()
+
+    def sync_native_authority(self):
+        if not self.native_active or self.native.phase == "complete":
+            return
+        if self.state.handoff_id and self.state.handoff_id == self.native.handoff_id:
+            value = (self.state.handoff_id, self.native.authority)
+            if value != self._native_authority_sent:
+                self.send({"action": "run-authority", "handoffId": value[0], "state": value[1]})
+                self._native_authority_sent = value
+
+    def native_destination(self):
+        if not self.native_active or not self.state.can_decide_destination:
+            return
+        if self.native.intent_id and self.native.intent_id != self.state.destination_intent_id:
+            self.native.supersede_intent()
+            self.sync_native_authority()
+        if (self.native.phase == "bound" and self.native.pending is None and self.native_worker.idle
+                and self.native.intent_id != self.state.destination_intent_id):
+            self.native_action(lambda: self.native.verify(self.state.destination_intent_id,
+                self.state.destination_email, self.state.destination_course))
+
+    def handle_native_result(self, result):
+        if isinstance(result, Operation):
+            self.dispatch_native(result)
+        elif result == "start":
+            if (not self.state.running and self.state.inspected and not self.state.needs_inspection
+                    and not self.state.residue and self.native.current):
+                self.state.approve(True)
+                self.start("connect", native_admitted=True)
+            else:
+                self.native.cancel()
+        elif result == "pair":
+            if (self.state.can_pair and self.native.continued_selection == tuple(sorted(self.state.selected_ids))
+                    and set(self.state.selection) == self.state.selected_ids):
+                self.send(self.state.pair())
+            else:
+                self.native.cancel()
+        elif result == "bound":
+            self.native_destination()
+            self.native.message = "Return to your original account tab to finish saving. If it is missing, choose Continue in browser. Keep this review open until the save receipt arrives."
+        elif result == "destination_verified":
+            if (self.native.current and self.state.can_decide_destination
+                    and self.native.handoff_id == self.state.handoff_id
+                    and self.native.intent_id == self.state.destination_intent_id
+                    and self.native.continued_selection == tuple(sorted(self.state.selected_ids))):
+                self.send(self.state.decide_destination(True))
+        self.sync_native_authority()
+
+    def pump_native(self):
+        if not hasattr(self, "native"):
+            return
+        if self.delivery is not None:
+            self.delivery.drain(self.receive_setup)
+            if self.delivery.failed:
+                self.native_status.set("Setup delivery is unavailable. Finish local work, reopen the companion and retry from your account.")
+        while not self.native_worker.results.empty():
+            operation, outcome = self.native_worker.results.get_nowait()
+            self.handle_native_result(self.native.complete(operation, outcome))
+        self.native.timeout()
+        if (self.native.current and self.native.phase in ("collecting", "bound")
+                and self.native.authority == "current" and self.native.pending is None
+                and self.native_worker.idle and self.native.monotonic() >= self.native.next_refresh):
+            self.dispatch_native(self.native.refresh())
+        self.native_destination()
+        self.sync_native_authority()
+        if self.native.stop_requested:
+            self.native.stop_requested = False
+            if self.state.running and self.state.mode == "connect" and not self.state._stopping:
+                self.state.review_discarded = self.state._capture_received and not self.state.saved_acknowledged
+                self.send(self.state.request_stop())
+                self.clear_password()
+                self.helper.close_input()
+
+    def _layout_native_setup(self, host):
+        pane = self.native_pane = ttk.Frame(host)
+        pane.grid(row=0, column=0, sticky="nsew")
+        pane.columnconfigure(0, weight=1)
+        pane.rowconfigure(2, weight=1)
+        ttk.Label(pane, text="Phone collection", style="Heading.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        scope = ttk.Label(pane, textvariable=self.native_scope, justify="left")
+        scope.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        text_host = ttk.Frame(pane)
+        text_host.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        text_host.columnconfigure(0, weight=1)
+        text_host.rowconfigure(0, weight=1)
+        self.native_disclosure = self.readable_text(text_host, height=4)
+        self.native_disclosure.pack_forget()
+        self.native_disclosure.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ttk.Scrollbar(text_host, command=self.native_disclosure.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.native_disclosure.configure(yscrollcommand=scrollbar.set, state="normal")
+        self.native_disclosure.insert("1.0", DISCLOSURE["sentences"][0])
+        self.native_disclosure.configure(state="disabled")
+        def focus_text(event, backwards=False):
+            target = event.widget.tk_focusPrev() if backwards else event.widget.tk_focusNext()
+            target.focus_set()
+            return "break"
+        self.native_disclosure.bind("<Tab>", focus_text)
+        self.native_disclosure.bind("<Shift-Tab>", lambda event: focus_text(event, True))
+        self.native_agreement = ttk.Checkbutton(pane, text=DISCLOSURE["agreement"],
+            variable=self.native_checked, command=self.toggle_native_agreement,
+            style="Disclosure.TCheckbutton")
+        self.native_agreement.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        status = ttk.Label(pane, textvariable=self.native_status, justify="left")
+        status.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        primary = ttk.Frame(pane)
+        primary.grid(row=5, column=0, sticky="ew", pady=(0, 8))
+        self.native_approve = ttk.Button(primary, text="Agree", style="Primary.TButton", command=self.approve_native)
+        self.native_start = ttk.Button(primary, text="Start", style="Primary.TButton", command=self.start_native)
+        self.native_retry = ttk.Button(primary, text="Retry confirmation", command=lambda: self.native_action(self.native.retry))
+        for button in (self.native_approve, self.native_start, self.native_retry):
+            button.pack(side="left", padx=(0, 8))
+        secondary = ttk.Frame(pane)
+        secondary.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+        self.native_cancel = ttk.Button(secondary, text="Cancel setup", command=self.cancel_native)
+        self.native_cancel.pack(side="left", padx=(0, 8))
+        self.native_account_button = ttk.Button(secondary, text="Open account", command=self.open_account)
+        self.native_account_button.pack(side="left")
+        links = ttk.Frame(pane)
+        links.grid(row=7, column=0, sticky="ew")
+        for title, href in (("Account privacy", DISCLOSURE["privacyHref"]), ("Windows privacy", DISCLOSURE["supplementHref"])):
+            ttk.Button(links, text=title, command=lambda path=href: webbrowser.open(WEBSITE_ORIGIN + path)).pack(side="left", padx=(0, 8))
+        def resize(event):
+            for label in (scope, status):
+                label.configure(wraplength=event.width)
+            ttk.Style(self.window).configure("Disclosure.TCheckbutton", wraplength=max(240, event.width - 32))
+        pane.bind("<Configure>", resize)
+        pane.grid_remove()
+
+    def refresh_native(self):
+        if not self.native_active:
+            return
+        run = self.native
+        scope = run.run.scope if run.run else run.claim.scope if run.claim else None
+        self.native_scope.set("Account save confirmed. Open results returns to this report." if run.completion
+            else "Confirm the account, course and sources below." if scope else "Waiting for the authenticated setup destination.")
+        labels = {"claiming": "Confirming your account setup…", "pending_approval": "Check the agreement, then choose Agree. Agree does not collect.",
+            "approving": "Confirming your agreement…", "prepared": "Approved. Choose Start when your iPhone is ready.",
+            "starting": "Confirming permission to start this collection…", "collecting": "Collection started. Review your contacts before Continue.",
+            "awaiting_pair": "Preparing your selected metadata…", "binding": "Confirming the reviewed selection…",
+            "bound": "Finish in your account tab. Keep this review open until the save receipt arrives.",
+            "complete": "Account save confirmed. Check temporary data cleanup in Details & recovery."}
+        status = run.message or labels.get(run.phase, "Return to your account to continue.")
+        self.native_status.set(status if len(status) <= 180 else "Read the confirmation details above, then return to your account or retry confirmation.")
+        disclosure_text = ((f"Account: {scope.email}\nCourse: {scope.course}\nAccount save sources: {', '.join(scope.categories)}\n\n")
+                           if scope else "") + DISCLOSURE["sentences"][0]
+        if len(status) > 180:
+            disclosure_text += "\n\n" + status
+        if disclosure_text != getattr(self, "_native_disclosure_text", None):
+            self.native_disclosure.configure(state="normal")
+            self.native_disclosure.delete("1.0", tk.END)
+            self.native_disclosure.insert("1.0", disclosure_text)
+            self.native_disclosure.configure(state="disabled")
+            self._native_disclosure_text = disclosure_text
+        idle = run.pending is None and self.native_worker.idle
+        clean = self.state.inspected and not self.state.needs_inspection and not self.state.residue and not self.state.running
+        self.native_agreement.configure(state="normal" if run.phase == "pending_approval" and run.claim_current and idle else "disabled")
+        self.native_approve.configure(state="normal" if run.phase == "pending_approval" and run.claim_current and self.native_checked.get() and idle and clean else "disabled")
+        self.native_start.configure(state="normal" if run.phase == "prepared" and run.current and idle and clean else "disabled")
+        recoverable = run.phase in ("claim_uncertain", "approval_uncertain", "start_uncertain", "continue_uncertain", "bind_uncertain") or (run.current and run.authority == "paused" and run.phase in ("collecting", "bound"))
+        self.native_retry.configure(state="normal" if idle and recoverable else "disabled")
+        self.native_cancel.configure(state="disabled" if run.phase in ("cancelled", "complete") else "normal")
+        account_label = ("Open results" if run.completion else "Check saved report" if run.phase == "handoff_expired"
+                         else "Account controls" if run.run else "Open account")
+        self.native_account_button.configure(text=account_label)
+        self.open_account_button.configure(text=account_label)
+        self.account_details_label.configure(text="Continue saves only the reviewed selection to the account and course approved in Setup. Keep this window open for the matching account-save receipt. Return to the original account tab to stop the server setup or recover a completed report.")
 
     def _style(self) -> None:
         style = ttk.Style(self.window)
@@ -233,6 +515,7 @@ class PhoneWindow:
         self.contact_workspace = ttk.Frame(host)
         self.contact_workspace.grid(row=0, column=0, sticky="nsew")
         self.contact_workspace.grid_remove()
+        self._layout_native_setup(host)
         self._visible_workspace = "setup"
         self._workspace_capture = False
         canvas = self.details_canvas = tk.Canvas(self.details_pane, background=BACKGROUND, highlightthickness=0)
@@ -282,13 +565,15 @@ class PhoneWindow:
         self.backup_check.pack(side="left")
         ttk.Label(self.setup_guide, textvariable=self.backup_setting, wraplength=820, justify="left").pack(fill="x")
         self.render_guide()
-        self.label(outer, GUARANTEE)
-        self.label(outer, "Selected contact names and numbers, call counterpart/time/direction/duration, and message counterpart/time/direction/channel provide relationship context. Message text, attachments, passwords and backups are never handed to the website.")
-        self.label(outer, "An iPhone backup can contain private content locally. Cleanup can leave files after interruption. Trust and device permissions are your decision. Agreement permits collection, not marketing or account saving.")
-        self.agreement = ttk.Checkbutton(outer, text="I agree to this selected phone metadata collection disclosure.", variable=self.checked, command=self.toggle_agreement, style="Disclosure.TCheckbutton")
+        consent = self.legacy_consent = ttk.Frame(outer)
+        consent.pack(fill="x")
+        self.label(consent, GUARANTEE)
+        self.label(consent, "Selected contact names and numbers, call counterpart/time/direction/duration, and message counterpart/time/direction/channel provide relationship context. Message text, attachments, passwords and backups are never handed to the website.")
+        self.label(consent, "An iPhone backup can contain private content locally. Cleanup can leave files after interruption. Trust and device permissions are your decision. Agreement permits collection, not marketing or account saving.")
+        self.agreement = ttk.Checkbutton(consent, text="I agree to this selected phone metadata collection disclosure.", variable=self.checked, command=self.toggle_agreement, style="Disclosure.TCheckbutton")
         self.agreement.pack(fill="x", pady=(0, 8))
-        self.label(outer, "You must check the box and select Agree to continue. Agree alone does not collect. Version: " + DISCLOSURE_VERSION)
-        actions = ttk.Frame(outer)
+        self.label(consent, "You must check the box and select Agree to continue. Agree alone does not collect. Version: " + DISCLOSURE_VERSION)
+        actions = ttk.Frame(consent)
         actions.pack(fill="x", pady=(0, 16))
         primary_actions = ttk.Frame(actions)
         primary_actions.pack(fill="x", pady=(0, 8))
@@ -328,7 +613,7 @@ class PhoneWindow:
         ttk.Label(outer, textvariable=self.pair_code, font=("Arial", 18, "bold"), foreground=LIME).pack(anchor="w")
         self.copy_code_button = ttk.Button(outer, text="Copy temporary code for manual recovery", command=self.copy_pair_code)
         self.copy_code_button.pack(anchor="w", pady=(8, 8))
-        self.open_account_button = ttk.Button(outer, text="Open approved account browser", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/phone/account"))
+        self.open_account_button = ttk.Button(outer, text="Open approved account browser", command=self.open_account)
         self.open_account_button.pack(anchor="w", pady=(0, 8))
         recovery = ttk.Frame(outer)
         recovery.pack(fill="x")
@@ -413,9 +698,14 @@ class PhoneWindow:
         for target, button in self.workspace_buttons.items():
             button.configure(style="Primary.TButton" if target == name else "TButton")
         self.workspace_buttons[name].focus_set()
+        self.native_pane.grid_remove()
         if name == "contacts":
             self.details_pane.grid_remove()
             self.contact_workspace.grid()
+        elif name == "setup" and self.native_active:
+            self.contact_workspace.grid_remove()
+            self.details_pane.grid_remove()
+            self.native_pane.grid()
         else:
             self.contact_workspace.grid_remove()
             self.details_pane.grid()
@@ -439,6 +729,21 @@ class PhoneWindow:
 
     def refresh_workspace(self) -> None:
         coverage, status = workspace_summary(self.state)
+        if self.native_active and self.state.reviewed and not self.state.handoff_id:
+            status = "Review available metadata. Continue saves this selection to the account approved in Setup."
+            if self.native.phase == "handoff_expired":
+                status = "Handoff expired. Open Setup for account recovery or cancellation."
+        elif self.native_active and self.state._browser_received and not self.state.save_receipt_pending and not self.state.saved_acknowledged:
+            status = "Preview received. Waiting for the account-save receipt."
+        if self.native_active and not self.state.save_receipt_pending and not self.state.saved_acknowledged:
+            if self.native.phase.endswith("_uncertain"):
+                status = "Confirmation unavailable. Open Setup to retry; the continued selection stays fixed."
+            elif self.native.phase == "binding":
+                status = "Confirming the reviewed selection. Keep this app open."
+            elif self.native.phase == "bound" and self.native.authority == "paused":
+                status = "Confirmation paused. Return to the approved account tab or open Setup for recovery."
+            elif self.native.phase == "bound" and not self.state._browser_received:
+                status = "Return to your original account tab. If it is missing, choose Continue in browser. Keep this review open."
         self.workspace_coverage.set(coverage)
         self.workspace_status.set(status)
         if self.state.reviewed:
@@ -535,6 +840,8 @@ class PhoneWindow:
             self.source_details_window = None
 
     def agree(self) -> None:
+        if self.native_active:
+            return
         self.state.approve(self.checked.get())
         self.refresh()
 
@@ -547,7 +854,12 @@ class PhoneWindow:
         self.state.approve(False)
         self.refresh()
 
-    def start(self, mode: str) -> None:
+    def start(self, mode: str, *, native_admitted=False) -> None:
+        if mode == "connect" and self.native_active and not native_admitted:
+            self.start_native()
+            return
+        if native_admitted and (not self.native.current or not self.native.started or self.native.phase != "collecting"):
+            return
         if not getattr(self, "status_owned", True) or getattr(self, "update_state", "") == "installing":
             self.state.status = "Collection is paused while another companion or Windows Installer owns this operation."
             self.refresh()
@@ -574,6 +886,8 @@ class PhoneWindow:
         except (OSError, RuntimeError):
             self.state.exited(1)
             self.state.status = "The packaged helper could not start. No collection is assumed. Check the package/runtime; temporary data still needs inspection."
+            if self.native_active:
+                self.native.cancel()
         self.refresh()
 
     def clear_password(self) -> None:
@@ -583,6 +897,8 @@ class PhoneWindow:
         self.password.configure(state="disabled")
 
     def cooperative_failure(self, *, clear_password: bool = True) -> None:
+        if self.native_active:
+            self.native.cancel()
         self.state.cooperative_failure()
         if clear_password:
             self.clear_password()
@@ -607,7 +923,7 @@ class PhoneWindow:
         self.refresh()
 
     def selection_changed(self, _event=None) -> None:
-        if self._rendering_contacts or not self.state.can_select:
+        if self._rendering_contacts or not self.state.can_select or self.native_selection_locked:
             return
         try:
             self.send(self.state.update_visible_selection(
@@ -637,6 +953,8 @@ class PhoneWindow:
             self._rendering_contacts = False
 
     def _page(self, method) -> None:
+        if self.native_selection_locked:
+            return
         try:
             self.send(method())
         except ProtocolError:
@@ -653,6 +971,8 @@ class PhoneWindow:
         self._page(self.state.previous_contacts)
 
     def select_all_contacts(self) -> None:
+        if self.native_selection_locked:
+            return
         try:
             self.send(self.state.select_all_contacts())
         except ProtocolError:
@@ -664,6 +984,8 @@ class PhoneWindow:
         self.refresh()
 
     def clear_all_contacts(self) -> None:
+        if self.native_selection_locked:
+            return
         try:
             self.send(self.state.clear_all_contacts())
         except ProtocolError:
@@ -677,6 +999,8 @@ class PhoneWindow:
             self.window.clipboard_append(self.state.pair_code)
 
     def review(self) -> None:
+        if self.native_selection_locked:
+            return
         try:
             self.send(self.state.review(sorted(self.state.selected_ids)))
         except ProtocolError:
@@ -684,7 +1008,7 @@ class PhoneWindow:
         self.refresh()
 
     def change_selection(self) -> None:
-        if not self.state.can_change_selection:
+        if not self.state.can_change_selection or self.native_selection_locked:
             return
         if messagebox.askyesno("Change selected contacts?", "Close the current browser pairing and return to your selected contacts? The helper will refuse if account saving has started; your reviewed import stays open."):
             try:
@@ -694,6 +1018,14 @@ class PhoneWindow:
         self.refresh()
 
     def pair(self) -> None:
+        if self.native_active:
+            if self.native.completion:
+                self.open_account()
+            elif self.can_return_to_browser:
+                self.continue_in_browser()
+            elif self.state.can_pair:
+                self.native_action(lambda: self.native.continue_review(tuple(sorted(self.state.selected_ids))))
+            return
         replacing = " A successful new pairing replaces the current browser pairing." if self.state.handoff_id else ""
         if messagebox.askyesno("Connect the signed-in account?", "Create an exact-origin local pairing for " + WEBSITE_ORIGIN + "? Choose Connect on the signed-in account page, then confirm its server-verified destination here. Only the reviewed preview transfers. Each source requires separate account Save approval." + replacing):
             try:
@@ -710,6 +1042,9 @@ class PhoneWindow:
         if self.state._capture_received and not self.state.saved_acknowledged:
             if not messagebox.askyesno("Discard local phone review?", "Request stop discards the local reviewed import after the helper exits. Account parts may already be saved, while their final browser receipt may still be pending. Keep this window open and finish in the browser if you want to complete that save. Stop anyway?"):
                 return
+        if self.native_active:
+            self.native.cancel()
+            self.sync_native_authority()
         self.state.review_discarded = self.state._capture_received and not self.state.saved_acknowledged
         self.send(self.state.request_stop())
         self.clear_password()
@@ -741,7 +1076,7 @@ class PhoneWindow:
     def refresh(self) -> None:
         state = self.state
         if hasattr(self, "update_message"):
-            busy = not state.can_update or not self.status_owned or self.update_state == "installing"
+            busy = not state.can_update or self.native_busy or not self.status_owned or self.update_state == "installing"
             manifest = self.prepared_update.manifest if self.prepared_update else None
             self._status_snapshot = {"busy": busy, "updateState": self.update_state,
                                      "availableVersion": manifest.version if manifest else None,
@@ -798,6 +1133,21 @@ class PhoneWindow:
         self.copy_code_button.configure(state="normal" if state.pair_code else "disabled")
         self.destination_status.set(("Server-confirmed destination: " + state.destination_email + " · " + state.destination_course)
                                     if state.destination_intent_id else "Connect from your signed-in account after reviewing contacts.")
+        if self.native_active:
+            self.legacy_consent.pack_forget()
+            for button in (self.approve, self.connect, self.agreement, self.decline_button):
+                button.configure(state="disabled")
+            can_continue = (state.can_pair and self.native.current and self.native.phase in ("collecting", "continue_uncertain"))
+            return_to_browser = self.can_return_to_browser
+            ready = self.native.pending is None and self.native_worker.idle
+            self.pair_button.configure(text="Open results" if self.native.completion else "Continue in browser" if return_to_browser else "Continue",
+                state="normal" if self.native.completion or ready and (can_continue or return_to_browser) else "disabled")
+            if self.native_selection_locked:
+                for widget in (self.contacts, self.review_button, self.change_selection_button, self.search_entry,
+                               self.search_button, self.previous_button, self.next_button, self.select_all_button,
+                               self.cancel_select_all_button, self.clear_all_button):
+                    widget.configure(state="disabled")
+            self.refresh_native()
         self.refresh_workspace()
 
     def enqueue_update_check(self) -> bool:
@@ -812,7 +1162,7 @@ class PhoneWindow:
             return True
 
     def request_update_check(self) -> None:
-        if not self.status_owned or not self.state.can_update or self.update_state in {"checking", "installing"}:
+        if not self.status_owned or not (self.state.can_update and not self.native_busy) or self.update_state in {"checking", "installing"}:
             if self.update_state not in {"checking", "installing"}:
                 self.update_state = "deferred"
                 self.update_message.set("Update check deferred. Finish collection, local review, account Save and temporary data inspection first.")
@@ -857,7 +1207,7 @@ class PhoneWindow:
             elif event["kind"] == "handoff_ready":
                 self.handoff_preparing = False
                 handoff = event["handoff"]
-                if event["prepared"] is not self.prepared_update or not self.status_owned or not self.state.can_update:
+                if event["prepared"] is not self.prepared_update or not self.status_owned or not (self.state.can_update and not self.native_busy):
                     handoff.abort()
                     self.update_state = "deferred"
                     self.update_message.set("Installation deferred because local work changed. Finish it, then check for updates again.")
@@ -878,25 +1228,25 @@ class PhoneWindow:
                 self.prepared_update = event["update"]
                 if self.prepared_update:
                     manifest = self.prepared_update.manifest
-                    self.update_state = "available" if self.state.can_update else "deferred"
+                    self.update_state = "available" if (self.state.can_update and not self.native_busy) else "deferred"
                     label = "unsigned Windows TEST" if manifest.trust == "unsigned-test" else "Windows update"
                     self.update_message.set(f"Verified {manifest.version} {label} is ready. Open its installer when collection and unsaved work are finished.")
                 else:
                     self.update_state = "current"
                     self.update_message.set(f"{VERSION} is current for the signed Windows x64 Test feed. This app is an unsigned TEST.")
-        if self._startup_update_pending and self.status_owned and self.state.can_update:
+        if self._startup_update_pending and self.status_owned and (self.state.can_update and not self.native_busy):
             self.request_update_check()
         return False
 
     def install_update(self) -> None:
         prepared = self.prepared_update
-        if not prepared or not self.status_owned or not self.state.can_update or self.update_state not in {"available", "deferred"}:
+        if not prepared or not self.status_owned or not (self.state.can_update and not self.native_busy) or self.update_state not in {"available", "deferred"}:
             return
         trust = "This is an unsigned Windows TEST. Windows security may warn or refuse it." if prepared.manifest.trust == "unsigned-test" else "Windows Installer and Windows security control this installation."
         if not messagebox.askyesno("Open verified Windows update?", f"Install {prepared.manifest.version}?\n\n{trust}\nThis app will close, then Windows Installer will open. Reopen AMPLIFai Phone after installation finishes."):
             return
         # Tk dialogs process events; collection may have started during the decision.
-        if prepared is not self.prepared_update or not self.status_owned or not self.state.can_update or self.update_state not in {"available", "deferred"}:
+        if prepared is not self.prepared_update or not self.status_owned or not (self.state.can_update and not self.native_busy) or self.update_state not in {"available", "deferred"}:
             self.update_message.set("Installation deferred because local work changed. Finish it, then select the installer again.")
             self.refresh()
             return
@@ -921,6 +1271,11 @@ class PhoneWindow:
                     self.update_events.put_nowait({"kind": "handoff_failed"})
 
     def shutdown(self) -> None:
+        if hasattr(self, "native_worker"):
+            self.native.cancel()
+            self.native_worker.close()
+        if getattr(self, "delivery", None) is not None:
+            self.delivery.stop()
         if hasattr(self, "status_server"):
             with self.update_lock:
                 self.update_cancelled.set()
@@ -951,14 +1306,22 @@ class PhoneWindow:
                 if event.get("kind") == "process-exit":
                     mode = self.state.mode
                     self.state.exited(event.get("code"))
+                    if mode == "connect" and self.native_active and not self.state.saved_acknowledged:
+                        self.native.cancel()
                     if mode != "inspect":
                         self.start("inspect")
                 else:
                     command = self.state.handle(event)
                     self.send(command)
+                    if event.get("kind") == "pairing" and self.native_active and self.state.handoff_id == event.get("handoffId"):
+                        self.dispatch_native(self.native.pair_received(self.state.handoff_id, event["payloadSha256"]))
                     if event.get("kind") in {"capture", "contacts"} and self.state._capture_received and not self.state.selecting_all:
                         self.render_contacts()
-                    if event.get("kind") == "destination" and self.state.can_decide_destination:
+                    if event.get("kind") == "destination" and self.native_active:
+                        self.native_destination()
+                        self.state.status = ("Approved account and course confirmed for this reviewed selection. Waiting for the account-save receipt."
+                            if self.state.destination_approved else "Confirming the approved account and course for this reviewed selection.")
+                    elif event.get("kind") == "destination" and self.state.can_decide_destination:
                         destination = (self.state.handoff_id, self.state.destination_intent_id)
                         approved = messagebox.askyesno(
                             "Confirm signed-in account destination",
@@ -973,30 +1336,56 @@ class PhoneWindow:
                         selected, calls, messages = self.state.review_counts
                         calls_summary = "Calls unavailable" if "calls" in self.state.missing else f"{calls} matching calls"
                         messages_summary = "Messages unavailable" if "messages" in self.state.missing else f"{messages} matching messages"
-                        self.state.status += (f" {selected} selected contacts · {calls_summary} · "
-                                              f"{messages_summary}. Check source coverage below before account Save.")
+                        self.state.status = (f"{selected} selected contacts · {calls_summary} · {messages_summary}. "
+                            + ("Check source coverage before Continue saves to your approved account and course." if self.native_active
+                               else "Check source coverage below before account Save."))
+                    if event.get("kind") == "handoff" and event.get("state") == "expired" and self.native_active:
+                        self.native.handoff_expired()
+                        self.state.status = self.native.message
                     if event.get("kind") == "handoff" and self.state.saved_acknowledged:
-                        self.send(self.state.finish())
+                        if self.native_active:
+                            self.native.record_saved(self.state.handoff_id)
+                            self.native_checked.set(False)
+                        if not self.state._finishing:
+                            self.send(self.state.finish())
                     if event.get("kind") == "error" and self.state.phase == "error":
                         self.cooperative_failure()
             self.send(self.state.poll())
+            self.pump_native()
         except (OSError, RuntimeError, ValueError):
             self.cooperative_failure()
         self.refresh()
         self.window.after(1000, self.pump)
 
 
-def main() -> None:
+def main() -> int:
     if sys.platform != "win32":
         raise SystemExit("Windows source candidate; no Windows runtime proof on this platform.")
     try:
+        uri = launch_uri(sys.argv[1:])
         helper, logo = bundled_resources(Path(sys.executable), frozen=bool(getattr(sys, "frozen", False)))
     except ValueError:
-        raise SystemExit("A matching frozen onedir helper and original logo are required. No source/PATH fallback is launched.") from None
-    window = tk.Tk()
-    PhoneWindow(window, helper, logo)
-    window.mainloop()
+        ctypes.windll.user32.MessageBoxW(None, "Open the installed companion with one setup link from your account. A matching packaged helper is required.", "AMPLIFai Phone setup", 0x10)
+        return 2
+    delivery = None
+    try:
+        delivery = SetupDelivery()
+        if not delivery.start():
+            delivery.forward(uri)
+            return 0
+        window = tk.Tk()
+        view = PhoneWindow(window, helper, logo, delivery=delivery)
+        if uri is not None and view.receive_setup(uri) not in ("accepted", "duplicate"):
+            messagebox.showerror("Setup not opened", "Finish local work and temporary data inspection, then retry from the original account tab.")
+        window.mainloop()
+        return 0
+    except (DeliveryError, OSError):
+        ctypes.windll.user32.MessageBoxW(None, str(DeliveryError()), "AMPLIFai Phone setup", 0x10)
+        return 2
+    finally:
+        if delivery is not None:
+            delivery.stop()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

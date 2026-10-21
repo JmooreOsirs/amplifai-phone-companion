@@ -158,10 +158,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     for name in ("source", "logo", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
-    parser.add_argument("--normal-open-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--normal-open-only", action="store_true")
+    mode.add_argument("--native-setup", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     root = create_root()
+    if args.native_setup:
+        from native_setup_fixture import render
+        render(args, root)
+        return
     if args.normal_open_only:
         with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"), patch.object(root, "geometry", wraps=root.geometry) as geometry:
             view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)

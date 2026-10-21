@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import http.client
+import queue
 import socket
 import ssl
 import threading
@@ -9,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 from native_setup import (
     APPROVE_PATH, CLAIM_PATH, DISCLOSURE, ORIGIN, RUN_SECONDS, SETUP_SECONDS, ApprovalRequest, ApprovedRun,
@@ -27,6 +28,34 @@ ROUTES = {CLAIM_PATH: (8192, (200,)), APPROVE_PATH: (16384, (200, 201)),
 REQUEST_SECONDS = 20
 REFRESH_SECONDS = 15
 CLOCK_SKEW_SECONDS = 60
+ACCOUNT_URL = ORIGIN + "/phone/account"
+
+
+def account_continue_url(enrollment_id):
+    return ACCOUNT_URL + "?" + urlencode({"continue": "reviewed", "enrollmentId": identifier(enrollment_id), "week": "phone"})
+
+
+def account_control_url(run_id, enrollment_id):
+    return ACCOUNT_URL + "?" + urlencode({"phoneRunControl": identifier(run_id),
+                                           "enrollmentId": identifier(enrollment_id), "week": "phone"})
+
+
+@dataclass(frozen=True)
+class CompletionBinding:
+    """Non-secret return binding; the account server still verifies a durable save."""
+    enrollment_id: str
+    handoff_id: str
+    payload_sha256: str
+
+    def __post_init__(self):
+        identifier(self.enrollment_id)
+        identifier(self.handoff_id)
+        digest(self.payload_sha256)
+
+    @property
+    def url(self):
+        return ACCOUNT_URL + "?" + urlencode({"enrollmentId": self.enrollment_id, "week": "phone",
+            "completedHandoffId": self.handoff_id, "completedPayloadSha256": self.payload_sha256})
 
 
 @dataclass(frozen=True, repr=False)
@@ -49,22 +78,30 @@ class NativeTransport:
         if operation.path not in ROUTES or type(operation.body) is not bytes or not 0 < len(operation.body) <= 4096:
             return Outcome("uncertain")
         maximum, accepted = ROUTES[operation.path]
-        connection = http.client.HTTPSConnection(urlsplit(ORIGIN).hostname, timeout=10,
-                                                  context=ssl.create_default_context())
+        try:
+            connection = http.client.HTTPSConnection(urlsplit(ORIGIN).hostname, timeout=10,
+                                                      context=ssl.create_default_context())
+        except (OSError, ValueError):
+            return Outcome("uncertain")
         expired = threading.Event()
 
         def interrupt():
             expired.set()
-            if connection.sock is not None:
+            sock = connection.sock
+            if sock is not None:
                 try:
-                    connection.sock.shutdown(socket.SHUT_RDWR)
+                    sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass  # A disconnected socket is already unable to grant authority.
             connection.close()
 
         watchdog = threading.Timer(REQUEST_SECONDS, interrupt)
         watchdog.daemon = True
-        watchdog.start()
+        try:
+            watchdog.start()
+        except RuntimeError:
+            connection.close()
+            return Outcome("uncertain")
         try:
             connection.request("POST", operation.path, operation.body,
                                {"Content-Type": "application/json", "Accept": "application/json", "Cache-Control": "no-store"})
@@ -88,6 +125,45 @@ class NativeTransport:
         finally:
             watchdog.cancel()
             connection.close()
+
+
+class AuthorityWorker:
+    """At most one transport thread and one pending result, including DNS stalls."""
+    def __init__(self):
+        self.transport = NativeTransport()
+        self.results = queue.Queue(maxsize=1)
+        self.thread = None
+        self.lock = threading.Lock()
+        self.busy = False
+        self.closed = threading.Event()
+
+    @property
+    def idle(self):
+        with self.lock:
+            return not self.busy and self.results.empty()
+
+    def submit(self, operation):
+        with self.lock:
+            if self.busy or not self.results.empty() or self.closed.is_set():
+                return False
+            self.busy = True
+        def work():
+            result = self.transport.post(operation)
+            with self.lock:
+                if not self.closed.is_set():
+                    self.results.put_nowait((operation, result))
+                self.busy = False
+        self.thread = threading.Thread(target=work, name="native-run-authority", daemon=True)
+        try:
+            self.thread.start()
+        except RuntimeError:
+            with self.lock:
+                self.busy = False
+            return False
+        return True
+
+    def close(self):
+        self.closed.set()
 
 
 def _destination(value, run):
@@ -153,6 +229,7 @@ class NativeRun:
         self.started = False
         self.continued_selection = None
         self.handoff_id = self.payload_sha256 = self.intent_id = ""
+        self.completion = None
         self.stop_requested = False
 
     @property
@@ -162,12 +239,42 @@ class NativeRun:
     @property
     def current(self):
         return (self.run is not None and self.run.expires_at > self.now() and self.monotonic() < self.run_deadline
-                and self.phase not in ("refused", "cancelled"))
+                and self.phase not in ("refused", "cancelled", "complete", "handoff_expired"))
 
     @property
     def claim_current(self):
         return (self.claim is not None and self.claim.expires_at > self.now()
                 and self.monotonic() < self.claim_deadline)
+
+    @property
+    def account_url(self):
+        if self.completion is not None:
+            return self.completion.url
+        if self.run is not None:
+            if self.phase == "handoff_expired" and self.handoff_id:
+                return CompletionBinding(self.run.scope.enrollment_id, self.handoff_id, self.payload_sha256).url
+            return account_control_url(self.run.run_id, self.run.scope.enrollment_id)
+        return ACCOUNT_URL
+
+    @property
+    def continue_url(self):
+        if self.current and self.phase == "bound" and self.handoff_id:
+            return account_continue_url(self.run.scope.enrollment_id)
+        return None
+
+    def record_saved(self, handoff_id):
+        """Called only after Session accepts the helper's matching saved ACK."""
+        if self.completion is not None and handoff_id == self.completion.handoff_id:
+            return
+        if self.run is None or handoff_id != self.handoff_id or not self.bind_body:
+            raise SetupProtocolError("Saved receipt does not match the reviewed binding")
+        self.completion = CompletionBinding(self.run.scope.enrollment_id, handoff_id, self.payload_sha256)
+        self.claim_request = self.claim = self.approval_request = self.run = None
+        self.pending = self.start_body = self.bind_body = self.operation_id = None
+        self.continued_selection = None
+        self.handoff_id = self.payload_sha256 = self.intent_id = ""
+        self.accepted = self.started = self.stop_requested = False
+        self.authority, self.phase, self.message = "paused", "complete", ""
 
     def _send(self, action, path, body):
         if self.pending is not None:
@@ -254,15 +361,6 @@ class NativeRun:
         self.intent_id = ""
         self.authority = "paused"
 
-    def selection_changed(self):
-        if self.handoff_id:
-            raise SetupProtocolError("The continued handoff requires a new setup")
-        if self.pending is not None and self.pending.action == "status_continue":
-            self.pending = None
-        self.continued_selection = None
-        if self.started:
-            self.phase = "collecting"
-
     def retry(self):
         if self.phase == "claim_uncertain":
             self.phase = "claiming"
@@ -276,6 +374,10 @@ class NativeRun:
         if self.phase == "bind_uncertain" and self.current:
             self.phase = "binding"
             return self.refresh("status_bind")
+        if self.phase == "continue_uncertain" and self.current:
+            return self.continue_review(self.continued_selection)
+        if self.phase == "bound" and self.intent_id and self.current:
+            return self.refresh("status_verify")
         if self.current:
             return self.refresh()
         raise SetupProtocolError("No recoverable authority request")
@@ -287,6 +389,12 @@ class NativeRun:
         self.phase = "cancelled"
         self.stop_requested = self.started
         self.message = "Stopped locally. Return to the original account tab to stop this setup or collection."
+
+    def handoff_expired(self):
+        self.pending = None
+        self.authority = "paused"
+        self.phase = "handoff_expired"
+        self.message = "This reviewed handoff expired. Recover any completed save in your account, or cancel locally and start a new setup. This selection cannot be rebound."
 
     def _refused(self):
         self.pending = None
@@ -300,10 +408,10 @@ class NativeRun:
         self.phase = {"claim": "claim_uncertain", "approve": "approval_uncertain", "start": "start_uncertain",
                       "bind": "bind_uncertain", "status_bind": "bind_uncertain",
                       "status_continue": "continue_uncertain"}.get(action, self.phase)
-        self.message = "Confirmation is unavailable. Retry the same operation; collection and transfer wait for confirmation."
+        self.message = "Confirmation is unavailable. Check your connection and PC clock, then retry. No new collection or transfer is authorized until confirmation."
 
     def timeout(self):
-        if self.run is not None and not self.current and self.phase not in ("cancelled", "refused"):
+        if self.run is not None and not self.current and self.phase not in ("cancelled", "refused", "complete", "handoff_expired"):
             self._refused()
             return True
         if self.pending is not None and self.monotonic() >= self.deadline:
