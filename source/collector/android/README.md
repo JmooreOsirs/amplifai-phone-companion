@@ -114,25 +114,30 @@ are unchanged.
 
 API30+ uses `WindowInsets.isVisible(Type.ime())`. The candidate API26–29 path
 compares the original root window's system bottom inset with its stable bottom
-inset inside the child view's inset listener. The comparison follows the pre-30 resize case in
+inset from a decor-view listener before content ancestors consume it. The
+comparison follows the pre-30 resize case in
 [AndroidX's implementation](https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/core/core/src/main/java/androidx/core/view/WindowInsetsCompat.java).
 It assumes resize mode: this Activity has shown native ScrollViews
 and no soft-input-mode override, for which
 [AOSP selects resize](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/oreo-release/core/java/android/view/ViewRootImpl.java).
-It adds no keyboard-height threshold or dependency. API29 runtime comparison
-found 77dp of usable choices in both old and candidate apps, with navigation
-and paging still visible. That usability pass does not qualify the detector.
+The listener delegates to `view.onApplyWindowInsets(insets)` and returns that
+result, preserving the decor's normal inset handling and descendant dispatch,
+as supported by the [listener API](https://developer.android.com/reference/android/view/View.OnApplyWindowInsetsListener).
+It is installed only on API26–29 during `onCreate` and cleared in `onDestroy`.
+It adds no keyboard-height threshold, geometry heuristic or dependency.
 
-The legacy path also depends on child inset dispatch. Android 10's
+The previous child-listener path failed the strict API29 compact-control gate:
+root system bottom was 790px and stable bottom was 0px, while a
+`fitsSystemWindows` ancestor applied 790px bottom padding and the controls
+remained visible. Android 10's
 [standard window layout](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android10-release/core/res/res/layout/screen_simple.xml)
 has a `fitsSystemWindows` ancestor;
 [View](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android10-release/core/java/android/view/View.java)
 consumes those system insets, and the legacy
 [ViewGroup dispatch](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/android10-release/core/java/android/view/ViewGroup.java)
-can stop at consumed insets. This is a source-supported explanation to verify
-against the runtime root values and ancestor diagnostics. Effective legacy
-compact-mode activation, floating keyboards, pan mode and OEM behavior remain
-unqualified.
+can stop at consumed insets. The decor listener observes the root before that
+boundary. Its runtime qualification must use the unchanged strict fixture;
+floating keyboards, pan mode and OEM behavior remain unqualified.
 
 **Sources & options** opens the full setup, optional source controls, progress,
 review details and privacy/help content. **Contact selection options** contains

@@ -193,10 +193,6 @@ public final class MainActivity extends Activity {
                     Math.max(0, insets.getSystemWindowInsetBottom()));
             if (Build.VERSION.SDK_INT >= 30) {
                 keyboardVisible = insets.isVisible(WindowInsets.Type.ime());
-            } else {
-                WindowInsets original = view.getRootWindowInsets();
-                keyboardVisible = original != null &&
-                        original.getSystemWindowInsetBottom() > original.getStableInsetBottom();
             }
             updateSelectionControls();
             return insets;
@@ -210,6 +206,14 @@ public final class MainActivity extends Activity {
         } else {
             View decor = getWindow().getDecorView();
             decor.setSystemUiVisibility(decor.getSystemUiVisibility() & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            // Legacy content ancestors can consume insets before the screen listener receives them.
+            decor.setOnApplyWindowInsetsListener((view, insets) -> {
+                WindowInsets original = view.getRootWindowInsets();
+                keyboardVisible = original != null &&
+                        original.getSystemWindowInsetBottom() > original.getStableInsetBottom();
+                updateSelectionControls();
+                return view.onApplyWindowInsets(insets);
+            });
         }
 
         TextView brand = text("AMPLIFai By Nexus", 24, TEXT);
@@ -1318,6 +1322,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (Build.VERSION.SDK_INT < 30) getWindow().getDecorView().setOnApplyWindowInsetsListener(null);
         if (cancellation != null) cancellation.cancel();
         if (transferPreparationCancellation != null) transferPreparationCancellation.cancel();
         progressPanel.close();
