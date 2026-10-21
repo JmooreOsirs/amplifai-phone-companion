@@ -105,13 +105,23 @@ weighted choices region receives the remaining measured height, including on
 short screens and with larger system text; a completed review replaces the
 Review action with Handoff instead of stacking both actions.
 
-On API30+, actual IME visibility temporarily collapses the existing Sources &
-options button and Previous/Next row. Search, the selected/page count, contact
+IME visibility temporarily collapses the existing Sources & options button and
+Previous/Next row. Search, the selected/page count, contact
 choices and the applicable action remain available above the keyboard. The
 navigation container retains its system inset, and the same secondary controls
 return when the keyboard is dismissed. Fonts, control sizes and keyboard state
-are unchanged. Earlier Android versions retain the existing selection layout;
-their keyboard behavior still requires separate qualification.
+are unchanged.
+
+API30+ uses `WindowInsets.isVisible(Type.ime())`. API26–29 compares the original
+root window's system bottom inset with its stable bottom inset, avoiding
+child-inset consumption. This follows the pre-30 resize case in
+[AndroidX's implementation](https://android.googlesource.com/platform/frameworks/support/+/refs/heads/androidx-main/core/core/src/main/java/androidx/core/view/WindowInsetsCompat.java).
+The fallback assumes resize mode: this Activity has shown native ScrollViews
+and no soft-input-mode override, for which
+[AOSP selects resize](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/oreo-release/core/java/android/view/ViewRootImpl.java).
+It adds no keyboard-height threshold or dependency. This is source-level
+compatibility only; API26–29 execution, floating keyboards, pan mode and OEM
+behavior remain unqualified.
 
 **Sources & options** opens the full setup, optional source controls, progress,
 review details and privacy/help content. **Contact selection options** contains

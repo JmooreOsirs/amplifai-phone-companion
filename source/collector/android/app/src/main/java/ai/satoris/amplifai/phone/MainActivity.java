@@ -191,7 +191,13 @@ public final class MainActivity extends Activity {
             navigation.setPadding(dp(22), dp(8) + Math.max(0, insets.getSystemWindowInsetTop()), dp(22), 0);
             actionBar.setPadding(dp(22), dp(8), dp(22), dp(16) +
                     Math.max(0, insets.getSystemWindowInsetBottom()));
-            keyboardVisible = Build.VERSION.SDK_INT >= 30 && insets.isVisible(WindowInsets.Type.ime());
+            if (Build.VERSION.SDK_INT >= 30) {
+                keyboardVisible = insets.isVisible(WindowInsets.Type.ime());
+            } else {
+                WindowInsets original = view.getRootWindowInsets();
+                keyboardVisible = original != null &&
+                        original.getSystemWindowInsetBottom() > original.getStableInsetBottom();
+            }
             updateSelectionControls();
             return insets;
         });
