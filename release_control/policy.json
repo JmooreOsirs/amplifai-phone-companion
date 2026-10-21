@@ -51,7 +51,7 @@
   ],
   "approvedSources": [
     {
-      "sourceCommit": "c718907aaeac5609954170eb27da2527acc10f3f",
+      "sourceCommit": "f9181b8509af81688dd457e8f93ddf3ee3d63b38",
       "channel": "macos-arm64",
       "version": "2026.10.21-rc33",
       "build": "26102133",
@@ -60,7 +60,7 @@
       "releaseAuthorized": true
     },
     {
-      "sourceCommit": "c718907aaeac5609954170eb27da2527acc10f3f",
+      "sourceCommit": "f9181b8509af81688dd457e8f93ddf3ee3d63b38",
       "channel": "macos-intel-test",
       "version": "2026.10.21-rc33-intel1",
       "build": "261021331",

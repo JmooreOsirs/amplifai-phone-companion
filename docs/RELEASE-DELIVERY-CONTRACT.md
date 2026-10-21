@@ -1,5 +1,12 @@
 # Native delivery and website promotion contracts
 
+## RC33 source qualification refresh — October 21
+
+The current policy authorizes native source `f9181b8509af81688dd457e8f93ddf3ee3d63b38` for ARM `2026.10.21-rc33` / `26102133` and Intel Test `2026.10.21-rc33-intel1` / `261021331`. It includes the reviewed diagnostic-retention corrections and an updated parser/bridge test fixture. Larger encrypted Messages remain unavailable; the 4,096-byte manifest/copy discrepancy and real producer Digest semantics are unresolved. No truncation or acceptance relaxation is authorized.
+
+The shared Phone qualification gate now also requires `test_call_accounting`, `test_source_diagnostic_flow` and `test_nonfinite_duration_pipeline`. Normal exact-source/source-offer/CPU/frozen-helper and signing/publication custody still apply. Earlier RC33 ARM evidence at source `c718907aaeac5609954170eb27da2527acc10f3f` is superseded, unsigned and unpublished; both architectures must qualify this refreshed source. Receiver compatibility is already verified live; website admission/feed promotion requires final authenticated public native metadata. Physical device/account acceptance remains separate. Historical candidate sections below remain tied to their named sources.
+
+
 Jeff authorizes either `JmooreOsirs` or `bac1876` to approve source/control/release changes, including their own, through a normal PR merge after required CI. The owner-approval policy retains strict `release-control-checks` pinned to GitHub Actions App `15368`, administrator enforcement, no force push/deletion and empty bypass allowances. Runtime custody requires the authoritative allowlisted merge action and latest successful exact-head checks; CODEOWNERS remains both actors for routing. See [the protection contract](PROTECTED-MAC-RELEASE.md#enforced-custody).
 
 RC28 was locally signed, published and promoted on October 17 under control `067b2bc687e3af81d033923608679578814c535b` and native source `8f7ec4d3de4235ab5d36d5175c29121e3a26548a`. Its historical receipts are retained below. Physical/account acceptance was not established by that deployment.
