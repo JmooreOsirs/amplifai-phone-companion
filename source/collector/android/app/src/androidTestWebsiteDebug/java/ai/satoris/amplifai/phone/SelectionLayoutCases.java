@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewTreeObserver;
 import android.widget.Button;
@@ -46,6 +47,8 @@ final class SelectionLayoutCases {
     private final EditText search;
     private final float density;
     private final File captureDirectory;
+    private final JSONObject evidence = new JSONObject();
+    private final JSONObject controls = new JSONObject();
     private final JSONObject screenshots = new JSONObject();
 
     static String run(Instrumentation instrumentation, Bundle arguments) throws Exception {
@@ -64,9 +67,14 @@ final class SelectionLayoutCases {
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(
                 new Intent(instrumentation.getTargetContext(), MainActivity.class)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
+        SelectionLayoutCases fixture = null;
         try {
             instrumentation.waitForIdleSync();
-            return new SelectionLayoutCases(instrumentation, activity, arguments).verify(width, scale);
+            fixture = new SelectionLayoutCases(instrumentation, activity, arguments);
+            return fixture.verify(width, scale);
+        } catch (Exception | AssertionError failure) {
+            if (fixture != null) fixture.recordFailure(failure);
+            throw failure;
         } finally { instrumentation.runOnMainSync(activity::finish); }
     }
 
@@ -90,6 +98,9 @@ final class SelectionLayoutCases {
     }
 
     private String verify(int width, float scale) throws Exception {
+        evidence.put("requestedWidthDp", width).put("widthDp", root.getWidth() / density)
+                .put("heightDp", root.getHeight() / density)
+                .put("fontScale", activity.getResources().getConfiguration().fontScale);
         require(Math.abs(activity.getResources().getConfiguration().fontScale - scale) < .01f,
                 "Configure the required font scale before launching this scenario");
         require(Math.abs(root.getWidth() / density - width) <= 1,
@@ -114,7 +125,6 @@ final class SelectionLayoutCases {
             invoke("showCoverage"); invoke("renderChoices"); showSelection(true);
         });
         awaitLayout(() -> choices.getChildCount() == 100 && contactScroll.getHeight() > 0, "Populated contacts did not render");
-        JSONObject evidence = new JSONObject();
         main(() -> {
             ((CheckBox) choices.getChildAt(0)).performClick();
             require(review.isEnabled() && review.isShown(), "Review is not accessible after selecting a contact");
@@ -131,10 +141,10 @@ final class SelectionLayoutCases {
                     "Fixed controls leave fewer than two contact rows or 96dp of usable choices");
             require(window.contains(beforeHeader) && window.contains(bounds(review)) && window.contains(beforeNavigation),
                     "Fixed controls extend outside the actual visible window");
-            requireFullyVisible(review);
-            requireFullyVisible(search);
-            requireFullyVisible(get("previousPage", Button.class));
-            requireFullyVisible(get("nextPage", Button.class));
+            requireFullyVisible("reviewAction", review);
+            requireFullyVisible("search", search);
+            requireFullyVisible("previousPage", get("previousPage", Button.class));
+            requireFullyVisible("nextPage", get("nextPage", Button.class));
             require(navigation.getContentDescription().toString().contains("privacy help"), "Options lost its accessible help label");
             require(search.getCurrentTextColor() == Color.rgb(237, 239, 243) &&
                     review.getCurrentTextColor() == Color.rgb(15, 21, 37) &&
@@ -150,10 +160,9 @@ final class SelectionLayoutCases {
             require(contactScroll.getScrollY() > 0 && afterRow[1] < beforeRow[1], "The contact list did not scroll independently");
             require(beforeHeader.equals(bounds(header)) && beforeActions.equals(bounds(actions)) &&
                     beforeNavigation.equals(bounds(navigation)), "Scrolling choices moved fixed context or actions");
-            requireFullyVisible(choices.getChildAt(choices.getChildCount() - 1));
+            requireFullyVisible("lastContactChoice", choices.getChildAt(choices.getChildCount() - 1));
             try {
-                evidence.put("widthDp", width).put("heightDp", root.getHeight() / density).put("fontScale", scale)
-                        .put("visibleWindow", window.toShortString()).put("choicesHeightDp", contactScroll.getHeight() / density)
+                evidence.put("visibleWindow", window.toShortString()).put("choicesHeightDp", contactScroll.getHeight() / density)
                         .put("header", beforeHeader.toShortString()).put("actions", beforeActions.toShortString())
                         .put("choices", viewport.toShortString()).put("nativeButtonTextPx", review.getTextSize())
                         .put("searchTextPx", search.getTextSize()).put("checkboxTextPx", first.getTextSize());
@@ -170,6 +179,7 @@ final class SelectionLayoutCases {
         awaitLayout(() -> choices.getChildCount() == 100, "Cleared search did not restore contacts");
         main(() -> { review.performClick(); require(detailsScroll.isShown(), "Review text remains hidden behind the selection pane"); });
         awaitLayout(() -> get("reviewed", Boolean.class), "Actual local review did not finish");
+        main(() -> recordControl("reviewAfterAsyncText", get("review", TextView.class), null));
         capture("review");
         main(() -> {
             require(get("review", TextView.class).getText().toString().contains("0 matching calls") &&
@@ -187,7 +197,7 @@ final class SelectionLayoutCases {
         instrumentation.waitForIdleSync();
         main(() -> {
             Button cancel = get("cancelSelectAll", Button.class);
-            requireFullyVisible(cancel);
+            requireFullyVisible("bulkCancel", cancel);
             @SuppressWarnings("unchecked") Set<Long> selected = get("selectedIds", Set.class);
             Set<Long> before = Set.copyOf(selected);
             cancel.performClick();
@@ -198,12 +208,12 @@ final class SelectionLayoutCases {
             LinearLayout options = (LinearLayout) selectAll.getParent();
             LinearLayout body = (LinearLayout) options.getParent();
             body.getChildAt(body.indexOfChild(options) - 1).performClick();
-            selectAll.requestFocus();
         });
         instrumentation.waitForIdleSync();
+        focusWithKeyboard("selectAll", get("selectAllContacts", Button.class));
         main(() -> {
             Button selectAll = get("selectAllContacts", Button.class);
-            requireFullyVisible(selectAll);
+            requireFullyVisible("selectAll", selectAll);
             selectAll.performClick();
         });
         awaitLayout(() -> !get("bulkSelectionActive", Boolean.class) && get("selectedIds", Set.class).size() == 305 &&
@@ -211,12 +221,12 @@ final class SelectionLayoutCases {
         main(() -> {
             require(contactScroll.isShown(), "All-page selection did not return to the contact choices");
             navigation.performClick();
-            get("clearSelectedContacts", Button.class).requestFocus();
         });
         instrumentation.waitForIdleSync();
+        focusWithKeyboard("clearSelection", get("clearSelectedContacts", Button.class));
         main(() -> {
             Button clear = get("clearSelectedContacts", Button.class);
-            requireFullyVisible(clear);
+            requireFullyVisible("clearSelection", clear);
             clear.performClick();
         });
         awaitLayout(() -> get("selectedIds", Set.class).isEmpty() && choices.getChildCount() == 100,
@@ -231,13 +241,27 @@ final class SelectionLayoutCases {
         instrumentation.waitForIdleSync();
         main(() -> {
             TextView status = get("status", TextView.class);
-            requireFullyVisible(status);
+            requireFullyVisible("errorStatus", status);
             for (int line = 0; line < status.getLayout().getLineCount(); line++)
                 require(status.getLayout().getEllipsisCount(line) == 0, "Full error explanation was truncated");
         });
         capture("error-details");
-        evidence.put("checks", "fixed controls; independent choices; actual bounds; native styles; paging; empty search; review/change; bulk Cancel; all-page selection/clear; zero/unavailable; full error")
-                .put("screenshots", screenshots);
+        evidence.put("checks", "fixed controls; independent choices; actual bounds; native styles; paging; empty search; review/change; bulk Cancel; keyboard focus; all-page selection/clear; zero/unavailable; full error");
+        return writeReceipt("passed");
+    }
+
+    private void recordFailure(Throwable failure) {
+        try {
+            evidence.put("failure", failure.getMessage());
+            capture("failure");
+            writeReceipt("failed");
+        } catch (Exception | AssertionError unavailable) {
+            failure.addSuppressed(unavailable);
+        }
+    }
+
+    private String writeReceipt(String outcome) throws org.json.JSONException {
+        evidence.put("outcome", outcome).put("controls", controls).put("screenshots", screenshots);
         if (captureDirectory != null) {
             evidence.put("artifactDirectory", "instrumentation-selection-layout/" + captureDirectory.getName());
             try (FileOutputStream output = new FileOutputStream(new File(captureDirectory, "receipt.json"))) {
@@ -247,6 +271,20 @@ final class SelectionLayoutCases {
             }
         }
         return evidence.toString();
+    }
+
+    private void focusWithKeyboard(String identity, View target) {
+        main(() -> recordControl(identity + "BeforeKeyboard", target, target.requestFocus()));
+        // Keyboard input makes native button focus requests meaningful. Visibility is checked afterward.
+        instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_TAB);
+        instrumentation.waitForIdleSync();
+        main(() -> {
+            boolean accepted = target.requestFocus();
+            JSONObject state = recordControl(identity + "KeyboardFocus", target, accepted);
+            require(!target.isInTouchMode() && accepted && target.isFocused(),
+                    "Keyboard focus was not accepted: " + state);
+        });
+        instrumentation.waitForIdleSync();
     }
 
     private void awaitLayout(BooleanSupplier condition, String failure) throws Exception {
@@ -312,10 +350,32 @@ final class SelectionLayoutCases {
         int[] location = new int[2]; view.getLocationOnScreen(location);
         return new Rect(location[0], location[1], location[0] + view.getWidth(), location[1] + view.getHeight());
     }
-    private static void requireFullyVisible(View view) {
+    private JSONObject recordControl(String identity, View view, Boolean focusAccepted) {
+        Rect visible = new Rect(), window = new Rect();
+        boolean hasVisibleRect = view.getGlobalVisibleRect(visible);
+        root.getWindowVisibleDisplayFrame(window);
+        try {
+            JSONObject state = new JSONObject().put("identity", identity).put("type", view.getClass().getSimpleName())
+                    .put("bounds", bounds(view).toShortString()).put("visible", visible.toShortString())
+                    .put("hasVisibleRect", hasVisibleRect).put("window", window.toShortString())
+                    .put("shown", view.isShown()).put("enabled", view.isEnabled())
+                    .put("inTouchMode", view.isInTouchMode()).put("focusable", view.isFocusable())
+                    .put("focusableInTouchMode", view.isFocusableInTouchMode()).put("focused", view.isFocused())
+                    .put("layoutRequested", view.isLayoutRequested()).put("windowFocused", view.hasWindowFocus())
+                    .put("detailsScrollY", detailsScroll.getScrollY()).put("contactScrollY", contactScroll.getScrollY());
+            if (focusAccepted != null) state.put("focusRequestAccepted", focusAccepted);
+            if (view instanceof TextView text && text.getLayout() != null)
+                state.put("textLines", text.getLayout().getLineCount()).put("textHeight", text.getLayout().getHeight());
+            controls.put(identity, state);
+            return state;
+        } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+    }
+
+    private void requireFullyVisible(String identity, View view) {
         Rect visible = new Rect();
+        JSONObject state = recordControl(identity, view, null);
         require(view.isShown() && view.getGlobalVisibleRect(visible) && visible.equals(bounds(view)),
-                "Control is clipped or hidden: " + view.getClass().getSimpleName());
+                "Control is clipped or hidden: " + state);
     }
     private static void require(boolean condition, String failure) { if (!condition) throw new AssertionError(failure); }
 }

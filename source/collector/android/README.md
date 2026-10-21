@@ -161,6 +161,15 @@ unavailable screenshots; they do not replace the geometry assertions. This
 fixture does not stage a pending receipt or confirmed saved state. The runtime
 operator should retain only artifacts named by the successful run's receipt.
 
+Visibility failures name the control and record full/visible/window rectangles,
+touch mode, native focusability, focus-request acceptance and scroll offsets.
+The all-page/Clear fixture records the original focus request, sends an actual
+Tab key event, then requires keyboard focus and full visibility. It does not
+change production focusability or force a scroll position. The receipt also
+records review text geometry after its asynchronous update. A failed run writes
+`failure.png` when capture is available and a receipt with `outcome: failed`
+before finishing the Activity; partial captures are not a passing result.
+
 ## Permission and coverage boundaries
 
 - `READ_SMS` and `READ_CALL_LOG` are hard-restricted permissions: an installer allowlist and an actual runtime grant are separate conditions. The official installer API defaults to allowlisting requested restricted permissions, but an OEM installer can apply different restrictions. A normal sideload can work; installation alone does not prove source access. [Permission reference](https://developer.android.com/reference/android/Manifest.permission#READ_SMS), [installer API](https://developer.android.com/reference/android/content/pm/PackageInstaller.SessionParams#setWhitelistedRestrictedPermissions(java.util.Set%3Cjava.lang.String%3E)).
