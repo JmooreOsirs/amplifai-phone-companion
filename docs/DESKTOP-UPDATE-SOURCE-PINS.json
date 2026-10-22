@@ -4,9 +4,9 @@
   "macosBaseCommit": "f8c38a5217ad7c356abefd95264762a9c9afe478",
   "macosArmSourceArchiveSha256": "171c383e06b56f681a627a571fd9ed228ebc4c34a8b59c311112ec4f3b8265c3",
   "macosIntelSourceArchiveSha256": "2d3c228561e3e69b8cc51e5753b1f1d69045b6c023e9cddbcf0114d1bc18483b",
-  "windowsBaseCommit": "a8fe16ee584abcd9cbee0de5fde953d9a7a262f6",
-  "windowsSourceArchiveSha256": "db1bf4db67e22fe633d17dcf4560f0c89b816b20cba4e085ed79e40903a3a19f",
-  "reconciliation": "Preserve the qualified native lineage, existing updater/key/channel trust, collection and explicit review/Save/ACK boundaries. Integrate rc27 account-origin binding and contact selection without importing the older Intel artifact-removal CI. Windows rc19 fields identify the retained baseline only: changed Windows bytes require a new version before any build/publication. Retained dependency sources do not establish new binary qualification. RC28 combines those repairs with the qualified Google/Fable Mac presentation. No intermediate RC27 publication.",
+  "windowsBaseCommit": "d82bf65977a607026878019864e2e91a77bb5b1b",
+  "windowsSourceArchiveSha256": "2922bb1ec2b2cca1f883838bcccb49a2c3d3e8d52967e0cd137406fe439d3b42",
+  "reconciliation": "Preserve the qualified native lineage, existing updater/key/channel trust, collection and explicit review/Save/ACK boundaries. Integrate rc27 account-origin binding and contact selection without importing the older Intel artifact-removal CI. Windows base/source fields identify the retained RC19 baseline; planned Windows RC20 identities require changed-package qualification before publication. Retained dependency sources do not establish new binary qualification. RC28 combines those repairs with the qualified Google/Fable Mac presentation. No intermediate RC27 publication.",
   "plannedBuilds": {
     "macos-arm64": {
       "version": "2026.10.16-rc28",
@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.15-rc19",
-      "build": "26101519",
-      "installerVersion": "1.0.19"
+      "version": "2026.10.21-rc20",
+      "build": "26102120",
+      "installerVersion": "1.0.20"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
@@ -30,5 +30,6 @@
     "head": "8c94f4ef2fb7de7bff269311c8a60de2f8083e53",
     "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
   },
-  "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json"
+  "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json",
+  "windowsReconciliation": "RC20 native setup v2 and contact-workspace candidate; retain RC19 source/dependency and installed-upgrade baseline. Exact changed package, source offer and normal installer handoff require new qualification. Mac fields remain historical and do not request a rebuild."
 }
