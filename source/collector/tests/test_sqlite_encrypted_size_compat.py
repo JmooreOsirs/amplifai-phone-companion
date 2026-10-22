@@ -264,6 +264,42 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
         self.backup_path.mkdir(mode=0o700)
         self.copy_path.mkdir(mode=0o700)
 
+    def test_path_and_descriptor_change_times_use_independent_baselines(self) -> None:
+        # CPython 3.12 Windows stat reports creation time as ctime, whereas
+        # fstat reports change time. An unchanged held descriptor must pass;
+        # a later change to that descriptor's own timestamp must still fail.
+        original_fstat = os.fstat
+        for changed in (False, True):
+            with self.subTest(descriptor_changed=changed):
+                self._new_case("descriptor-time-" + str(changed))
+                backup = self._backup(("messages",), delta=-4096)
+                store = RecordStore(self.copy_path / "records.sqlite", self.workspace)
+                self.addCleanup(store.db.close)
+                staged = []
+                add = store.add
+
+                def stage(category, record):
+                    add(category, record)
+                    staged.append(category)
+
+                def descriptor_info(fd):
+                    info = original_fstat(fd)
+                    path = self.copy_path / "messages"
+                    if not path.exists() or (info.st_dev, info.st_ino) != (path.stat().st_dev, path.stat().st_ino):
+                        return info
+                    values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                    values["st_ctime_ns"] += 1000 + int(changed and "messages" in staged)
+                    return SimpleNamespace(**values)
+
+                with patch.object(os, "fstat", side_effect=descriptor_info), patch.object(store, "add", side_effect=stage):
+                    capture = _parse_entries(backup, self.copy_path, datetime(2026, 10, 22, tzinfo=UTC),
+                                             RETAINED_HISTORY_START, workspace=self.workspace, record_store=store)
+                self.assertIn("messages", staged)
+                self.assertEqual(store.counts["messages"], 0 if changed else 1)
+                self.assertEqual("messages" in capture.missing_sources, changed)
+                if changed:
+                    self.assertEqual(dict(capture.unavailable_reasons)["messages"], "source_integrity")
+
     def test_one_page_growth_uses_header_page_size_at_supported_bounds(self) -> None:
         for page in (512, 4096, 8192, 65536):
             with self.subTest(page=page):
