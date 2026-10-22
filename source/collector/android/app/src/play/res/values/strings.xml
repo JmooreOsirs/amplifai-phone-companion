@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="play_update_heading">Companion updates</string>
+    <string name="play_update_status">Installed version %1$s. Updates are managed by Google Play.</string>
+</resources>
