@@ -14,7 +14,7 @@ import subprocess
 from contextlib import closing
 from pathlib import Path
 
-from amplifai_phone.workspace import SessionWorkspace
+from amplifai_phone.workspace import ROOT_MARKER, SessionWorkspace, default_sessions_root
 
 
 SCHEMAS = {
@@ -64,6 +64,8 @@ def main() -> int:
     helper = parser.parse_args().helper.resolve(strict=True)
     if helper.name != "AmplifaiPhoneHelper.exe":
         raise ValueError("Only the frozen candidate helper is accepted")
+    root = default_sessions_root()
+    root_existed, parent_existed = root.exists(), root.parent.exists()
     with SessionWorkspace() as session:
         results: dict[str, str] = {}
         for category, statements in SCHEMAS.items():
@@ -97,6 +99,21 @@ def main() -> int:
                     raise AssertionError("Frozen worker accepted a wrong copy checksum")
     if session.exists():
         raise AssertionError("Fictional marked session was not removed")
+    # A newly created marker-only root is fixture residue. Remove only that
+    # exact empty root/parent so the next MSI gate starts clean. Preserve any
+    # pre-existing root; never recursively remove unexpected entries.
+    if not root_existed:
+        marker = root / ROOT_MARKER
+        if (root.is_symlink() or root.is_junction() or marker.is_symlink()
+                or set(root.iterdir()) != {marker}
+                or marker.read_bytes() != b"AMPLIFAI_PHONE_SESSIONS_V1\n"):
+            raise AssertionError("Unexpected entries in the fixture-created root")
+        marker.unlink()
+        root.rmdir()
+    if not parent_existed:
+        if root.parent.is_symlink() or root.parent.is_junction():
+            raise AssertionError("Fixture parent identity changed")
+        root.parent.rmdir()
     print(json.dumps({"status": "pass", "frozenEncryptedMain": results,
                       "wrongCopyChecksum": "rejected", "ownedSessionCleanup": "complete"},
                      sort_keys=True))

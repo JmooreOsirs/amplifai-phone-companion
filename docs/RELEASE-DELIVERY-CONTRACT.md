@@ -91,6 +91,18 @@ full-size/frozen/package run remains required. Mac RC35 builds continue from
 `dfc80751b8a4a5b16fb67833727130fb2ec3d44f`; Windows will identify its distinct
 repaired source explicitly, with no inference of physical acceptance.
 
+### RC21 qualification fixture cleanup
+
+Repaired Windows source `1d7399c29ad9152402154ac3a5bb1e6ef0ecba36`
+(run `39825099762`) passed the full-size Messages gate, frozen encrypted-worker
+checks and MSI creation. Upgrade qualification then correctly refused the
+marker-only default data directory created by the new frozen-worker fixture.
+The fixture now removes only its newly created, verified marker-only root and
+empty parent after its ordinary session cleanup. Pre-existing roots and any
+unexpected contents are preserved. This change affects qualification only;
+application code is unchanged from the timestamp repair. A clean full runner
+build remains necessary before publication under the existing release pipeline.
+
 ## Windows RC20 native setup candidate — October 21
 
 Reserved Windows identity: `2026.10.21-rc20` / build `26102120` / MSI `1.0.20`,
