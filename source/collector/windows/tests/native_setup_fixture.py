@@ -73,8 +73,37 @@ def scenarios():
     run = pending()
     scope = replace(run.claim.scope, email="synthetic." + "x" * 180 + "@example.test", course="Synthetic course " * 9)
     run.claim = replace(run.claim, scope=scope)
-    run.message = "Synthetic confirmation is unavailable. Keep the original account tab open for recovery. " * 30
+    run.message = ("Synthetic confirmation is unavailable. Keep the original account tab open for recovery. " * 30).rstrip()
     yield "long-scope-error", run, inspected(), "setup"
+
+
+def text_scroll_evidence(root, widget):
+    # Tk 8.6 caches wrapped-line heights asynchronously; update() alone need not
+    # finish that calculation. Force the documented count update before yview.
+    cached_pixels = int(widget.count("1.0", "end", "ypixels")[0])
+    content_pixels = int(widget.count("1.0", "end", "update", "ypixels"))
+    widget.yview_moveto(0)
+    root.update()
+    before = list(widget.yview())
+    widget.yview_moveto(1)
+    root.update()
+    return {"cachedContentPixels": cached_pixels, "contentPixels": content_pixels,
+            "widgetHeight": widget.winfo_height(), "widgetWidth": widget.winfo_width(),
+            "before": before, "after": list(widget.yview()),
+            "lastLine": widget.dlineinfo("end-2c"), "lastCharacter": widget.bbox("end-2c")}
+
+
+def require_full_text_scroll(evidence):
+    if evidence["containsFullScopeAndError"] is not True:
+        raise RuntimeError("The full authenticated scope or recovery error is missing")
+    if evidence["contentPixels"] <= evidence["widgetHeight"]:
+        raise RuntimeError("Long scope/error fixture did not exceed the text viewport")
+    if evidence["after"][0] <= evidence["before"][0]:
+        raise RuntimeError("Full scope and error could not scroll after line-metric synchronization")
+    line, character = evidence["lastLine"], evidence["lastCharacter"]
+    if (not line or not character or line[1] < 0 or line[1] + line[3] > evidence["widgetHeight"]
+            or min(character[:2]) < 0 or character[0] + character[2] > evidence["widgetWidth"]):
+        raise RuntimeError("The final scope/error line is not fully reachable")
 
 
 def native_geometry(root, view):
@@ -200,13 +229,24 @@ def render(args, root):
             root.update()
             geometry = native_geometry(root, view) if pane == "setup" else workspace_geometry(root, view)
             scrolling = view.native_disclosure if pane == "setup" else view.contacts
-            scrolling.yview_moveto(1)
-            root.update()
+            scroll_evidence = text_scroll_evidence(root, scrolling) if pane == "setup" else None
+            if pane != "setup":
+                scrolling.yview_moveto(1)
+                root.update()
             after = native_geometry(root, view) if pane == "setup" else workspace_geometry(root, view)
             if geometry != after:
                 raise RuntimeError("Scrolling moved fixed native controls")
-            if name == "long-scope-error" and scrolling.yview()[0] <= 0:
-                raise RuntimeError("Full scope and error could not scroll")
+            if name == "long-scope-error":
+                content = scrolling.get("1.0", "end-1c")
+                scroll_evidence["containsFullScopeAndError"] = all(value in content for value in
+                    (run.claim.scope.email, run.claim.scope.course, run.message))
+                try:
+                    require_full_text_scroll(scroll_evidence)
+                except RuntimeError as error:
+                    diagnostic = capture(root, args.output, f"native-{width}x{height}-scale-{scaling:.2f}-{name}-failure")
+                    diagnostic.update(scenario=name, failure=str(error), geometry=geometry, scrollEvidence=scroll_evidence)
+                    (args.output / "native-scroll-failure.json").write_text(json.dumps(diagnostic, indent=2) + "\n", encoding="utf-8")
+                    raise
             scrolling.yview_moveto(0)
             focus = keyboard(root, view) if name == "approval" else []
             if state.save_receipt_pending:
@@ -216,7 +256,8 @@ def render(args, root):
                 if view.pair_button.cget("text") != "Open results" or str(view.pair_button.cget("state")) != "normal":
                     raise RuntimeError("Saved state did not expose bound report recovery")
             record = capture(root, args.output, f"native-{width}x{height}-scale-{scaling:.2f}-{name}")
-            record.update(scenario=name, geometry=geometry, keyboardTraversal=focus, fixedDuringScroll=True)
+            record.update(scenario=name, geometry=geometry, keyboardTraversal=focus, fixedDuringScroll=True,
+                          scrollEvidence=scroll_evidence)
             records.append(record)
         for widget in root.winfo_children():
             widget.destroy()

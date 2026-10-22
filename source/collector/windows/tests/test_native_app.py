@@ -61,6 +61,32 @@ def tick(view, outcome=None):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_render_scroll_synchronizes_cached_heights_and_keeps_strict_overflow_gate(self):
+        from native_setup_fixture import require_full_text_scroll, text_scroll_evidence
+        widget, root = Mock(), Mock()
+        calls = []
+        def count(*args):
+            calls.append(args)
+            return 900 if "update" in args else (160,)
+        def move(fraction):
+            if fraction == 1:
+                self.assertIn(("1.0", "end", "update", "ypixels"), calls)
+        widget.count.side_effect = count
+        widget.yview_moveto.side_effect = move
+        widget.yview.side_effect = [(0.0, 0.3), (0.7, 1.0)]
+        widget.winfo_height.return_value = 300
+        widget.winfo_width.return_value = 800
+        widget.dlineinfo.return_value = (10, 270, 300, 18, 13)
+        widget.bbox.return_value = (305, 270, 5, 18)
+        evidence = text_scroll_evidence(root, widget)
+        evidence["containsFullScopeAndError"] = True
+        require_full_text_scroll(evidence)
+        self.assertEqual((evidence["cachedContentPixels"], evidence["contentPixels"]), (160, 900))
+        for changed in ({"after": [0.0, 1.0]}, {"contentPixels": 160}, {"lastLine": None},
+                        {"lastLine": (10, 295, 300, 18, 13)}, {"containsFullScopeAndError": False}):
+            with self.subTest(changed=changed), self.assertRaises(RuntimeError):
+                require_full_text_scroll({**evidence, **changed})
+
     def test_fresh_delivery_claim_and_personal_approval_do_not_start_helper(self):
         view, clock = native_window()
         factory = lambda _client: NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)
