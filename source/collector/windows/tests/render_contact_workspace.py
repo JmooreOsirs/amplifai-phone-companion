@@ -89,6 +89,22 @@ def workspace_geometry(root, view) -> dict:
     return records
 
 
+def native_disclosure_states(style) -> dict:
+    name = "Native.Disclosure.TCheckbutton"
+    result = {"map": {}, "resolved": {}}
+    for key, expected in (("background", app.BACKGROUND), ("foreground", app.MUTED)):
+        mapping = [list(map(str, item)) for item in style.map(name, key)]
+        if mapping != [["disabled", expected]]:
+            raise RuntimeError(f"Native disclosure disabled map changed: {key}: {mapping}")
+        result["map"][key] = mapping
+        for state in (("disabled",), ("disabled", "selected"), ("disabled", "active"), ("disabled", "focus")):
+            actual = str(style.lookup(name, key, state=state))
+            if actual != expected:
+                raise RuntimeError(f"Native disclosure disabled color changed: {state}.{key}: {actual}")
+            result["resolved"].setdefault(" ".join(state), {})[key] = actual
+    return result
+
+
 def computed_styles(root, view) -> dict:
     style = ttk.Style(root)
     expected = {
@@ -100,6 +116,7 @@ def computed_styles(root, view) -> dict:
                     "padding": ("16", "12"), "font": ("Arial", "11", "bold")},
         "TCheckbutton": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
         "Disclosure.TCheckbutton": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
+        "Native.Disclosure.TCheckbutton": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
         "TEntry": {"fieldbackground": app.PANEL, "foreground": app.HEADING, "padding": ("8",)},
     }
     if style.theme_use() != "clam":
@@ -127,6 +144,7 @@ def computed_styles(root, view) -> dict:
     result["Listbox"] = list_style
     result["buttonStateMap"] = {key: [list(map(str, item)) for item in style.map("TButton", key)]
                                 for key in ("background", "foreground")}
+    result["nativeDisclosureStates"] = native_disclosure_states(style)
     return result
 
 

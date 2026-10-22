@@ -408,7 +408,7 @@ class PhoneWindow:
         self.native_disclosure.bind("<Shift-Tab>", lambda event: focus_text(event, True))
         self.native_agreement = ttk.Checkbutton(pane, text=DISCLOSURE["agreement"],
             variable=self.native_checked, command=self.toggle_native_agreement,
-            style="Disclosure.TCheckbutton")
+            style="Native.Disclosure.TCheckbutton")
         self.native_agreement.grid(row=3, column=0, sticky="ew", pady=(0, 8))
         status = ttk.Label(pane, textvariable=self.native_status, justify="left")
         status.grid(row=4, column=0, sticky="ew", pady=(0, 8))
@@ -432,7 +432,7 @@ class PhoneWindow:
         def resize(event):
             for label in (scope, status):
                 label.configure(wraplength=event.width)
-            ttk.Style(self.window).configure("Disclosure.TCheckbutton", wraplength=max(240, event.width - 32))
+            ttk.Style(self.window).configure("Native.Disclosure.TCheckbutton", wraplength=max(240, event.width - 32))
         pane.bind("<Configure>", resize)
         pane.grid_remove()
 
@@ -486,6 +486,8 @@ class PhoneWindow:
         style.configure("Primary.TButton", background=LIME, foreground=BACKGROUND)
         style.map("Primary.TButton", background=[("disabled", BORDER), ("active", LIME)], foreground=[("disabled", MUTED)])
         style.configure("TCheckbutton", background=BACKGROUND, foreground=BODY, font=("Arial", 12))
+        style.map("Native.Disclosure.TCheckbutton", background=[("disabled", BACKGROUND)],
+                  foreground=[("disabled", MUTED)])
         style.configure("TEntry", fieldbackground=PANEL, foreground=HEADING, padding=8)
         style.configure("Horizontal.TProgressbar", background=LIME, troughcolor=BORDER)
 

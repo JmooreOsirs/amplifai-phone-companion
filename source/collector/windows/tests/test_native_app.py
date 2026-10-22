@@ -61,6 +61,22 @@ def tick(view, outcome=None):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_native_disclosure_disabled_theme_drift_cannot_pass_style_gate(self):
+        import app
+        from render_contact_workspace import native_disclosure_states
+        style = Mock()
+        colors = {"background": app.BACKGROUND, "foreground": app.MUTED}
+        style.map.side_effect = lambda _name, key: [("disabled", colors[key])]
+        style.lookup.side_effect = lambda _name, key, **_kwargs: colors[key]
+        result = native_disclosure_states(style)
+        self.assertEqual(result["resolved"]["disabled selected"], colors)
+        style.lookup.side_effect = lambda _name, key, **_kwargs: "#d9d9d9" if key == "background" else colors[key]
+        with self.assertRaisesRegex(RuntimeError, "disabled color changed"):
+            native_disclosure_states(style)
+        style.map.return_value, style.map.side_effect = [], None
+        with self.assertRaisesRegex(RuntimeError, "disabled map changed"):
+            native_disclosure_states(style)
+
     def test_render_scroll_synchronizes_cached_heights_and_keeps_strict_overflow_gate(self):
         from native_setup_fixture import require_full_text_scroll, text_scroll_evidence
         widget, root = Mock(), Mock()
