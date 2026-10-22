@@ -282,6 +282,75 @@ class SessionTests(unittest.TestCase):
             state.handle({"kind": "destination", "state": "approved", "handoffId": BINDING,
                           "intentId": "33333333-3333-4333-8333-333333333333"})
 
+    def test_authenticated_replacement_requires_fresh_decision_and_retires_old_responses(self):
+        for previous_decision in (None, False, True):
+            with self.subTest(previous_decision=previous_decision):
+                state = paired()
+                original = {"kind": "destination", "state": "pending", "handoffId": BINDING,
+                            "intentId": "22222222-2222-4222-8222-222222222222",
+                            "email": "original@example.test", "course": "Original course"}
+                replacement = {**original, "intentId": "33333333-3333-4333-8333-333333333333",
+                               "email": "replacement@example.test", "course": "Replacement course"}
+                state.handle(original)
+                if previous_decision is not None:
+                    state.decide_destination(previous_decision)
+                    if previous_decision:
+                        state.handle({**original, "state": "approved"})
+                state.handle(replacement)
+                self.assertEqual(state.destination_email, replacement["email"])
+                self.assertEqual(state.destination_course, replacement["course"])
+                self.assertIsNone(state.destination_requested_approval)
+                self.assertFalse(state.destination_approved)
+                self.assertTrue(state.can_decide_destination)
+                for late_state in ("pending", "approved", "denied"):
+                    self.assertIsNone(state.handle({**original, "state": late_state}))
+                self.assertEqual(state.destination_intent_id, replacement["intentId"])
+                self.assertEqual(state.handoff_id, BINDING)
+                self.assertEqual(state.selected_ids, {1})
+                self.assertFalse(state.saved_acknowledged)
+                with self.assertRaises(ProtocolError):
+                    state.finish()
+                self.assertEqual(state.decide_destination(True)["intentId"], replacement["intentId"])
+
+    def test_destination_cannot_replace_received_or_receipted_handoff(self):
+        for handoff_state in ("received", "saved_pending_browser_receipt", "saved"):
+            with self.subTest(handoff_state=handoff_state):
+                state = paired()
+                original = {"kind": "destination", "state": "pending", "handoffId": BINDING,
+                            "intentId": "22222222-2222-4222-8222-222222222222",
+                            "email": "original@example.test", "course": "Original course"}
+                state.handle(original)
+                state.decide_destination(True)
+                state.handle({**original, "state": "approved"})
+                state.poll()
+                state.handle({"kind": "handoff", "handoffId": BINDING, "state": handoff_state})
+                with self.assertRaises(ProtocolError):
+                    state.handle({**original, "intentId": "33333333-3333-4333-8333-333333333333"})
+                self.assertEqual(state.destination_intent_id, original["intentId"])
+                self.assertTrue(state.destination_approved)
+                self.assertEqual(state.saved_acknowledged, handoff_state == "saved")
+
+    def test_rejected_destination_decision_preserves_review_for_authenticated_replacement(self):
+        state = paired()
+        original = {"kind": "destination", "state": "pending", "handoffId": BINDING,
+                    "intentId": "22222222-2222-4222-8222-222222222222",
+                    "email": "original@example.test", "course": "Original course"}
+        state.handle(original)
+        state.decide_destination(True)
+        state.handle({"kind": "error", "code": "handoff_unconfirmed"})
+        self.assertEqual(state.phase, "reviewing")
+        self.assertEqual(state.handoff_id, BINDING)
+        self.assertTrue(state.reviewed)
+        self.assertFalse(state.destination_approved)
+        self.assertFalse(state.saved_acknowledged)
+        self.assertIsNone(state.destination_requested_approval)
+        self.assertEqual(state.poll(), {"action": "handoff-status", "handoffId": BINDING})
+        state.handle({"kind": "handoff", "handoffId": BINDING, "state": "waiting"})
+        replacement = {**original, "intentId": "33333333-3333-4333-8333-333333333333"}
+        state.handle(replacement)
+        self.assertTrue(state.can_decide_destination)
+        self.assertEqual(state.decide_destination(False)["intentId"], replacement["intentId"])
+
     def test_denied_or_expired_destination_preserves_manual_recovery_guard(self):
         state = paired()
         self.assertEqual(state.pair_code, "1234567890")

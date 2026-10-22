@@ -25,9 +25,9 @@ from amplifai_phone.windows_storage import windows_process_alive
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-VERSION = "2026.10.15-rc19"
-BUILD = "26101519"
-INSTALLER_VERSION = "1.0.19"
+VERSION = "2026.10.21-rc20"
+BUILD = "26102120"
+INSTALLER_VERSION = "1.0.20"
 BUNDLE_ID = "ai.satoris.amplifai.phone.windows-candidate"
 CHANNEL = "windows-x64-test"
 FEED_URL = "https://amplifai-database-engine.vercel.app/phone/windows/update-v1.json"

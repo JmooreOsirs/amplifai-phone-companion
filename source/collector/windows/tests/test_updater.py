@@ -19,8 +19,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from session import Session
 from installer_guard import InstallerGuardError, InstallerReadGuard
-from updater import (BUILD, CHANNEL, FEED_URL, INSTALLER_VERSION, MAX_INSTALLER_BYTES,
+from updater import (BUILD, CHANNEL, FEED_URL, INSTALLER_VERSION, MAX_INSTALLER_BYTES, VERSION,
                      PreparedUpdate, RestrictedRedirects, UpdateError, _read_url, cleanup_owned_updates, parse_manifest, verify_installer)
+
+NEXT_BUILD = str(int(BUILD) + 1)
+NEXT_INSTALLER_VERSION = ".".join((*INSTALLER_VERSION.split(".")[:2], str(int(INSTALLER_VERSION.split(".")[2]) + 1)))
+NEXT_VERSION = VERSION + "-next"
 
 
 class SignedUpdateTests(unittest.TestCase):
@@ -29,8 +33,8 @@ class SignedUpdateTests(unittest.TestCase):
         self.public = base64.b64encode(self.key.public_key().public_bytes_raw()).decode()
         self.package = b"synthetic-msi-update-bytes"
         self.value = {"schema": 1, "platform": "windows", "architecture": "x86_64", "channel": CHANNEL,
-                      "version": "2026.10.16-rc20", "build": "26101620", "installerVersion": "1.0.20",
-                      "installerUrl": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-rc20/AmplifaiPhone-rc20-unsigned.msi",
+                      "version": NEXT_VERSION, "build": NEXT_BUILD, "installerVersion": NEXT_INSTALLER_VERSION,
+                      "installerUrl": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-test-fixture/AmplifaiPhone-fixture-unsigned.msi",
                       "installerBytes": len(self.package), "installerSha256": hashlib.sha256(self.package).hexdigest(),
                       "installerEdSignature": base64.b64encode(self.key.sign(self.package)).decode(), "installerTrust": "unsigned-test"}
 
@@ -67,7 +71,7 @@ class SignedUpdateTests(unittest.TestCase):
 
     def test_signed_wrong_channel_cpu_downgrade_and_malformed_fields_fail_closed(self):
         changes = {"schema": [True, 2], "platform": ["macos"], "architecture": ["arm64"], "channel": ["windows-x64"],
-                   "version": ["x" * 97, "bad\nlabel"], "build": [26101620, "26101417", "-1", "1" * 13],
+                   "version": ["x" * 97, "bad\nlabel"], "build": [int(NEXT_BUILD), str(int(BUILD) - 1), "-1", "1" * 13],
                    "installerVersion": ["1.0.17", "256.0.19", "1.0.65536", "1.0"],
                    "installerBytes": [True, 0, MAX_INSTALLER_BYTES + 1], "installerSha256": ["A" * 64, "z" * 64],
                    "installerEdSignature": ["", "A" * 88], "installerTrust": ["trusted", [], None],
@@ -259,7 +263,7 @@ class UpdateSafetyTests(unittest.TestCase):
         from test_gui_guards import source_window
         window = source_window(); window.state = self.idle()
         window.prepared_update = Mock(); window.prepared_update.manifest.trust = "unsigned-test"
-        window.prepared_update.manifest.version = "2026.10.16-rc20"
+        window.prepared_update.manifest.version = NEXT_VERSION
         window.status_owned = True; window.update_state = "available"; window.update_message = Mock()
         dialog = window.install_update.__globals__["messagebox"]
         def start_collection(*_args):

@@ -118,11 +118,13 @@ class _BoundedHTTPServer(ThreadingHTTPServer):
 
 class CompanionStatusServer:
     def __init__(self, identity: CompanionIdentity, status: Callable[[], dict[str, object]],
-                 request_update_check: Callable[[], bool | None], *, port: int = STATUS_PORT):
+                 request_update_check: Callable[[], bool | None], *, port: int = STATUS_PORT,
+                 native_setup_v2: bool = False):
         self.identity = identity
         self.status = status
         self.request_update_check = request_update_check
         self.port = port
+        self.native_setup_v2 = native_setup_v2 is True and identity.platform == "windows"
         self._tokens: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
         self._httpd: _BoundedHTTPServer | None = None
@@ -204,7 +206,7 @@ class CompanionStatusServer:
 
             def do_OPTIONS(self) -> None:
                 method = {"/v1/status": "GET", "/v1/check-update": "POST"}.get(self.path)
-                if self.path == "/v1/setup-capabilities" and owner.identity.platform == "macos":
+                if self.path == "/v1/setup-capabilities" and (owner.identity.platform == "macos" or owner.native_setup_v2):
                     method = "GET"
                 requested = self.headers.get_all("Access-Control-Request-Headers") or []
                 headers = [name.strip().lower() for item in requested for name in item.split(",")]
@@ -219,10 +221,12 @@ class CompanionStatusServer:
                 if not self._authorized():
                     self._reply(403)
                     return
-                if self.path == "/v1/setup-capabilities" and owner.identity.platform == "macos":
+                if self.path == "/v1/setup-capabilities" and (owner.identity.platform == "macos" or owner.native_setup_v2):
                     identity = owner.identity.payload()
                     del identity["protocol"]
-                    self._reply(200, {**identity, "protocols": ["phone-native-setup-v1"]})
+                    if owner.native_setup_v2:
+                        identity["schema"] = 2
+                    self._reply(200, {**identity, "protocols": ["phone-native-setup-v2" if owner.native_setup_v2 else "phone-native-setup-v1"]})
                     return
                 if self.path != "/v1/status":
                     self._reply(403)

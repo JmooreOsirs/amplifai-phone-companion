@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import update_installer
 from installer_guard import InstallerGuardError
-from updater import CHANNEL, UpdateError
+from updater import BUILD, CHANNEL, INSTALLER_VERSION, VERSION, UpdateError
 
 
 PREPARE = '{"schema":1,"action":"prepare"}\n'
@@ -57,8 +57,8 @@ class UpdateHandoffTests(unittest.TestCase):
         self.msi.write_bytes(self.package)
         self.manifest = {
             "schema": 1, "platform": "windows", "architecture": "x86_64", "channel": CHANNEL,
-            "version": "2026.10.15-rc19", "build": "26101519", "installerVersion": "1.0.19",
-            "installerUrl": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-rc19/AmplifaiPhone-rc19-unsigned.msi",
+            "version": VERSION, "build": BUILD, "installerVersion": INSTALLER_VERSION,
+            "installerUrl": "https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-test-fixture/AmplifaiPhone-fixture-unsigned.msi",
             "installerBytes": len(self.package), "installerSha256": hashlib.sha256(self.package).hexdigest(),
             "installerEdSignature": base64.b64encode(self.key.sign(self.package)).decode(),
             "installerTrust": "unsigned-test",

@@ -5,13 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tkinter as tk
 from pathlib import Path
 from unittest.mock import patch
 
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import HANDOFF_ID, capture, selected_review
+from render_candidate import HANDOFF_ID, capture, create_root, place_viewport, selected_review
 
 
 def main() -> None:
@@ -24,12 +23,12 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
 
-    root = tk.Tk()
-    with patch.object(app, "HelperProcess"), patch.object(app.PhoneWindow, "pump"):
+    root = create_root()
+    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     records = []
-    for width, height in ((920, 800), (680, 680)):
-        root.geometry(f"{width}x{height}+30+30")
+    for width, height in ((920, 749), (680, 680)):
+        place_viewport(root, width, height)
         view.state = selected_review()
         view.helper.write.reset_mock()
         view.render_contacts()

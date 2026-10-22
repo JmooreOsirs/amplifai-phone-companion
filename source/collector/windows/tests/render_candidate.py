@@ -15,6 +15,7 @@ from PIL import ImageGrab
 
 import app
 from session import Session
+from visible_desktop import Desktop, validate_visible
 
 TOTAL_CONTACTS = 1_205
 HANDOFF_ID = "11111111-1111-4111-8111-111111111111"
@@ -73,20 +74,47 @@ def selected_review() -> Session:
     return state
 
 
-def capture(root: tk.Tk, output: Path, name: str, *, scroll: float) -> dict:
-    canvas = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Canvas))
-    canvas.yview_moveto(scroll)
+def descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from descendants(child)
+
+
+def create_root():
+    desktop = Desktop()
+    desktop.physical_coordinates()
+    root = tk.Tk()
+    root.capture_desktop = desktop
+    return root
+
+
+def place_viewport(root, width, height):
+    return root._root().capture_desktop.place(root, width, height)
+
+
+def visible_snapshot(root, expected_size=None):
+    return validate_visible(root._root().capture_desktop.snapshot(root), expected_size)
+
+
+def capture(root: tk.Tk, output: Path, name: str, *, scroll: float | None = None) -> dict:
+    if scroll is not None:
+        for canvas in descendants(root):
+            if isinstance(canvas, tk.Canvas) and canvas.winfo_ismapped():
+                canvas.yview_moveto(scroll)
     root.update()
     time.sleep(0.15)
-    x, y = root.winfo_rootx(), root.winfo_rooty()
-    width, height = root.winfo_width(), root.winfo_height()
+    desktop = visible_snapshot(root)
+    x, y, right, bottom = desktop["clientBounds"]
+    width, height = right - x, bottom - y
     path = output / f"windows-{name}.png"
     image = ImageGrab.grab(bbox=(x, y, x + width, y + height), all_screens=True)
     if image.size != (width, height):
         raise RuntimeError("Windows screenshot viewport mismatch")
+    if visible_snapshot(root) != desktop:
+        raise RuntimeError("Visible desktop bounds changed during screenshot capture")
     image.save(path)
     return {"path": path.name, "width": width, "height": height,
-            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "visibleDesktop": desktop}
 
 
 def main() -> None:
@@ -97,27 +125,29 @@ def main() -> None:
     parser.add_argument("--logo", type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    root = tk.Tk()
-    root.geometry("920x800+30+30")
-    with patch.object(app, "HelperProcess"):
+    root = create_root()
+    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     view.state = selected_review()
     view.render_contacts()
     view.refresh()
     root.update()
     records = []
-    for width, height in ((920, 800), (680, 680)):
-        root.geometry(f"{width}x{height}+30+30")
+    for width, height in ((920, 749), (680, 680)):
+        place_viewport(root, width, height)
+        view.show_workspace("setup")
         root.update()
-        canvas = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Canvas))
+        canvas = view.details_canvas
         left, right = canvas.winfo_rootx(), canvas.winfo_rootx() + canvas.winfo_width()
         for button in (view.approve, view.connect, view.decline_button, view.privacy_button):
             if button.winfo_rootx() < left or button.winfo_rootx() + button.winfo_width() > right:
                 raise RuntimeError(f"Consent action clipped at {width}px: {button.cget('text')}")
         records.append(capture(root, args.output, f"{width}x{height}-top", scroll=0.0))
-        records.append(capture(root, args.output, f"{width}x{height}-review", scroll=0.55))
+        view.show_workspace("contacts")
+        records.append(capture(root, args.output, f"{width}x{height}-review"))
     root.focus_force()
     root.clipboard_clear()
+    view.show_workspace("details", account=True)
     view.copy_code_button.focus_set()
     root.update()
     view.copy_code_button.event_generate("<KeyPress-space>")

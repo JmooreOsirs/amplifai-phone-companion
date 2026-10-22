@@ -158,6 +158,8 @@ class Session:
         self.destination_course = ""
         self.destination_requested_approval: bool | None = None
         self.destination_approved = False
+        self._retired_destination_ids: set[str] = set()
+        self._browser_received = False
         self._failure_status = ""
         self._completed = self._saved_exit = self._stopping = self._failed = False
 
@@ -497,6 +499,8 @@ class Session:
         self.destination_course = ""
         self.destination_requested_approval = None
         self.destination_approved = False
+        self._retired_destination_ids.clear()
+        self._browser_received = False
 
     @property
     def can_decide_destination(self) -> bool:
@@ -854,15 +858,27 @@ class Session:
                 valid_id = False
             if not valid_id:
                 raise ProtocolError("Invalid account destination intent")
+            if not isinstance(event.get("state"), str) or event["state"] not in {"pending", "approved", "denied"}:
+                raise ProtocolError("Invalid account destination state")
+            if intent_id in self._retired_destination_ids:
+                return None
             if event.get("state") == "pending":
                 email, course = event.get("email"), event.get("course")
                 if (not isinstance(email, str) or not 0 < len(email) <= 254 or "@" not in email
                         or not isinstance(course, str) or not 0 < len(course) <= 160
                         or any(ord(char) < 32 for char in email + course)
-                        or self.destination_intent_id not in ("", intent_id)
                         or self.destination_intent_id == intent_id and
                         (self.destination_email != email or self.destination_course != course)):
                     raise ProtocolError("Invalid server-confirmed account destination")
+                if intent_id != self.destination_intent_id:
+                    if self._browser_received or self.save_receipt_pending or self.saved_acknowledged:
+                        raise ProtocolError("Account destination cannot replace a received handoff")
+                    # A new pending intent is emitted only after the shared bridge
+                    # verifies its account proof. It must never inherit an old decision.
+                    if self.destination_intent_id:
+                        self._retired_destination_ids.add(self.destination_intent_id)
+                    self.destination_requested_approval = None
+                    self.destination_approved = False
                 self.destination_intent_id = intent_id
                 self.destination_email = email
                 self.destination_course = course
@@ -881,8 +897,6 @@ class Session:
                     self.reviewed = False
                     self.status = "Destination denied. This pairing was revoked; review and create a new connection if wanted."
                     return {"action": "revoke"}
-            else:
-                raise ProtocolError("Invalid account destination state")
         elif kind == "handoff":
             state = event.get("state")
             if not isinstance(state, str) or state not in {"saved", "saved_pending_browser_receipt", "received", "expired", "waiting"}:
@@ -904,6 +918,7 @@ class Session:
                 self.saved_acknowledged = True
                 self.status = "Matching account save acknowledged. Waiting for safe helper completion."
             elif state == "received":
+                self._browser_received = True
                 self.status = "Browser received the preview, not a saved account receipt. Keep this review open."
             elif state == "saved_pending_browser_receipt":
                 self.save_receipt_pending = True
@@ -935,6 +950,12 @@ class Session:
             if event.get("transport") not in {"usb", "wifi"}:
                 raise ProtocolError("Invalid connection transport")
         elif kind == "error":
+            if (event == {"kind": "error", "code": "handoff_unconfirmed"}
+                    and self.can_pair and not self.destination_approved
+                    and self.destination_requested_approval is not None):
+                self.destination_requested_approval = None
+                self.status = "Destination confirmation was not accepted. Checking the current account destination; your local review remains open."
+                return None
             if event.get("code") == "bridge_unavailable" and self._pairing:
                 self._retired_handoff_id = self.handoff_id if self._polling else ""
                 self._pairing = self._polling = False

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import platform
 import sys
@@ -12,7 +11,7 @@ from unittest.mock import patch
 
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import ImageGrab, capture as capture_window
+from render_candidate import capture as capture_window, create_root, place_viewport
 from session import Session
 from test_windows_source_diagnostics import capture, connecting, diagnostic, history
 
@@ -31,14 +30,14 @@ def main() -> None:
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    root = tk.Tk()
-    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app.PhoneWindow, "pump"):
+    root = create_root()
+    with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
         view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
     view._startup_update_pending = False
     styles = app.ttk.Style(root)
     records = []
-    for width, height in ((920, 800), (680, 680)):
-        root.geometry(f"{width}x{height}+30+30")
+    for width, height in ((920, 749), (680, 680)):
+        place_viewport(root, width, height)
         for name in ("current-unavailable", "previous-run", "readable-zero-with-history"):
             if name == "current-unavailable":
                 state = connecting()
@@ -53,6 +52,8 @@ def main() -> None:
                     state.handle(capture(missing=[], unavailableReasons={}))
             view.state = state
             view.render_contacts(); view.refresh(); root.update()
+            view.show_workspace("details")
+            root.update()
             expected = "Current collection source details" if name == "current-unavailable" else "Previous run diagnostics"
             if expected not in view.coverage_status.get() or str(view.diagnostic_details_button.cget("state")) != "normal":
                 raise RuntimeError("Native diagnostic label or disclosure state differs from session facts")
@@ -60,7 +61,7 @@ def main() -> None:
                 raise RuntimeError("Historical diagnostics changed a readable zero")
             label = next(widget for widget in children(root) if isinstance(widget, app.ttk.Label)
                          and str(widget.cget("textvariable")) == str(view.coverage_status))
-            canvas = next(widget for widget in root.winfo_children() if isinstance(widget, tk.Canvas))
+            canvas = view.details_canvas
             left, right = canvas.winfo_rootx(), canvas.winfo_rootx() + canvas.winfo_width()
             button = view.diagnostic_details_button
             if button.winfo_rootx() < left or button.winfo_rootx() + button.winfo_width() > right:
@@ -73,12 +74,8 @@ def main() -> None:
                 text = next(widget for widget in children(details) if isinstance(widget, tk.Text))
                 if str(text.cget("state")) != "disabled" or "Historical evidence only" not in text.get("1.0", "end"):
                     raise RuntimeError("Diagnostic disclosure is editable or loses the historical label")
-                path = args.output / f"windows-{width}-diagnostic-disclosure.png"
-                x, y = details.winfo_rootx(), details.winfo_rooty()
-                screenshot = ImageGrab.grab(bbox=(x, y, x + details.winfo_width(), y + details.winfo_height()), all_screens=True)
-                screenshot.save(path)
-                records.append({"path": path.name, "width": screenshot.width, "height": screenshot.height,
-                                "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+                place_viewport(details, details.winfo_width(), details.winfo_height())
+                records.append(capture_window(details, args.output, f"{width}-diagnostic-disclosure"))
                 details.event_generate("<Escape>"); root.update()
                 if view.source_details_window is not None:
                     raise RuntimeError("Escape did not close the source diagnostic disclosure")

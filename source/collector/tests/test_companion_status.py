@@ -124,6 +124,30 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(self.request(path="/v1/setup-capabilities")[0], 403)
         self.assertEqual(self.request()[0], 200)
 
+    def test_wired_windows_v2_discovery_is_exact_read_only_and_preserves_status(self):
+        self.server.stop()
+        identity = CompanionIdentity("windows", "x86_64", "windows-x64-test",
+            "ai.satoris.amplifai.phone.windows-candidate", "2026.10.21-test", "26102101")
+        self.server = CompanionStatusServer(identity, lambda: self.state, self.check, port=0, native_setup_v2=True)
+        self.server.start()
+        before = json.loads(self.request()[2])
+        count = len(self.server._tokens)
+        status, _, body = self.request(path="/v1/setup-capabilities")
+        expected = identity.payload()
+        del expected["protocol"]
+        expected.update(schema=2, protocols=["phone-native-setup-v2"])
+        self.assertEqual((status, json.loads(body)), (200, expected))
+        self.assertEqual(len(self.server._tokens), count)
+        self.assertEqual(self.checks, 0)
+        self.assertEqual(json.loads(self.request()[2])["schema"], before["schema"])
+        self.assertEqual(self.request("POST", path="/v1/setup-capabilities", body=b"{}")[0], 403)
+        self.assertEqual(self.request(path="/v1/setup-capabilities", origin="https://evil.test")[0], 403)
+        self.assertEqual(self.request("OPTIONS", path="/v1/setup-capabilities", extra=(("Access-Control-Request-Method", "GET"),))[0], 204)
+
+    def test_windows_opt_in_does_not_change_mac_v1_discovery(self):
+        server = CompanionStatusServer(IDENTITY, lambda: self.state, self.check, port=0, native_setup_v2=True)
+        self.assertFalse(server.native_setup_v2)
+
     def test_intel_setup_identity_matches_running_status(self):
         self.server.identity = CompanionIdentity("macos", "x86_64", "macos-intel-test",
             "ai.satoris.amplifai.phone.intel-candidate", "2026.10.21-test", "261021011")

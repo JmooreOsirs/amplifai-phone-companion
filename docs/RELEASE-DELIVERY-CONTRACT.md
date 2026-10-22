@@ -1,5 +1,32 @@
 # Native delivery and website promotion contracts
 
+## Windows RC20 native setup candidate — October 21
+
+Reserved Windows identity: `2026.10.21-rc20` / build `26102120` / MSI `1.0.20`,
+channel `windows-x64-test`, tag `windows-2026.10.21-rc20-unsigned-test`.
+The MSI remains unsigned Test. These source identities do not establish a
+published package or physical phone/account acceptance.
+
+This candidate adds the pinned `phone-native-setup-v2` Windows disclosure,
+explicit approval, separate Start admission, protected same-logon setup delivery,
+fixed contact review controls, immutable reviewed Continue and exact recovery.
+The first bind attempt freezes the selected handoff even when its reply is lost.
+The normal return is the original waiting account tab with an explicit bound
+fallback. Only a matching saved acknowledgement enables exact report recovery.
+
+Native source is reviewed into `release/native`; `main` remains the separate
+release-control lane. The package gate upgrades the exact published RC19 MSI,
+checks every installed file and HKCU setup registration, and verifies uninstall
+and preserved session fixtures. The later normal frozen-helper handoff uses the
+same new MSI and signed feed bytes after the exact build artifact is known.
+Retain the qualified dependency lock, source archives, signing identity and
+existing Test labels. Do not rebuild or republish unchanged RC34 Mac packages.
+
+Release order remains compatible dormant website → qualified public package,
+source offer and update feed → exact platform admission. The new platform
+allowlist stays closed until the sole website owner verifies the public packet.
+Human source review and physical device/account acceptance remain separate.
+
 ## RC34 native setup and review flow — October 21
 
 Reserved candidate identities: ARM `2026.10.21-rc34` / `26102134` / `macos-2026.10.21-rc34-release`; Intel Test `2026.10.21-rc34-intel1` / `261021341` / `macos-2026.10.21-rc34-intel1-test`. These are reserved source identities, not published binaries. Existing bundle IDs, channels, keys, feeds and dependency inputs remain unchanged.

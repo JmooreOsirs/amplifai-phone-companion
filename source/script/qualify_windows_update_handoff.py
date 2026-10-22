@@ -1,4 +1,4 @@
-"""Qualify exact signed rc19 bytes against a normally closed running rc18 app on CI."""
+"""Qualify exact signed rc20 bytes against a normally closed running rc19 app on CI."""
 from __future__ import annotations
 
 import argparse
@@ -25,8 +25,8 @@ from updater import BUILD, INSTALLER_VERSION, MAX_MANIFEST_BYTES, PUBLIC_KEY, VE
 from update_installer import READY, RuntimeReadGuard
 from verify_windows_install import verify
 
-BASELINE_BYTES = 41928026
-BASELINE_SHA256 = "295b9940988e21dd71069f7dfe7c6407188c5c0213d61233af8d773a59aef1c9"
+BASELINE_BYTES = 41989466
+BASELINE_SHA256 = "7fe9b10b9bc212e3f5f9591280a54b170a4b6762c5e78369acf5c9ebcabbba44"
 FIXED_DATA_NAME = "AMPLIFai Phone Candidate"
 
 
@@ -78,10 +78,38 @@ def installed_status() -> dict:
         status = json.loads(data)
         expected = {"platform": "windows", "architecture": "x86_64", "channel": "windows-x64-test", "version": VERSION, "build": BUILD}
         if any(status.get(key) != value for key, value in expected.items()):
-            raise ValueError("Relaunched companion identity differs from the signed rc19 candidate")
+            raise ValueError("Relaunched companion identity differs from the signed rc20 candidate")
         return expected
     finally:
         connection.close()
+
+
+def installed_setup_capabilities() -> dict:
+    connection = http.client.HTTPConnection("127.0.0.1", 48752, timeout=3)
+    try:
+        connection.request("GET", "/v1/setup-capabilities", headers={
+            "Origin": "https://amplifai.satoris.ai", "Host": "127.0.0.1:48752"})
+        response = connection.getresponse()
+        data = response.read(4097)
+        expected = {"schema": 2, "product": "amplifai-phone", "platform": "windows",
+                    "architecture": "x86_64", "channel": "windows-x64-test",
+                    "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+                    "version": VERSION, "build": BUILD, "protocols": ["phone-native-setup-v2"]}
+        if response.status != 200 or len(data) > 4096 or json.loads(data) != expected:
+            raise ValueError("Installed native setup discovery differs from the frozen candidate")
+        return expected
+    finally:
+        connection.close()
+
+
+def verify_frozen_plain_delivery(installed: Path, primary) -> None:
+    secondary = subprocess.run([str(installed / "AmplifaiPhone.exe")], cwd=str(installed),
+                               env=clean_child_environment(), stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               shell=False, timeout=20, check=False)
+    if secondary.returncode != 0 or primary.poll() is not None:
+        raise ValueError("Frozen plain launch did not route to the existing companion")
+    installed_setup_capabilities()
 
 
 def close_normally(pid: int) -> None:
@@ -106,12 +134,12 @@ def qualify(args) -> dict:
         signature_bytes = source.read(129)
     manifest = parse_manifest(manifest_bytes, signature_bytes)
     if (manifest.version, manifest.build, manifest.installer_version) != (VERSION, BUILD, INSTALLER_VERSION):
-        raise ValueError("Signed fixture is not the exact rc19 candidate identity")
+        raise ValueError("Signed fixture is not the exact rc20 candidate identity")
     if args.msi.stat().st_size != manifest.size:
-        raise ValueError("Signed rc19 MSI byte count differs from local fixture")
+        raise ValueError("Signed rc20 MSI byte count differs from local fixture")
     package_bytes = args.msi.read_bytes(); verify_installer(package_bytes, manifest)
     if args.baseline.stat().st_size != BASELINE_BYTES or hashlib.sha256(args.baseline.read_bytes()).hexdigest() != BASELINE_SHA256:
-        raise ValueError("Released rc18 MSI differs from the pinned baseline")
+        raise ValueError("Released rc19 MSI differs from the pinned baseline")
     installed = Path(os.environ["LOCALAPPDATA"]) / "AMPLIFaiPhone"
     sessions = default_sessions_root(); data_root = sessions.parent
     if data_root.name != FIXED_DATA_NAME or installed.exists() or data_root.exists():
@@ -218,10 +246,12 @@ def qualify(args) -> dict:
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
         wait_idle(new_app)
         observed_identity = installed_status()
+        setup_capabilities = installed_setup_capabilities()
+        verify_frozen_plain_delivery(installed, new_app)
         close_normally(new_app.pid)
         if new_app.wait(timeout=30) != 0:
             raise ValueError("Relaunched companion did not close normally")
-        return {"status": "actual-windows-frozen-helper-running-rc18-to-rc19-handoff", "schema": 1,
+        return {"status": "actual-windows-frozen-helper-running-rc19-to-rc20-handoff", "schema": 1,
                 "msiSha256": manifest.sha256, "version": manifest.version, "build": manifest.build,
                 "installerVersion": manifest.installer_version, "readyWhileOldAppRunning": True,
                 "oldAppClosedNormally": True, "installerWaitedForParentExit": True,
@@ -229,6 +259,8 @@ def qualify(args) -> dict:
                 "immutableGuardsOwnedByFrozenHelper": True, "parentAliveAfterCommitSeconds": parent_wait_seconds,
                 "sessionFixturePreserved": True,
                 "installedAppStatus": observed_identity, "installedAppRelaunched": True,
+                "installedSetupCapabilities": setup_capabilities,
+                "frozenSameLogonPlainDelivery": True,
                 "retiredCacheCleanedOnRelaunch": not prepared.directory.exists(),
                 "pillowNativeFilesMatched": len(pillow_evidence["nativeFiles"]),
                 "elapsedSeconds": round(time.monotonic() - started, 3),
