@@ -200,27 +200,95 @@ enum CompanionWindowLifecycleChecks {
     static func browserReturnDoesNotNavigate() throws {
         var activated: [String?] = []
         var opened: [URL] = []
-        let action = ReturnToBrowserAction(activateExisting: { browser in
+        var results: [BrowserActivationResult] = []
+        let action = ReturnToBrowserAction(activateExisting: { browser, done in
             activated.append(browser)
-            return browser == "com.example.original-browser"
+            done(browser == "com.example.original-browser" ? .observed : .unavailable)
         }) { url, _, completion in
             opened.append(url)
             completion(true)
         }
-        try require(action.activateOriginalBrowser(preferredBrowserBundleID: "com.example.original-browser"),
-                    "An explicit return can activate the original browser")
-        try require(!action.activateOriginalBrowser(preferredBrowserBundleID: nil), "Unknown originating browser fails closed")
-        try require(!action.activateOriginalBrowser(preferredBrowserBundleID: "com.example.closed-browser"),
-                    "A missing browser fails without recovery navigation")
+        for browser in ["com.example.original-browser", nil, "com.example.closed-browser"] {
+            action.activateOriginalBrowser(preferredBrowserBundleID: browser) { results.append($0) }
+        }
+        try require(results == [.observed, .unavailable, .unavailable],
+                    "Only an observed original browser reports success; missing senders fail closed")
         try require(activated.count == 3 && opened.isEmpty, "Returning never opens a URL, even after activation failure")
         let recovery = URL(string: CollectorModel.accountOrigin + "/phone/account")!
         action(recovery, preferredBrowserBundleID: "com.example.original-browser")
         try require(opened == [recovery], "Only explicit recovery opens its supplied account destination")
         let inert = ReturnToBrowserAction { _, _, _ in }
-        try require(!inert.activateOriginalBrowser(preferredBrowserBundleID: "com.example.original-browser"),
+        inert.activateOriginalBrowser(preferredBrowserBundleID: "com.example.original-browser") { results.append($0) }
+        try require(results.last == .unavailable,
                     "Injected URL handlers must not inherit live browser activation")
-        try require(!ReturnToBrowserAction.system.activateOriginalBrowser(preferredBrowserBundleID: nil),
+        ReturnToBrowserAction.system.activateOriginalBrowser(preferredBrowserBundleID: nil) { results.append($0) }
+        try require(results.last == .unavailable,
                     "The system action never chooses a default browser when the sender is unknown")
+    }
+
+    static func browserActivationNeedsObservedForeground() throws {
+        var pending: [@MainActor () -> Void] = []
+        var frontmost = false
+        var results: [BrowserActivationResult] = []
+        AppKitCompanionSurface.observeBrowserActivation(requested: true, isFrontmost: { frontmost },
+                                                        schedule: { pending.append($0) }, completion: { results.append($0) })
+        try require(results.isEmpty && pending.count == 1, "An accepted request is not proof of activation")
+        frontmost = true
+        pending.removeFirst()()
+        try require(results == [.observed] && pending.isEmpty, "Observed browser activation finishes once")
+        frontmost = false
+        results = []
+        AppKitCompanionSurface.observeBrowserActivation(requested: true, isFrontmost: { false },
+                                                        schedule: { pending.append($0) }, completion: { results.append($0) })
+        var steps = 0
+        while !pending.isEmpty && steps < 20 { steps += 1; pending.removeFirst()() }
+        try require(steps == 10 && pending.isEmpty && results == [.unconfirmed],
+                    "The bounded observer stops without repeated activation or false success")
+    }
+
+    static func browserRecoveryFencesDuplicateAndLateCallbacks() throws {
+        let session = BrowserReturnSession()
+        let first = BrowserReturnSession.Context(runOrSetupID: "run-one", browserBundleID: "original",
+            recoveryURL: URL(string: CollectorModel.accountOrigin + "/phone/account?phoneRunId=first")!)
+        let second = BrowserReturnSession.Context(runOrSetupID: "run-two", browserBundleID: "original",
+            recoveryURL: URL(string: CollectorModel.accountOrigin + "/phone/account?phoneRunId=second")!)
+        var activation: [@MainActor (BrowserActivationResult) -> Void] = []
+        var opened: [URL] = []
+        var completions: [@MainActor (Bool) -> Void] = []
+        let action = ReturnToBrowserAction(activateExisting: { _, done in activation.append(done) }) { url, _, done in
+            opened.append(url); completions.append(done)
+        }
+        session.returnToAccount(using: action, context: first)
+        session.returnToAccount(using: action, context: first)
+        session.recover(using: action, context: first)
+        try require(session.busy && activation.count == 1 && opened.isEmpty,
+                    "Repeated clicks cannot interleave activation and account opens")
+        activation[0](.unconfirmed)
+        try require(!session.busy && session.message.contains("could not be confirmed"),
+                    "Unconfirmed activation has truthful manual recovery feedback")
+        session.recover(using: action, context: first)
+        session.recover(using: action, context: first)
+        try require(opened == [first.recoveryURL!], "One explicit recovery opens one exact account URL")
+        activation[0](.observed)
+        try require(session.busy, "An old activation callback cannot complete a newer recovery")
+        completions[0](true)
+        completions[0](false)
+        session.recover(using: action, context: first)
+        try require(session.recoverySent && opened.count == 1 && session.message.contains("link sent"),
+                    "Successful dispatch is not page-load evidence and cannot spam new tabs")
+        session.recover(using: action, context: second)
+        session.use(.init(runOrSetupID: nil, browserBundleID: "original", recoveryURL: nil))
+        completions[1](true)
+        try require(!session.busy && !session.recoverySent && session.message.isEmpty,
+                    "A replaced or refused run ignores late recovery success")
+        session.recover(using: action, context: .init(runOrSetupID: nil, browserBundleID: "original", recoveryURL: nil))
+        try require(opened.count == 2, "A refused setup never opens a generic account URL")
+        session.returnToAccount(using: action, context: second)
+        session.invalidate()
+        session.use(second)
+        activation.last?(.observed)
+        try require(!session.busy && session.message.isEmpty,
+                    "Disappearing and returning to the same context cannot retain a canceled Returning message")
     }
 
     static func openingGeometryFitsDisplay() throws {
@@ -263,6 +331,8 @@ enum CompanionWindowLifecycleChecks {
         application.setActivationPolicy(.prohibited)
         do {
             try browserReturnDoesNotNavigate()
+            try browserActivationNeedsObservedForeground()
+            try browserRecoveryFencesDuplicateAndLateCallbacks()
             try openingGeometryFitsDisplay()
             try openingGeometryRunsOnceWithoutShowingWindow()
             try ownerCloseInvalidatesBeforeCallbacks()

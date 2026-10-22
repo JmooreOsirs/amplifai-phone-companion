@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var confirmingCleanup = false
     @State private var showingConnectionHelp = false
     @State private var showingShareDetails = false
+    @StateObject private var browserReturnSession = BrowserReturnSession()
     @Environment(\.returnToBrowser) private var returnToBrowser
     @State private var showingFinderGuide = false
     @State private var showingUpdates = false
@@ -69,6 +70,7 @@ struct ContentView: View {
         }
         .background(Brand.background)
         .font(Brand.bodyFont(16))
+        .environmentObject(browserReturnSession)
         .tint(Brand.lime)
         .foregroundStyle(Brand.body)
         .background(ActiveCompanionWindow(model: model, returnToBrowser: returnToBrowser)
@@ -307,10 +309,7 @@ struct ContentView: View {
                     Button("Recheck approval") { model.refreshRunStatus() }
                         .buttonStyle(SecondaryButton()).disabled(!model.canRefreshRunStatus)
                 } else {
-                    Button("Open your AMPLIFai account") {
-                        returnToBrowser(model.accountContinueURL, preferredBrowserBundleID: model.returnBrowserBundleID)
-                    }
-                        .buttonStyle(LimeButton())
+                    BrowserReturnControls(model: model)
                 }
             }
         }
@@ -1003,11 +1002,10 @@ struct ContentView: View {
     private var connectionHelp: some View {
         DisclosureGroup("Having trouble connecting?", isExpanded: $showingConnectionHelp) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("If the browser did not open, open your AMPLIFai account here. This collection's approval binds one link that your browser must use within five minutes of Continue; after that, start a new collection from your account.")
+                BrowserReturnControls(model: model)
+                Text("This collection's approval binds one link that your browser must use within five minutes of Continue; after that, start a new collection from your account.")
                     .font(Brand.bodyFont(13))
                     .foregroundStyle(Brand.muted)
-                Link("Open AMPLIFai account in a new browser tab", destination: model.accountContinueURL)
-                    .buttonStyle(QuietAction())
                 if !model.pairCode.isEmpty {
                     Text("One-time code: \(model.pairCode.prefix(5))-\(model.pairCode.suffix(5))")
                         .font(Brand.headingFont(18))

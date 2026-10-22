@@ -173,7 +173,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         contacts = SourceResult(1, (Contact(1, "Ada", ("+15551234567",), ()),), 0)
         calls = SourceResult(1, (), 1)
 
-        def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+        def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
             if path == DATABASES["messages"]:
                 raise SelectedPayloadMissing("Selected payload missing")
             return True
@@ -200,7 +200,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
     def test_unencrypted_backup_without_calls_marks_history_unavailable(self) -> None:
         contacts = SourceResult(1, (Contact(1, "Synthetic", (), ()),), 0)
 
-        def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+        def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
             return path != DATABASES["calls"]
 
         with tempfile.TemporaryDirectory(prefix="amplifai-no-call-file-") as temporary:
@@ -245,7 +245,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
             contacts = SourceResult(1, (Contact(1, "Ada", (), ()),), 0)
             calls = SourceResult(0, (), 0)
 
-            def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+            def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
                 if path == DATABASES["messages"]:
                     raise SelectedPayloadIntegrityError(
                         "synthetic invalid selected payload", code="selected_payload_length"
@@ -269,7 +269,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
 
     def test_invalid_required_contacts_payload_keeps_capture_failed(self) -> None:
         with tempfile.TemporaryDirectory(prefix="amplifai-invalid-contacts-") as temporary:
-            def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+            def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
                 if path == DATABASES["contacts"]:
                     raise SelectedPayloadIntegrityError(
                         "private contacts failure", code="selected_payload_identity"
@@ -285,7 +285,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         contacts = SourceResult(1, (Contact(1, "Ada", (), ()),), 0)
         messages = SourceResult(0, (), 0)
 
-        def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+        def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
             if path == DATABASES["calls"]:
                 raise SelectedPayloadIntegrityError(
                     "private call payload", code="selected_payload_crypto"
@@ -317,7 +317,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="amplifai-optional-reasons-") as temporary:
             for code in expected:
                 with self.subTest(code=code):
-                    def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+                    def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
                         if path == DATABASES["calls"]:
                             raise SelectedPayloadIntegrityError("private path and content", code=code)
                         return True
@@ -339,7 +339,7 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
                  "source_integrity"),
             ):
                 with self.subTest(reason=reason):
-                    def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None) -> bool:
+                    def extract(_backup: object, path: str, *_args: object, payload_diagnostic_callback=None, validated_snapshot_callback=None) -> bool:
                         if path == DATABASES["calls"]:
                             raise error
                         return True

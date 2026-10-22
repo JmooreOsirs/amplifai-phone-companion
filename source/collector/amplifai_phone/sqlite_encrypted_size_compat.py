@@ -1,13 +1,13 @@
-"""Strict, source-local proof for a smaller encrypted selected SQLite main file.
+"""Strict, source-local proof for encrypted selected SQLite size differences.
 
 The producer digest is compared with the exact ciphertext consumed by the
 decrypting copy. The private copy is independently hashed while written and
 again inside a bounded read-only worker. No sidecar may accompany the main.
 Only fixed validation codes cross the worker boundary.
 
-A larger encrypted Messages copy can collect the same proof facts for diagnosis,
-but is never admitted. Ciphertext/copy checksums cannot explain a contradictory
-manifest size, even when the difference happens to be one SQLite page.
+Messages alone can grow by exactly one current SQLite page, with full structural
+validation and a guarded standalone snapshot through metadata extraction. This
+compatibility policy does not establish why the producer's size differs.
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ import stat
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
 
 if not __package__:
@@ -48,9 +49,10 @@ SUCCESS = {
     "calls": "validated_call_database",
     "messages": "validated_messages_database",
 }
+ONE_PAGE_SUCCESS = "validated_messages_one_page_growth"
 OUTCOMES = contacts.OUTCOMES | messages.OUTCOMES | {
     "copy_checksum_mismatch", "sidecar_present", "schema_unsupported",
-    "validated_call_database", "unsupported_size_growth",
+    "validated_call_database", "unsupported_size_growth", ONE_PAGE_SUCCESS,
 }
 
 
@@ -62,12 +64,16 @@ class Validation:
     plaintext_copy_checksum_matches: bool | None = None
     producer_digest_present: bool | None = None
     sidecars_absent: bool | None = None
+    snapshot: ValidatedMessagesSnapshot | None = field(default=None, repr=False)
 
     @property
     def accepted(self) -> bool:
         return (
-            any(self.scope == SCOPES[category] and self.code == SUCCESS[category]
-                for category in PATHS)
+            (any(self.scope == SCOPES[category] and self.code == SUCCESS[category]
+                 for category in PATHS)
+             or (self.scope == SCOPES["messages"] and self.code == ONE_PAGE_SUCCESS
+                 and self.snapshot is not None and self.sidecars_absent is True
+                 and self.producer_digest_present is True))
             and self.producer_checksum_matches is True
             and self.plaintext_copy_checksum_matches is True
         )
@@ -139,6 +145,82 @@ def _sidecars_absent(connection: sqlite3.Connection, backup_path: Path, destinat
     return True
 
 
+def _one_page_geometry(path: Path, actual: int, declared: int) -> bool:
+    """Parent-side admission independent of the worker's success token."""
+    with path.open("rb") as stream:
+        header = stream.read(100)
+    if len(header) != 100 or header[:16] != b"SQLite format 3\0":
+        return False
+    page = int.from_bytes(header[16:18], "big")
+    page = 65536 if page == 1 else page
+    pages = int.from_bytes(header[28:32], "big")
+    return (512 <= page <= 65536 and page & (page - 1) == 0
+            and declared > 0 and declared % page == 0 and actual - declared == page
+            and pages > 0 and pages * page == actual and header[24:28] == header[92:96])
+
+
+@dataclass(frozen=True, repr=False)
+class ValidatedMessagesSnapshot:
+    path: Path
+    source: Path
+    copy_identity: tuple
+    source_identity: tuple
+    copied_digest: bytes
+    manifest_proof: tuple
+    connection: sqlite3.Connection
+    backup_path: Path
+    workspace: object
+
+    def check(self) -> None:
+        from .metadata import SelectedPayloadIntegrityError
+
+        try:
+            self.workspace.checked_path(self.path)
+            self.workspace.checked_path(self.source)
+            if (contacts._identity(contacts._regular_info(self.path)) != self.copy_identity
+                    or contacts._identity(contacts._regular_info(self.source)) != self.source_identity
+                    or _manifest_proof(self.connection, PATHS["messages"]) != self.manifest_proof
+                    or not _sidecars_absent(self.connection, self.backup_path, self.path,
+                                           PATHS["messages"], self.workspace)):
+                raise ValueError("Snapshot changed")
+        except (OSError, ValueError, TypeError, KeyError, sqlite3.DatabaseError) as error:
+            raise SelectedPayloadIntegrityError("Validated Messages snapshot changed") from error
+
+    @contextmanager
+    def open_connection(self, path: Path, *, bound_callback=None):
+        from .metadata import SelectedPayloadIntegrityError, _open_readonly
+
+        if path != self.path:
+            raise SelectedPayloadIntegrityError("Messages snapshot path does not match")
+        self.check()
+        # Keep the proven inode open across SQLite's path-based open and all
+        # reads. Identity plus a final digest fence rejects replacement/mutation;
+        # immutable prevents SQLite from incorporating a late sidecar.
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as error:
+            raise SelectedPayloadIntegrityError("Messages snapshot is unavailable") from error
+        with os.fdopen(descriptor, "rb") as stream:
+            if contacts._identity(os.fstat(stream.fileno())) != self.copy_identity:
+                raise SelectedPayloadIntegrityError("Messages snapshot identity changed")
+            with _open_readonly(path, immutable=True) as connection:
+                self.check()
+                yield connection
+            self.check()
+            deadline = time.monotonic() + contacts._work_deadline(self.copy_identity[2])
+            digest = hashlib.sha256()
+            while chunk := stream.read(256 * 1024):
+                if bound_callback is not None:
+                    bound_callback()
+                if time.monotonic() > deadline:
+                    raise SelectedPayloadIntegrityError("Messages snapshot verification timed out")
+                digest.update(chunk)
+            self.check()
+            if (contacts._identity(os.fstat(stream.fileno())) != self.copy_identity
+                    or not hmac.compare_digest(digest.digest(), self.copied_digest)):
+                raise SelectedPayloadIntegrityError("Messages snapshot changed during extraction")
+
+
 def validate_encrypted_size_difference(
     category: str, backup, entry, destination: Path, actual_size: int,
     *, workspace, source_before, raw_size: int, raw_digest: bytes,
@@ -151,11 +233,12 @@ def validate_encrypted_size_difference(
     copy_match: bool | None = None
     digest_present: bool | None = None
     sidecars_absent: bool | None = None
+    snapshot = None
     worker = None
 
     def result(code: str) -> Validation:
         return Validation(code, scope, producer_match, copy_match,
-                          digest_present, sidecars_absent)
+                          digest_present, sidecars_absent, snapshot)
 
     try:
         relative = PATHS[category]
@@ -233,8 +316,12 @@ def validate_encrypted_size_difference(
             return result("unavailable")
         if code in SUCCESS.values() and code != SUCCESS[category]:
             return result("unavailable")
-        # Growth is diagnostic-only, including if a faulty worker reports a
-        # success code. Never let it widen the existing acceptance boundary.
+        if code == ONE_PAGE_SUCCESS and (
+            category != "messages" or not growing or copy_match is not True
+            or not _one_page_geometry(destination, actual_size, entry.size)
+        ):
+            return result("unavailable")
+        # Ordinary success cannot authorize growth, even from a faulty worker.
         if growing and code in SUCCESS.values():
             return result("unavailable")
         if contacts._identity(before_copy) != contacts._identity(contacts._regular_info(destination)):
@@ -244,6 +331,12 @@ def validate_encrypted_size_difference(
         sidecars_absent = _sidecars_absent(connection, Path(backup.path), destination, relative, workspace)
         if not sidecars_absent:
             return result("sidecar_present")
+        if code == ONE_PAGE_SUCCESS:
+            snapshot = ValidatedMessagesSnapshot(
+                destination, source, contacts._identity(before_copy),
+                contacts._identity(source_before), copied_digest, proof,
+                connection, Path(backup.path), workspace,
+            )
         if bound_callback is not None:
             bound_callback()
         return result(code)
@@ -338,9 +431,14 @@ def _validate(request: object) -> tuple[str, bool | None]:
     if not matched:
         return "copy_checksum_mismatch", False
     if actual > declared:
-        # Do not parse or truncate the contradictory copy. This worker proves
-        # only that its bytes still match the copy made during decryption.
-        code = "unsupported_size_growth"
+        if not _one_page_geometry(path, actual, declared):
+            return "unsupported_size_growth", True
+        code = messages._validate({
+            "path": str(path), "actual_size": actual,
+            "manifest_size": declared, "digest": sha1.hexdigest(),
+        }, one_page_growth=True)
+        if code == SUCCESS["messages"]:
+            code = ONE_PAGE_SUCCESS
     elif category == "calls":
         code = _call_integrity(path, actual, declared, deadline)
     else:
@@ -350,6 +448,8 @@ def _validate(request: object) -> tuple[str, bool | None]:
         })
     if contacts._identity(before) != contacts._identity(contacts._regular_info(path)):
         return "unsafe", True
+    if contacts._copied_sidecar_status(path) is not None:
+        return "sidecar_present", True
     return code, True
 
 

@@ -43,15 +43,35 @@ import AppKit
     func makeKeyAndOrderFront() { window?.makeKeyAndOrderFront(nil) }
     func orderFront() { window?.orderFront(nil) }
 
-    static func activateOriginalBrowser(bundleID: String?) -> Bool {
+    static func activateOriginalBrowser(bundleID: String?,
+                                        completion: @escaping @MainActor (BrowserActivationResult) -> Void) {
         guard let bundleID, let probe = URL(string: CollectorModel.accountOrigin),
               let browser = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
               !browser.isTerminated,
               ReturnBrowserChoice.accept(senderBundleID: browser.bundleIdentifier, senderBundleURL: browser.bundleURL,
                                          ownBundleID: Bundle.main.bundleIdentifier,
                                          httpsHandlers: NSWorkspace.shared.urlsForApplications(toOpen: probe)) == bundleID
-        else { return false }
-        return browser.activate(options: [])
+        else { completion(.unavailable); return }
+        let isFrontmost = { !browser.isTerminated && NSWorkspace.shared.frontmostApplication?.processIdentifier == browser.processIdentifier }
+        if isFrontmost() { completion(.observed); return }
+        NSApp.yieldActivation(to: browser)
+        let requested = browser.activate(from: .current, options: [])
+        observeBrowserActivation(requested: requested, isFrontmost: isFrontmost, completion: completion)
+    }
+
+    /// Observe the one explicit request for at most a second; never repeatedly activate an app.
+    static func observeBrowserActivation(requested: Bool, remaining: Int = 10,
+                                         isFrontmost: @escaping @MainActor () -> Bool,
+                                         schedule: @escaping (@escaping @MainActor () -> Void) -> Void = { next in
+                                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { MainActor.assumeIsolated { next() } }
+                                         },
+                                         completion: @escaping @MainActor (BrowserActivationResult) -> Void) {
+        if isFrontmost() { completion(.observed); return }
+        guard requested, remaining > 0 else { completion(.unconfirmed); return }
+        schedule {
+            observeBrowserActivation(requested: requested, remaining: remaining - 1,
+                                     isFrontmost: isFrontmost, schedule: schedule, completion: completion)
+        }
     }
 
     func presentCloseConfirmation(title: String, detail: String, completion: @escaping @MainActor (Bool) -> Void) {

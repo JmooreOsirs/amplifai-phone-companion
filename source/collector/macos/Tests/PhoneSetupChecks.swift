@@ -146,6 +146,12 @@ import Darwin
                          model.phoneRun?.claimRequest == nil && wire.commands.isEmpty &&
                          server.requests.filter { $0.path == PhoneSetupContract.approvePath }.count == 1,
                          "One deliberate agreement creates one confirmed run and does not start capture")
+        let recovery: URL? = model.accountContinueURL
+        let recoveryItems = recovery.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems ?? []
+        try Flow.require(recoveryItems.contains(URLQueryItem(name: "phoneRunId", value: model.phoneRun?.runID)) &&
+                         recoveryItems.contains(URLQueryItem(name: "enrollmentId", value: model.phoneRun?.enrollmentID)) &&
+                         wire.commands.isEmpty,
+                         "Deliberate recovery pins the authoritative run and enrollment without starting collection")
         let surface = RecordingCompanionSurface()
         let director = CompanionWindowDirector()
         server.now = server.now.addingTimeInterval(45 * 60)
@@ -293,5 +299,7 @@ import Darwin
         restarted.admitSetupLink(server.link)
         try Flow.require(restarted.nativeSetupState == .refused && restarted.phoneRun == nil,
                          "A restarted process cannot replay a consumed bootstrap with a new capability")
+        try Flow.require(restarted.accountContinueURL == nil,
+                         "Refused setup cannot manufacture a generic or unbound account recovery destination")
     }
 }

@@ -33,6 +33,14 @@ struct SourceDiagnosticDecoderChecks {
         let history = try decode(["kind": "residue", "sourceDiagnosticHistory": [attempt]])
         try require(history.sourceDiagnosticHistory?.first?.sourceDiagnostics.first?.validationCode == "unsupported_size_growth",
                     "Historical failure evidence must retain the new code")
+        var changedSnapshot = record
+        changedSnapshot["validationCode"] = "validated_messages_one_page_growth"
+        changedSnapshot["result"] = "unavailable"
+        changedSnapshot["reason"] = "source_integrity"
+        let changed = try decode(["kind": "capture", "sourceDiagnostics": [changedSnapshot]])
+        try require(changed.sourceDiagnostics?.first?.validationCode == "validated_messages_one_page_growth" &&
+                    changed.sourceDiagnostics?.first?.reason == "source_integrity",
+                    "Later snapshot failure retains the bounded one-page validation evidence")
         for fields in [["validationCode": "unbounded-private-error"], ["messageBody": "synthetic-private-value"]] {
             var invalid = record
             for (key, value) in fields { invalid[key] = value }
@@ -41,6 +49,6 @@ struct SourceDiagnosticDecoderChecks {
             } catch { continue }
             throw Failure.check("Unknown codes and personal fields must reject")
         }
-        print("PASS: 6 standalone source diagnostic decoder checks; no UI or device access")
+        print("PASS: 7 standalone source diagnostic decoder checks; no UI or device access")
     }
 }

@@ -1,5 +1,77 @@
 # Native delivery and website promotion contracts
 
+## October 22 recovery correction — active work agreement
+
+Reserved after live inventory and absent-tag checks: ARM `2026.10.22-rc35` /
+`26102235`, Intel Test `2026.10.22-rc35-intel1` / `261022351`, Windows unsigned Test
+`2026.10.22-rc21` / `26102221` / MSI `1.0.21`. These source identities do not
+establish published packages. Windows upgrade qualification advances the exact
+published RC20 installer; its final signed-feed/frozen-handoff fixture must bind
+the new measured build artifact before publication.
+
+Sole native executor: `codex/oct22-native-recovery`, isolated from the preserved
+checkout with unowned edits, based on `release/native` at
+`45e2f2aca5dc3d24b1b87a1b908e502098f9d57a`. Approved setting: GPT-6 Astra / Max.
+Jeff's renewed full deployment authority covers the qualified publication path;
+the Voice coordinator owns the eventual customer notification after live checks.
+
+Outcome: truthful cooperative return to the original browser, deliberate recovery
+bound to the authoritative server run and enrollment, and encrypted Messages
+compatibility for exactly one valid SQLite page of growth. The external
+16-page/one-percent tolerance is rejected. Preserve explicit approval and separate
+Start collection, selected participants, account/run and per-source Save fences.
+
+Next milestone: bounded source changes with negative tests, the same validated
+Messages object through extraction, and a confirmed website receiver contract.
+Completion evidence: exact-source qualification, full-size transfer/refresh
+regressions, architecture-specific signed/notarized Mac packages, qualified
+Windows Test package if its shared helper changes, public-byte readback, matching
+website promotion and retained rollback. Unchanged Android does not need a build.
+
+Receiver dependency: deliberate pending-handoff recovery adds the authoritative
+`phoneRunId` to the existing `continue=reviewed` account URL. The sole website
+owner must deploy and qualify that receiver before native publication relies on
+it. Completed saved-receipt recovery remains bound to its original receipt.
+
+No private capture, old-backup decryption, installed-app/device manipulation,
+customer consent/Save, account reset, new spending or historical SMS-cause claim
+is part of this correction. Physical acceptance remains Jeff's separate test.
+
+UI reference contract: the RC34 production views at the pinned base are the
+render authority. Browser return retains `Brand.bodyFont(14)`, `Brand.body` and
+`Brand.muted`, `Brand.Space.item` (12), and the existing `LimeButton` and
+`SecondaryButton` styles. Deliberate recovery becomes visible in the same vertical
+stack instead of the collapsed disclosure; no new surface, color, font, motion or
+window geometry is introduced. Missing authority omits recovery. Busy, observed,
+unconfirmed and sent-link states use that same text/control system. Compare the
+handoff, refused setup and completion against matched offscreen renders at
+375/768/1440 and the existing Mac viewports; unchanged native consent is a control.
+
+Source-stage evidence: 120 focused collector/SQLite/diagnostic tests pass. A dense
+812,441,600-byte fictional encrypted Messages database, declared exactly 4,096
+bytes shorter, passes provenance, full validation and guarded metadata parsing:
+302,304 rows, 5.564 seconds parsing on the local pinned Python 3.12.12 runtime.
+The fixture uses real archived MBFile data and resolves its owned temporary path;
+its initial archive-shape/path-fixture failures were corrected without changing
+admission. Its workspace was removed. This is synthetic compatibility evidence.
+The production model/helper/bridge test separately transports 311,149 records in
+3,114 pages, with two real 30-second refresh cycles, the 65-second watchdog, exact
+replay and receipt gates. Native consent, Start, run/operation and saved-receipt
+flow checks pass; cooperative-return lifecycle checks use unshown windows and no
+live browser. Public and physical qualification remain outstanding.
+
+Final local review: the 335-test collector gate passes (five platform skips),
+including the pinned diagnostic contract. The saved-report return retains the
+original browser after collection authority is retired, with a flow regression
+assertion. Package-source checks (30) and release-control checks (42) pass.
+The matched offscreen render retains the resolved native style values; all eight
+unchanged consent images match the baseline bytes. The full-width return layout
+was inspected at the narrow and desktop viewports. No app was activated or shown.
+The hostile source pass found no new dependency, unused asset, debug output or
+private-data logging. Durable source-stage receipts are retained under the Voice
+Orchestrators `outputs/release-checks/2026-10-22/native-return-implementation`
+folder. These local checks do not qualify the Windows runner or public packages.
+
 ## Windows RC20 native setup candidate — October 21
 
 Reserved Windows identity: `2026.10.21-rc20` / build `26102120` / MSI `1.0.20`,
