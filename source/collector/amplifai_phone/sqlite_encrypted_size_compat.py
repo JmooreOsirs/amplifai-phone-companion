@@ -201,7 +201,12 @@ class ValidatedMessagesSnapshot:
         except OSError as error:
             raise SelectedPayloadIntegrityError("Messages snapshot is unavailable") from error
         with os.fdopen(descriptor, "rb") as stream:
-            if contacts._identity(os.fstat(stream.fileno())) != self.copy_identity:
+            descriptor_identity = contacts._identity(os.fstat(stream.fileno()))
+            # Windows CPython 3.12 stat uses creation time for ctime, while
+            # fstat uses change time. Match the shared file/size/mtime fields;
+            # check() retains the full path baseline, and the held descriptor
+            # keeps its own full change-time baseline through the final hash.
+            if descriptor_identity[:4] != self.copy_identity[:4]:
                 raise SelectedPayloadIntegrityError("Messages snapshot identity changed")
             with _open_readonly(path, immutable=True) as connection:
                 self.check()
@@ -216,7 +221,7 @@ class ValidatedMessagesSnapshot:
                     raise SelectedPayloadIntegrityError("Messages snapshot verification timed out")
                 digest.update(chunk)
             self.check()
-            if (contacts._identity(os.fstat(stream.fileno())) != self.copy_identity
+            if (contacts._identity(os.fstat(stream.fileno())) != descriptor_identity
                     or not hmac.compare_digest(digest.digest(), self.copied_digest)):
                 raise SelectedPayloadIntegrityError("Messages snapshot changed during extraction")
 

@@ -72,6 +72,25 @@ private-data logging. Durable source-stage receipts are retained under the Voice
 Orchestrators `outputs/release-checks/2026-10-22/native-return-implementation`
 folder. These local checks do not qualify the Windows runner or public packages.
 
+### RC21 Windows timestamp qualification repair
+
+The first RC21 Windows run `39822988920` passed its unit gates but the dense
+Messages fixture failed after successful one-page validation. The pinned Windows
+CPython 3.12.10 uses creation time for path `stat().st_ctime_ns` and change time
+for descriptor `fstat().st_ctime_ns`; their equality is invalid after a long write.
+The tagged CPython `Modules/posixmodule.c` `win32_xstat` and
+`Python/fileutils.c` `_Py_fstat_noraise` establish the different semantics.
+
+The repair matches descriptor/path file identity, size and modification time,
+then retains the full independent path and descriptor timestamp baselines.
+Repeated path checks, held descriptor and final content hash remain enforced.
+The regression reproduces rejection before the repair, permits unchanged distinct
+timestamps afterward, and rejects a later descriptor change after staging rows.
+All 77 targeted SQLite/diagnostic tests pass locally; a fresh actual Windows
+full-size/frozen/package run remains required. Mac RC35 builds continue from
+`dfc80751b8a4a5b16fb67833727130fb2ec3d44f`; Windows will identify its distinct
+repaired source explicitly, with no inference of physical acceptance.
+
 ## Windows RC20 native setup candidate — October 21
 
 Reserved Windows identity: `2026.10.21-rc20` / build `26102120` / MSI `1.0.20`,
