@@ -1,6 +1,18 @@
 # Windows companion source candidate
 
-This wrapper presents the local iPhone collector on Windows. The published **unsigned TEST baseline** is [rc19](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/windows-2026.10.15-rc19-unsigned-test), source `d82bf65977a607026878019864e2e91a77bb5b1b`, MSI `1.0.19` / app build `26101519`. The October 21 compatibility candidate starts from merged RC34 source `8b4474bb42e6c15aeb59136f807bc37d8f09ff33`; it has not been packaged or published for Windows. Physical-phone, normal customer-PC, and authenticated hosted-save acceptance remain open. Some Windows security policies may block an unsigned installer; do not disable those protections. A runner-user install is narrower than a normal non-admin customer install.
+This wrapper presents the local iPhone collector on Windows. The published **unsigned TEST release** is RC20, version `2026.10.21-rc20`, build `26102120`, MSI `1.0.20`, production source `4f4da80aacf14accf07590a344fb8f38da537401`. RC19 is its upgrade baseline. The dated candidate notes below retain the earlier source and qualification history; their pending gates describe those checkpoints. Physical-phone, normal customer-PC, and authenticated hosted-save acceptance remain separate. Some Windows security policies may block an unsigned installer; do not disable those protections. A runner-user install is narrower than a normal non-admin customer install.
+
+## RC20 supplemental native/bridge boundary test
+
+`test_native_bridge_boundary.py` joins the production Windows `NativeRun` to the real shared `BridgeServer` over ephemeral loopback HTTP. It reuses the existing pinned synthetic setup exchanges, disk-backed capture and HTTP client; only remote authority replies are replaced. Claim, exact `phone-run-windows-v1` approval, separate Start, reviewed Continue, current status, immutable bind and destination verification precede v3 release. Lost claim/approval/Start/Continue/bind/consume/local-release replies preserve the exact request or transfer token. Changed selection, handoff, digest and release proofs are denied; source pages remain blocked before release and during uncertain authority. Selected rows and page/manifest hashes are checked through actual HTTP responses.
+
+The fixture explicitly asserts `received` before any synthetic Save ACK, then `saved_pending_browser_receipt` before final confirmation. Those are **synthetic protocol ACKs only**, not account persistence or report readback. Completion clears native capability references; teardown verifies the listener, timer, socket and temporary record/transfer files are removed. Fixed clocks keep the scenario bounded. No UI mocks, Tk, helper subprocess, device or hosted service is used. The synthetic build identity is not an admitted release.
+
+```sh
+PYTHONPATH=source/collector:source/collector/windows:source/collector/windows/tests:source/collector/tests:source/script /tmp/amplifai-rc29-test-venv/bin/python -m unittest test_native_bridge_boundary -v
+```
+
+The combined fixture passes locally on macOS/Python 3.12.12. This test-only supplement leaves RC20 production bytes unchanged; it does not rebuild or qualify a Windows package, activate server admission, or establish real-phone/account Save acceptance.
 
 ## October 21 compatibility scope
 
