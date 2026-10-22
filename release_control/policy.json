@@ -28,17 +28,17 @@
   "requiredCheckAppId": 15368,
   "codeOwners": "* @JmooreOsirs @bac1876\n",
   "releasedBuilds": {
-    "macos-arm64": "26102133",
-    "macos-intel-test": "261021331"
+    "macos-arm64": "26102134",
+    "macos-intel-test": "261021341"
   },
   "previousFeeds": {
     "macos-arm64": {
       "bytes": 1561,
-      "sha256": "6d65d71a8bd67389bb3e96ea941698038305b88aad7dbfc611a89c28c6bbe2bd"
+      "sha256": "197e359054f5177c1be9c3924033a9699c5167ae80e6a15407b3390bc093befb"
     },
     "macos-intel-test": {
       "bytes": 1654,
-      "sha256": "062629d3320c14f0732317c81ac1fdc5b616112fc04424d890707d65a68a46c9"
+      "sha256": "e21a5e5cc1a7d962e3b390c5b66c6a695ff29ef4133bab097fe95fbad6a836b8"
     }
   },
   "operators": [
@@ -64,6 +64,24 @@
       "channel": "macos-intel-test",
       "version": "2026.10.21-rc34-intel1",
       "build": "261021341",
+      "buildWorkflow": ".github/workflows/macos-intel.yml",
+      "qualificationProfile": "phone-run-recovery-v1",
+      "releaseAuthorized": true
+    },
+    {
+      "sourceCommit": "dfc80751b8a4a5b16fb67833727130fb2ec3d44f",
+      "channel": "macos-arm64",
+      "version": "2026.10.22-rc35",
+      "build": "26102235",
+      "buildWorkflow": ".github/workflows/macos-arm64-check.yml",
+      "qualificationProfile": "phone-run-recovery-v1",
+      "releaseAuthorized": true
+    },
+    {
+      "sourceCommit": "dfc80751b8a4a5b16fb67833727130fb2ec3d44f",
+      "channel": "macos-intel-test",
+      "version": "2026.10.22-rc35-intel1",
+      "build": "261022351",
       "buildWorkflow": ".github/workflows/macos-intel.yml",
       "qualificationProfile": "phone-run-recovery-v1",
       "releaseAuthorized": true

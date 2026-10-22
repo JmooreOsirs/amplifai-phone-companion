@@ -9,7 +9,28 @@ This path signs an already qualified AMPLIFai Phone native build with the existi
 3. Keep the existing Developer ID identity, `AMPLIFai-notary` profile, and `ai.satoris.amplifai.phone.candidate` Sparkle account available to the same macOS user. Normal Keychain prompts are part of key use. This path does not export a private key, create a credential, add a runner or role, or weaken branch protection.
 4. Use a new absolute 0700 scratch directory and distinct new output directories outside the checkout. Put the signed delivery, scratch, and publication output in separate paths. Use the merged control implementation and exact source authorization. Keep that control SHA unchanged from signing through publication so the sealed manifest remains valid.
 
-## Current candidate and command inputs
+## October 22 RC35 authorization
+
+Native PR #29 merged normally at `2026-10-22T17:27:13Z` to
+`dfc80751b8a4a5b16fb67833727130fb2ec3d44f`, preserving reviewed head
+`2e1b909f92699ebc899bc5bfe37ba3ce8dd9b3d1`. Exact-head required CI run
+`39821957136` passed. This policy authorizes ARM `2026.10.22-rc35` /
+`26102235` and Intel Test `2026.10.22-rc35-intel1` / `261022351` under
+`phone-run-recovery-v1`; qualification now includes the strict SQLite compatibility
+suites and dense full-size synthetic Messages extraction.
+
+The current RC34 feed bytes match at both website origins, and their existing
+Ed25519 signatures were verified before pinning them as rollback/build floors.
+The required website receiver is live at source
+`7d364aa3d9c19f412ced046badb3e756a5104759`, Production deployment
+`dpl_j9TYiRwtj3RaG1BWGjq4QbYLdKTG`. Native build, signing, notarization,
+publication and final website pointer promotion are still pending. Use actual
+RC35 release-mode artifact IDs and hashes with the command template below;
+historical identifiers never authorize these packages. Jeff's renewed deployment
+authority is recorded in the native delivery contract. Physical testing follows
+publication and remains separately owner controlled.
+
+## Historical RC34 candidate and command template
 
 RC28 was signed locally, published and promoted on October 17 with control `067b2bc687e3af81d033923608679578814c535b`; see the [historical delivery receipt](RELEASE-DELIVERY-CONTRACT.md#historical-rc28-deliveries-and-publication). Those artifact IDs must not be reused as RC34 inputs.
 
