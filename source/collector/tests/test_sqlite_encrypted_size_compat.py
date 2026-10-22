@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import plistlib
 import sqlite3
 import struct
@@ -29,6 +30,7 @@ from amplifai_phone.ios_backup import DATABASES, _extract_database, _parse_entri
 from amplifai_phone.agent import _payload_diagnostic_event, run_connect
 from amplifai_phone import sqlite_encrypted_size_compat
 from amplifai_phone.metadata import RETAINED_HISTORY_START, SelectedPayloadIntegrityError, UnsupportedSchema
+from amplifai_phone.record_store import RecordStore
 from amplifai_phone.workspace import SessionWorkspace
 
 
@@ -53,10 +55,10 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
         self.file_key = b"f" * 32
         self.wrapped_key = struct.pack("<I", 1) + aes_key_wrap(self.class_key, self.file_key)
 
-    def _database(self, category: str) -> bytes:
+    def _database(self, category: str, *, page_size: int = 4096, payload_bytes: int = 0) -> bytes:
         path = self.root / f"{category}-{self.backup_path.name}.sqlite"
         with closing(sqlite3.connect(path)) as db, db:
-            db.execute("PRAGMA page_size=4096")
+            db.execute(f"PRAGMA page_size={page_size}")
             if category == "contacts":
                 db.execute("CREATE TABLE ABPerson (ROWID INTEGER PRIMARY KEY, First TEXT, Last TEXT)")
                 db.execute("CREATE TABLE ABMultiValue (record_id INTEGER, property INTEGER, value TEXT)")
@@ -72,6 +74,9 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                            "handle_id, text)")
                 db.execute("INSERT INTO handle VALUES (1, '+12025550123')")
                 db.execute("INSERT INTO message VALUES (7, 800000000, 'SMS', 0, 1, 'PRIVATE_BODY')")
+            if payload_bytes:
+                db.execute("CREATE TABLE fixture_payload (value BLOB)")
+                db.execute("INSERT INTO fixture_payload VALUES (zeroblob(?))", (payload_bytes,))
         return path.read_bytes()
 
     def _archive(self, relative: str, declared: int, digest: bytes | None) -> bytes:
@@ -100,14 +105,18 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                 digest_mode: str = "ciphertext", wrong_category: str | None = None,
                 delta: int = 4096,
                 sidecar: tuple[str, str] | None = None,
-                corrupt: str | None = None) -> Backup:
+                corrupt: str | None = None, page_size: int = 4096,
+                payload_bytes: int = 0, transform=None) -> Backup:
         manifest_path = self.backup_path / "Manifest.db"
         with closing(sqlite3.connect(manifest_path)) as db, db:
             db.execute("CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, "
                        "relativePath TEXT, flags INTEGER, file BLOB)")
             for category in categories:
                 category_digest = "wrong" if category == wrong_category else digest_mode
-                plain = bytearray(self._database(category))
+                plain = bytearray(self._database(category, page_size=page_size,
+                                                 payload_bytes=payload_bytes))
+                if transform is not None:
+                    plain = bytearray(transform(plain))
                 if corrupt == category:
                     plain[4096] = 255
                 padder = padding.PKCS7(128).padder()
@@ -229,7 +238,7 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
         self._reject_length(self._backup(delta=-4096))
 
     def _growth_failure(self, **options) -> dict:
-        backup = self._backup(("messages",), delta=-4096, **options)
+        backup = self._backup(("messages",), delta=options.pop("delta", -4096), **options)
         samples: list[dict] = []
         with self.assertRaises(SelectedPayloadIntegrityError) as raised:
             _extract_database(backup, DATABASES["messages"], self.copy_path / "messages",
@@ -240,28 +249,176 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
         self.assertIsNotNone(safe)
         return safe
 
-    def test_one_page_larger_messages_collects_proof_but_never_imports(self) -> None:
-        # No SQLite parser is used on a contradictory copy, even when all
-        # byte-identity proofs match and the difference is exactly one page.
-        safe = self._growth_failure()
-        destination = self.copy_path / "messages"
-        with patch.object(sqlite_encrypted_size_compat.messages, "_validate",
-                          side_effect=AssertionError("must not parse growth")):
-            self.assertEqual(sqlite_encrypted_size_compat._validate({
-                "category": "messages", "path": str(destination),
-                "actual_size": safe["copiedBytes"], "manifest_size": safe["declaredBytes"],
-                "copied_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
-            }), ("unsupported_size_growth", True))
-        self.assertEqual(safe["copiedBytes"] - safe["declaredBytes"], 4096)
-        self.assertEqual(safe["rawBytes"] - safe["copiedBytes"], 16)
-        self.assertEqual(safe["validationCode"], "unsupported_size_growth")
-        self.assertEqual((safe["producerDigest"], safe["copyDigest"], safe["sidecars"]),
-                         ("matched", "matched", "absent"))
-        self.assertFalse(sqlite_encrypted_size_compat.Validation(
-            "unsupported_size_growth", "encrypted_messages_database_v1", True, True,
-            True, True).accepted)
-        for private in ("PRIVATE_BODY", "+12025550123", str(self.root), "raw_digest", "key"):
-            self.assertNotIn(private, json.dumps(safe))
+    def test_one_page_larger_messages_requires_proof_and_parses_metadata(self) -> None:
+        backup = self._backup(("messages",), delta=-4096)
+        capture = _parse_entries(backup, self.copy_path, datetime(2026, 10, 22, tzinfo=UTC),
+                                 RETAINED_HISTORY_START, workspace=self.workspace)
+        self.assertNotIn("messages", capture.missing_sources)
+        self.assertEqual(len(capture.messages.records), 1)
+        self.assertEqual(capture.messages.records[0].source_id, 7)
+        self.assertNotIn("PRIVATE_BODY", repr(capture.messages))
+
+    def _new_case(self, label: str) -> None:
+        self.backup_path = self.session / ("backup-" + label)
+        self.copy_path = self.session / ("copy-" + label)
+        self.backup_path.mkdir(mode=0o700)
+        self.copy_path.mkdir(mode=0o700)
+
+    def test_one_page_growth_uses_header_page_size_at_supported_bounds(self) -> None:
+        for page in (512, 4096, 8192, 65536):
+            with self.subTest(page=page):
+                self._new_case(str(page))
+                accepted, samples = self._extract(
+                    self._backup(("messages",), delta=-page, page_size=page), "messages")
+                self.assertTrue(accepted)
+                self.assertEqual(samples[-1]["size_difference_validation"],
+                                 "validated_messages_one_page_growth")
+
+    def test_other_growth_deltas_are_not_percentage_or_page_tolerances(self) -> None:
+        for delta in (1, 4095, 4097, 8192, 16 * 4096, 17 * 4096, 8_388_608 // 100):
+            with self.subTest(delta=delta):
+                self._new_case(str(delta))
+                safe = self._growth_failure(delta=-delta, payload_bytes=8_388_608)
+                self.assertEqual(safe["validationCode"], "unsupported_size_growth")
+                self.assertEqual(safe["copyDigest"], "matched")
+        self._new_case("page-disagreement")
+        self.assertEqual(self._growth_failure(page_size=8192)["validationCode"],
+                         "unsupported_size_growth")
+
+    def test_stale_malformed_or_physically_inconsistent_headers_reject(self) -> None:
+        def change(offset, value):
+            def mutate(data):
+                data[offset:offset + len(value)] = value
+                return data
+            return mutate
+
+        cases = {
+            "zero-pages": change(28, b"\0" * 4),
+            "counter": change(92, b"\xff" * 4),
+            "invalid-page": change(16, b"\x03\x00"),
+            "signature": change(0, b"NotSQLite"),
+            "inflated-pages": change(28, (4).to_bytes(4, "big")),
+            "trailing-page": lambda data: data + bytes(4096),
+        }
+        for label, transform in cases.items():
+            with self.subTest(case=label):
+                self._new_case(label)
+                safe = self._growth_failure(transform=transform)
+                self.assertEqual(safe["validationCode"], "unsupported_size_growth")
+
+    def test_valid_geometry_does_not_replace_full_integrity_or_ordinary_schema(self) -> None:
+        def inflated_with_duplicate_page(data):
+            data[28:32] = (4).to_bytes(4, "big")
+            return data + data[4096:8192]
+
+        for label, options in (("broken-btree", {"corrupt": "messages"}),
+                               ("unreferenced-page", {"transform": inflated_with_duplicate_page})):
+            with self.subTest(case=label):
+                self._new_case(label)
+                self.assertEqual(self._growth_failure(**options)["validationCode"], "structural_invalid")
+
+    def test_faulty_one_page_worker_cannot_authorize_other_delta_source_or_direction(self) -> None:
+        class FaultyWorker:
+            returncode = 0
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, *args, **kwargs):
+                return json.dumps({"code": "validated_messages_one_page_growth",
+                                   "copy_checksum_matches": True}), None
+
+            def poll(self):
+                return 0
+
+        for category, delta in (("messages", -8192), ("messages", 4096), ("contacts", 4096), ("calls", 4096)):
+            with self.subTest(category=category, delta=delta):
+                self._new_case(category + str(delta))
+                backup = self._backup((category,), delta=delta)
+                with patch.object(sqlite_encrypted_size_compat.subprocess, "Popen", FaultyWorker):
+                    self._reject_length(backup, category)
+
+    def test_one_page_mutation_after_staged_row_discards_messages_only(self) -> None:
+        for mutation in ("rewrite", "replace", "wal", "raw-replace", "manifest"):
+            with self.subTest(mutation=mutation):
+                self._new_case(mutation)
+                backup = self._backup(tuple(DATABASES))
+                entry = backup.get_entry_by_domain_and_path("HomeDomain", DATABASES["messages"])
+                manifest = backup._manifest_db._conn
+                manifest.execute("UPDATE Files SET file=? WHERE relativePath=?",
+                                 (self._archive(DATABASES["messages"], entry.size - 8192,
+                                                hashlib.sha1(entry.real_path.read_bytes()).digest()),
+                                  DATABASES["messages"]))
+                manifest.commit()
+                store = RecordStore(self.copy_path / "records.sqlite", self.workspace)
+                self.addCleanup(store.db.close)
+                add = store.add
+                blocked = []
+
+                def mutate(category, record):
+                    add(category, record)
+                    if category != "messages":
+                        return
+                    path = self.copy_path / "messages"
+                    if mutation == "wal":
+                        Path(str(path) + "-wal").write_bytes(b"late")
+                    elif mutation == "manifest":
+                        manifest.execute("DELETE FROM Files WHERE relativePath=?", (DATABASES["messages"],))
+                        manifest.commit()
+                    elif mutation == "rewrite":
+                        path.write_bytes(path.read_bytes())
+                    else:
+                        if mutation == "raw-replace":
+                            path = entry.real_path
+                        replacement = path.with_name(path.name + "-replacement")
+                        replacement.write_bytes(path.read_bytes())
+                        try:
+                            replacement.replace(path)
+                        except PermissionError:
+                            if os.name != "nt":
+                                raise
+                            # A held Windows handle can prevent replacement outright.
+                            blocked.append(mutation)
+
+                with patch.object(store, "add", side_effect=mutate):
+                    capture = _parse_entries(backup, self.copy_path, datetime(2026, 10, 22, tzinfo=UTC),
+                                             RETAINED_HISTORY_START, workspace=self.workspace,
+                                             record_store=store)
+                if blocked:
+                    self.assertEqual(capture.missing_sources, ())
+                    self.assertEqual(tuple(store.counts.values()), (1, 1, 1))
+                    continue
+                self.assertEqual(capture.missing_sources, ("messages",))
+                self.assertEqual(dict(capture.unavailable_reasons)["messages"], "source_integrity")
+                self.assertEqual(tuple(store.counts.values()), (1, 1, 0))
+                self.assertEqual(len(store.collection("messages")), 0)
+                self.assertEqual(capture.source_diagnostics[0]["validationCode"],
+                                 "validated_messages_one_page_growth")
+
+    def test_one_page_larger_messages_late_wal_discards_source(self) -> None:
+        from amplifai_phone import ios_backup
+        original_read = ios_backup.read_calls
+        backup = self._backup(tuple(DATABASES))
+        entry = backup.get_entry_by_domain_and_path("HomeDomain", DATABASES["messages"])
+        db = backup._manifest_db._conn
+        db.execute("UPDATE Files SET file=? WHERE relativePath=?",
+                   (self._archive(DATABASES["messages"], entry.size - 8192,
+                                  hashlib.sha1(entry.real_path.read_bytes()).digest()),
+                    DATABASES["messages"]))
+        db.commit()
+
+        def late_wal(*args, **kwargs):
+            result = original_read(*args, **kwargs)
+            Path(str(self.copy_path / "messages") + "-wal").write_bytes(b"late")
+            return result
+
+        with patch.object(ios_backup, "read_calls", side_effect=late_wal):
+            capture = _parse_entries(backup, self.copy_path, datetime(2026, 10, 22, tzinfo=UTC),
+                                     RETAINED_HISTORY_START, workspace=self.workspace)
+        self.assertEqual(capture.missing_sources, ("messages",))
+        self.assertEqual(len(capture.messages.records), 0)
+        self.assertEqual(len(capture.calls.records), 1)
+        self.assertEqual(dict(capture.unavailable_reasons)["messages"], "source_integrity")
 
     def test_larger_messages_missing_producer_proof_stays_insufficient(self) -> None:
         safe = self._growth_failure(digest_mode="missing")
@@ -365,7 +522,7 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
 
         backup = self._backup(("messages",), delta=-4096)
         entry = backup.get_entry_by_domain_and_path("HomeDomain", DATABASES["messages"])
-        self._reject_length(backup, "messages")
+        self._extract(backup, "messages")
         destination = self.copy_path / "messages"
         worker = TimedOutWorker()
         # First bound callback runs before launch; the second runs after the
@@ -414,8 +571,8 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                 self.assertEqual(sqlite_encrypted_size_compat._validate({**request, **fields}),
                                  ("unsafe", None))
 
-    def test_larger_messages_remains_unavailable_in_partial_capture(self) -> None:
-        backup = self._backup(tuple(DATABASES), delta=-4096)
+    def test_two_page_larger_messages_remains_unavailable_in_partial_capture(self) -> None:
+        backup = self._backup(tuple(DATABASES), delta=-8192)
         # Required Contacts must keep their ordinary exact-size path. Adjust
         # only its fictional manifest entry, leaving Messages contradictory.
         db = backup._manifest_db._conn

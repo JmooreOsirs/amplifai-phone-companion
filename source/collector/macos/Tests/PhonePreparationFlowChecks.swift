@@ -202,7 +202,8 @@ import Darwin
                          surface.miniaturizeCount == 0 && !director.handedOff,
                          "Preparation Continue and successful bind leave native visible without automatic browser navigation")
         let recovery = model.accountContinueURL
-        try Flow.require(recovery == CollectorModel.accountContinueURL(enrollmentID: model.phoneRun!.enrollmentID),
+        try Flow.require(recovery == CollectorModel.accountContinueURL(enrollmentID: model.phoneRun!.enrollmentID,
+                                                                       runID: model.phoneRun!.runID),
                          "Explicit pending-save recovery retains the exact reviewed-transfer account route")
         try Flow.pending(model)
         for state in ["received", "saved_pending_browser_receipt", "saved"] {

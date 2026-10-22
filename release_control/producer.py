@@ -17,7 +17,8 @@ import release
 MAX_SOURCE = 4 * 1024**3
 APPEND_PATHS = ["release-evidence/final-signed-app-inventory.json", "release-evidence/source-finalization.json"]
 PHONE_RUN_MODULES = ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh",
-                     "test_call_accounting", "test_source_diagnostic_flow", "test_nonfinite_duration_pipeline")
+                     "test_call_accounting", "test_source_diagnostic_flow", "test_nonfinite_duration_pipeline",
+                     "test_sqlite_encrypted_size_compat", "test_sqlite_messages_size_compat")
 PHONE_RUN_SCRIPTS = ("check_model.sh", "check_window_lifecycle.sh")
 
 
@@ -155,6 +156,8 @@ def qualify(source: dict, checkout: Path, app: Path, source_zip: Path, output: P
                "test_contact_provenance", "test_companion_status", "test_filtered_journal_cleanup",
                "test_source_diagnostics", "test_source_diagnostic_flow"]
     subprocess.run([sys.executable, "-m", "unittest", *modules, "-v"], cwd=checkout, env=env, check=True, timeout=1200)
+    subprocess.run([sys.executable, str(checkout / "source/collector/tests/qualify_messages_snapshot.py")],
+                   cwd=checkout, env=env, check=True, timeout=1200)
     for script in ("check_flow.sh", "check_updater.sh", "check_contact_provenance.sh"):
         subprocess.run(["sh", str(checkout / "source/collector/macos/Tests" / script)], cwd=checkout,
                        env=env, check=True, timeout=1200)

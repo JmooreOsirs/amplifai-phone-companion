@@ -3,41 +3,38 @@ import SwiftUI
 struct BrowserReturnControls: View {
     @ObservedObject var model: CollectorModel
     @Environment(\.returnToBrowser) private var returnToBrowser
-    @State private var message = ""
+    @EnvironmentObject private var session: BrowserReturnSession
+
+    private var context: BrowserReturnSession.Context {
+        .init(runOrSetupID: model.phoneRun?.runID ?? model.nativeSetup?.setupID,
+              browserBundleID: model.returnBrowserBundleID,
+              recoveryURL: model.phase == .completed ? model.completedReportReturnURL : model.accountContinueURL)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
             Button("Return to your account tab") {
-                message = returnToBrowser.activateOriginalBrowser(preferredBrowserBundleID: model.returnBrowserBundleID)
-                    ? "Choose the AMPLIFai tab you left open in that browser."
-                    : "Switch to the browser and AMPLIFai tab you left open. If that tab is closed, reopen your account below."
+                session.returnToAccount(using: returnToBrowser, context: context)
             }
             .buttonStyle(LimeButton())
-            Text(message.isEmpty ? "Continue in the AMPLIFai tab you left open. This button brings your browser forward; choose the tab if needed." : message)
+            .disabled(session.busy)
+            Text(session.message.isEmpty ? "Continue in your existing AMPLIFai account tab. If your browser does not come forward, switch to it manually." : session.message)
                 .font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
                 .fixedSize(horizontal: false, vertical: true)
-            DisclosureGroup("Account tab closed or missing?") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Reopen your account only if the original tab is unavailable. Your browser may open a new tab or ask you to sign in.")
-                        .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
-                    Button("Reopen account") {
-                        if model.phase == .completed {
-                            model.continueToSignedInAccount { url, browser in openRecovery(url, browser: browser) }
-                        } else if model.browserOwnsFlow || model.nativeSetupState != .none {
-                            openRecovery(model.accountContinueURL, browser: model.returnBrowserBundleID)
-                        }
-                    }
-                    .buttonStyle(SecondaryButton())
+            if context.recoveryURL != nil {
+                Button(session.recoverySent ? "Account link sent" : "Reopen account") {
+                    session.recover(using: returnToBrowser, context: context)
                 }
-                .padding(.top, 8)
+                .buttonStyle(SecondaryButton())
+                .disabled(session.busy || session.recoverySent)
+                Text("Use only if the original tab is closed or missing. Your browser may open a new tab or ask you to sign in.")
+                    .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .font(Brand.bodyFont(14))
         }
-    }
-
-    private func openRecovery(_ url: URL, browser: String?) {
-        returnToBrowser(url, preferredBrowserBundleID: browser) { opened in
-            if !opened { message = "The account could not open. Open AMPLIFai in your browser and sign in to continue." }
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { session.use(context) }
+        .onChange(of: context) { _, value in session.use(value) }
+        .onDisappear { session.invalidate() }
     }
 }

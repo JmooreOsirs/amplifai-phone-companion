@@ -82,6 +82,15 @@ def main() -> int:
             if packet != {"code": EXPECTED[category], "copy_checksum_matches": True}:
                 raise AssertionError(f"Frozen {category} worker rejected valid fictional SQLite")
             results[category] = packet["code"]
+            if category == "messages":
+                growth = worker(helper, {**request, "manifest_size": size - 4096})
+                if growth != {"code": "validated_messages_one_page_growth", "copy_checksum_matches": True}:
+                    raise AssertionError("Frozen worker rejected proven one-page Messages geometry")
+                larger = worker(helper, {**request, "manifest_size": size - 8192})
+                if larger != {"code": "unsupported_size_growth", "copy_checksum_matches": True}:
+                    raise AssertionError("Frozen worker admitted more than one Messages page")
+                results["messagesOnePage"] = growth["code"]
+                results["messagesTwoPages"] = larger["code"]
             if category == "calls":
                 rejected = worker(helper, {**request, "copied_sha256": "0" * 64})
                 if rejected != {"code": "copy_checksum_mismatch", "copy_checksum_matches": False}:

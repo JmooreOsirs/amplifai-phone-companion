@@ -18,6 +18,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .sqlite_encrypted_size_compat import ValidatedMessagesSnapshot
 
 from .backup_files import copy_backup_file
 from .backup_watchdog import (
@@ -139,6 +143,7 @@ def _extract_database(
     progress_callback: Callable[[int], None] | None = None,
     *,
     payload_diagnostic_callback: Callable[[dict[str, object]], None] | None = None,
+    validated_snapshot_callback: Callable[[ValidatedMessagesSnapshot], None] | None = None,
 ) -> bool:
     """Materialize only the selected DB and its available SQLite sidecars."""
     from pyiosbackup.exceptions import MissingEntryError
@@ -299,6 +304,9 @@ def _extract_database(
                 raise SelectedPayloadIntegrityError(
                     "Selected backup payload length does not match its manifest", code="selected_payload_length"
                 )
+            snapshot = getattr(validation, "snapshot", None)
+            if snapshot is not None and validated_snapshot_callback is not None:
+                validated_snapshot_callback(snapshot)
         found_main = found_main or not suffix
     return found_main
 
@@ -404,6 +412,11 @@ def _parse_entries(
     available = {}
     latest: dict[tuple[str, str], dict[str, object]] = {}
     failures: dict[tuple[str, str], dict[str, object]] = {}
+    messages_snapshot = None
+
+    def retain_snapshot(snapshot: ValidatedMessagesSnapshot) -> None:
+        nonlocal messages_snapshot
+        messages_snapshot = snapshot
 
     def observe_diagnostic(value: dict[str, object]) -> None:
         metadata = diagnostic_from_sample(value, reason="source_integrity")
@@ -435,6 +448,7 @@ def _parse_entries(
             available[key] = _extract_database(
                 backup, path, destination, bound_callback, workspace, progress_callback,
                 payload_diagnostic_callback=observe_diagnostic,
+                validated_snapshot_callback=retain_snapshot,
             )
         except (SelectedPayloadMissing, SelectedPayloadIntegrityError) as error:
             reason = (
@@ -487,6 +501,7 @@ def _parse_entries(
                 record_store.discard_category(key)
             missing.append(key)
             reasons[key] = ("source_capacity" if isinstance(error, SourceReadCapacityLimit) else
+                            "source_integrity" if isinstance(error, SelectedPayloadIntegrityError) else
                             "unsupported_schema" if isinstance(error, UnsupportedSchema) else "source_invalid")
             source_unavailable(key, reasons[key])
             return SourceResult(0, (), 0)
@@ -494,9 +509,20 @@ def _parse_entries(
     calls = optional_source(
         "calls", lambda: read_calls(extracted / "calls", since, bound_callback, record_store)
     )
-    messages = optional_source(
-        "messages", lambda: read_messages(extracted / "messages", since, bound_callback, record_store)
-    )
+    def read_validated_messages() -> SourceResult:
+        if messages_snapshot is None:
+            return read_messages(extracted / "messages", since, bound_callback, record_store)
+
+        def check() -> None:
+            if bound_callback is not None:
+                bound_callback()
+            messages_snapshot.check()
+
+        return read_messages(extracted / "messages", since, check, record_store,
+                             open_connection=lambda path: messages_snapshot.open_connection(
+                                 path, bound_callback=bound_callback))
+
+    messages = optional_source("messages", read_validated_messages)
     encrypted_state = getattr(backup, "is_encrypted", None)
     return IPhoneCapture(
         contacts, calls, messages, now.isoformat(), since.isoformat(), tuple(missing),

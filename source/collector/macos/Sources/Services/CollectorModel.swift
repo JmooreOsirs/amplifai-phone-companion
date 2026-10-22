@@ -24,15 +24,16 @@ final class CollectorModel: ObservableObject {
     /// - active paged transfer: 2 hours without activity, refreshed by every page, keepalive and acknowledgement.
     nonisolated static let runStartWindow: TimeInterval = 10 * 60
     static var accountStartURL: URL { URL(string: accountOrigin + "/phone/account")! }
-    static func accountContinueURL(enrollmentID: String) -> URL? {
-        guard PhoneRunContract.isID(enrollmentID) else { return nil }
+    static func accountContinueURL(enrollmentID: String, runID: String) -> URL? {
+        guard PhoneRunContract.isID(enrollmentID), PhoneRunContract.isID(runID) else { return nil }
         var components = URLComponents()
         components.scheme = "https"
         components.host = "amplifai.satoris.ai"
         components.path = "/phone/account"
         components.queryItems = [URLQueryItem(name: "continue", value: "reviewed"),
                                  URLQueryItem(name: "enrollmentId", value: enrollmentID),
-                                 URLQueryItem(name: "week", value: "phone")]
+                                 URLQueryItem(name: "week", value: "phone"),
+                                 URLQueryItem(name: "phoneRunId", value: runID)]
         return components.url
     }
     /// Opens owner-scoped run controls without requesting handoff discovery or automatic saving.
@@ -701,7 +702,10 @@ final class CollectorModel: ObservableObject {
         candidateNotice = ""
     }
 
-    var returnBrowserBundleID: String? { phoneRun?.returnBrowserBundleID ?? setupBrowserBundleID ?? pendingClaimBrowser }
+    var returnBrowserBundleID: String? {
+        phoneRun?.returnBrowserBundleID ?? completedReportNavigation?.returnBrowserBundleID
+            ?? setupBrowserBundleID ?? pendingClaimBrowser
+    }
 
     // MARK: Native setup and consent
 
@@ -867,11 +871,10 @@ final class CollectorModel: ObservableObject {
         phoneRun?.collectionStarted == true && phoneRun?.boundHandoffID == nil && runBinding != .refused
     }
 
-    /// The account page for this run's enrollment, or the account start page.
-    var accountContinueURL: URL {
-        if let enrollment = phoneRun?.enrollmentID ?? nativeSetup?.enrollmentID,
-           let url = Self.accountContinueURL(enrollmentID: enrollment) { return url }
-        return Self.accountStartURL
+    /// Deliberate recovery can resume only the verified run, never a generic enrollment start.
+    var accountContinueURL: URL? {
+        guard runApproval == .approved, runBinding != .refused, let run = phoneRun else { return nil }
+        return Self.accountContinueURL(enrollmentID: run.enrollmentID, runID: run.runID)
     }
 
     var accountControlURL: URL? {
@@ -2389,7 +2392,7 @@ final class CollectorModel: ObservableObject {
             phoneRun = run
             pendingBind = nil
             runBinding = .bound
-            if navigateOnPairing, let url = Self.accountContinueURL(enrollmentID: run.enrollmentID) {
+            if navigateOnPairing, let url = Self.accountContinueURL(enrollmentID: run.enrollmentID, runID: run.runID) {
                 accountNavigation = AccountNavigation(id: UUID(), url: url, handoffID: request.handoffID)
             }
             if !destinationIntentID.isEmpty { verifyDestination() }

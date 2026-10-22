@@ -1210,9 +1210,9 @@ enum PhoneRunFlowChecks {
         try require(model.browserHandoffReady && !model.browserReceived && !model.destinationApproved,
                     "The website owns the flow right after the bind, before any destination or received")
         try require(model.accountNavigation?.url.absoluteString ==
-                    "https://amplifai.satoris.ai/phone/account?continue=reviewed&enrollmentId=\(model.phoneRun!.enrollmentID)&week=phone" &&
+                    "https://amplifai.satoris.ai/phone/account?continue=reviewed&enrollmentId=\(model.phoneRun!.enrollmentID)&week=phone&phoneRunId=\(model.phoneRun!.runID)" &&
                     model.accountNavigation?.handoffID == handoff && run.runID != model.phoneRun!.enrollmentID,
-                    "The account opens on the run's enrollment at the fixed origin")
+                    "The account opens on the exact server run and enrollment at the fixed origin")
         try require(model.statusTitle == "Saving in your AMPLIFai account" && !model.statusDetail.contains("received") &&
                     !model.statusDetail.contains("saved"), "Passive status claims nothing before the helper reports it")
     }
@@ -1273,7 +1273,7 @@ enum PhoneRunFlowChecks {
                         CollectorModel.accountControlURL(runID: run.runID, enrollmentID: invalid) == nil,
                         "Account control rejects unvalidated run or enrollment values")
         }
-        try require(model.accountContinueURL.query?.contains("continue=reviewed") == true,
+        try require(model.accountContinueURL?.query?.contains("continue=reviewed") == true,
                     "Explicit pending-save recovery keeps its separate reviewed-transfer route")
         model.disconnect()
         try require(model.accountControlURL == nil, "Ending the current run retires its account control route")
@@ -1346,6 +1346,8 @@ enum PhoneRunFlowChecks {
             try require(model.canContinueToSignedInAccount && model.completedReportReturnURL == expectedURL &&
                         model.phoneRun == nil && model.localCollectionApproval == nil,
                         "A confirmed clean save retains its exact enrollment, handoff and payload route after retiring collection authority")
+            try require(model.returnBrowserBundleID == "com.example.synthetic-browser",
+                        "Shared return controls retain the original browser after the run is retired")
             try require(surface.openedURLs.count == 1 && surface.miniaturizeCount == 1,
                         "Completion itself never opens the browser or minimizes again")
             let commands = wire.commands.count
