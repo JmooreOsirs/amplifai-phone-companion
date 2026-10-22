@@ -21,8 +21,8 @@ compatibility for exactly one valid SQLite page of growth. The external
 16-page/one-percent tolerance is rejected. Preserve explicit approval and separate
 Start collection, selected participants, account/run and per-source Save fences.
 
-Next milestone: bounded source changes with negative tests, the same validated
-Messages object through extraction, and a confirmed website receiver contract.
+Next milestone: finish exact Windows artifact and frozen-handoff qualification,
+and promote each independently qualified public platform through the website owner.
 Completion evidence: exact-source qualification, full-size transfer/refresh
 regressions, architecture-specific signed/notarized Mac packages, qualified
 Windows Test package if its shared helper changes, public-byte readback, matching
@@ -102,6 +102,45 @@ empty parent after its ordinary session cleanup. Pre-existing roots and any
 unexpected contents are preserved. This change affects qualification only;
 application code is unchanged from the timestamp repair. A clean full runner
 build remains necessary before publication under the existing release pipeline.
+
+### October 22 publication and Windows source custody
+
+Mac ARM RC35 and Intel RC35 Test are signed, notarized and publicly published
+from exact native source `dfc80751b8a4a5b16fb67833727130fb2ec3d44f` using
+protected control `08712ae2b68fab54b7ea8aae29222013298353b9`. The normal publisher
+verified every public asset against its sealed delivery. Their separate terminal
+website handoffs are retained under the durable release evidence root at
+`release/arm64/publication` and `release/intel/publication`. Website activation is
+proved by the website owner's production receipts; publication is not physical
+acceptance.
+
+Windows RC21 uses distinct exact source
+`efffc39d0012ec49e8530cd8412435d87a977163` after normally merged PR31 and PR32.
+Their required CI runs are `39824264523` and `39826769939`. Relative to the Mac
+source, the only changes are the delivery ledger, independent Windows timestamp
+baseline repair and regression, and the owned frozen-worker fixture cleanup.
+The exact candidate build is run `39828244482`. Jeff's existing release authority
+covers this scoped repair and subsequent qualification-only metadata; it does not
+permit changing the candidate after its bytes have qualified.
+
+The follow-up qualification commit pins the successful build artifact, its full
+ZIP digest, the measured MSI and candidate receipt, and exact signed feed bytes.
+It advances the baseline to public RC20 and runs the real frozen-helper
+RC20-to-RC21 handoff. The corresponding source archive remains the exact build
+commit; a separate qualification commit is recorded explicitly. The source offer
+must verify all retained dependency archives, all native byte references, the
+actual installed inventory and every final ZIP member. Public Test publication
+requires these gates, and retains the unsigned/physical-acceptance limitations.
+
+Qualified RC21 build `39828244482` succeeded. Artifact `12447857716` is
+`44854537` bytes, SHA-256 `1aab0a3acc0335e4a0171102e0617f099e448f9b2e1d7dbb0b62cacdf46e9a46`.
+The MSI is `42289311` bytes, SHA-256 `cb252aa6149d29731b262809610bea79f7d39d349c84f48d02ec6f20fdf3d583`. All 164 native dependency
+references match the verified RC20 bytes; 174 source archives are retained with
+exact hashes. The source offer has 607 fully verified members, SHA-256
+`4d4993e1a4694a535ee2b745a3fd96b4e3e4362ba0c76ba42ae6a85189ef1b4d`.
+The signed manifest and MSI verify with the existing updater public key. The
+actual frozen RC20-to-RC21 handoff remains the final platform gate before public
+Test publication; this qualification-only commit changes no application files.
 
 ## Windows RC20 native setup candidate — October 21
 

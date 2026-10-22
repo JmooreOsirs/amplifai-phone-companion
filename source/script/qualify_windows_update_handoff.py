@@ -1,4 +1,4 @@
-"""Qualify exact signed rc20 bytes against a normally closed running rc19 app on CI."""
+"""Qualify exact signed rc21 bytes against a normally closed running rc20 app on CI."""
 from __future__ import annotations
 
 import argparse
@@ -25,8 +25,8 @@ from updater import BUILD, INSTALLER_VERSION, MAX_MANIFEST_BYTES, PUBLIC_KEY, VE
 from update_installer import READY, RuntimeReadGuard
 from verify_windows_install import verify
 
-BASELINE_BYTES = 41989466
-BASELINE_SHA256 = "7fe9b10b9bc212e3f5f9591280a54b170a4b6762c5e78369acf5c9ebcabbba44"
+BASELINE_BYTES = 42285215
+BASELINE_SHA256 = "6c138c0c4b935908b8632f365e6f80178e1abb7e170aa59fbbab16a42b97dd0c"
 FIXED_DATA_NAME = "AMPLIFai Phone Candidate"
 
 
@@ -78,7 +78,7 @@ def installed_status() -> dict:
         status = json.loads(data)
         expected = {"platform": "windows", "architecture": "x86_64", "channel": "windows-x64-test", "version": VERSION, "build": BUILD}
         if any(status.get(key) != value for key, value in expected.items()):
-            raise ValueError("Relaunched companion identity differs from the signed rc20 candidate")
+            raise ValueError("Relaunched companion identity differs from the signed rc21 candidate")
         return expected
     finally:
         connection.close()
@@ -134,12 +134,12 @@ def qualify(args) -> dict:
         signature_bytes = source.read(129)
     manifest = parse_manifest(manifest_bytes, signature_bytes)
     if (manifest.version, manifest.build, manifest.installer_version) != (VERSION, BUILD, INSTALLER_VERSION):
-        raise ValueError("Signed fixture is not the exact rc20 candidate identity")
+        raise ValueError("Signed fixture is not the exact rc21 candidate identity")
     if args.msi.stat().st_size != manifest.size:
-        raise ValueError("Signed rc20 MSI byte count differs from local fixture")
+        raise ValueError("Signed rc21 MSI byte count differs from local fixture")
     package_bytes = args.msi.read_bytes(); verify_installer(package_bytes, manifest)
     if args.baseline.stat().st_size != BASELINE_BYTES or hashlib.sha256(args.baseline.read_bytes()).hexdigest() != BASELINE_SHA256:
-        raise ValueError("Released rc19 MSI differs from the pinned baseline")
+        raise ValueError("Released rc20 MSI differs from the pinned baseline")
     installed = Path(os.environ["LOCALAPPDATA"]) / "AMPLIFaiPhone"
     sessions = default_sessions_root(); data_root = sessions.parent
     if data_root.name != FIXED_DATA_NAME or installed.exists() or data_root.exists():
@@ -251,7 +251,7 @@ def qualify(args) -> dict:
         close_normally(new_app.pid)
         if new_app.wait(timeout=30) != 0:
             raise ValueError("Relaunched companion did not close normally")
-        return {"status": "actual-windows-frozen-helper-running-rc19-to-rc20-handoff", "schema": 1,
+        return {"status": "actual-windows-frozen-helper-running-rc20-to-rc21-handoff", "schema": 1,
                 "msiSha256": manifest.sha256, "version": manifest.version, "build": manifest.build,
                 "installerVersion": manifest.installer_version, "readyWhileOldAppRunning": True,
                 "oldAppClosedNormally": True, "installerWaitedForParentExit": True,
