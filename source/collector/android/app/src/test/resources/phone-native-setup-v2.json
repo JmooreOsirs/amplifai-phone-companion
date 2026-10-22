@@ -1,0 +1,495 @@
+{
+  "protocol": "phone-native-setup-v2",
+  "status": "frozen implementation contract; server routes and build admission are not active",
+  "origin": "https://amplifai.satoris.ai",
+  "paths": {
+    "create": "/api/v1/phone-platform-setups",
+    "claim": "/api/v1/phone-platform-setups/claim",
+    "approve": "/api/v1/phone-platform-setups/approve",
+    "status": "/api/v1/phone-platform-setups?setupId=<UUID>",
+    "revoke": "/api/v1/phone-platform-setups/revoke"
+  },
+  "capabilitiesPath": "http://127.0.0.1:48752/v1/setup-capabilities",
+  "setupLifetimeSeconds": 600,
+  "preparedRunLifetimeSeconds": 43200,
+  "capabilityEncoding": "32 random bytes, canonical unpadded base64url, 43 ASCII characters; independent bootstrap, setup and run values",
+  "platforms": {
+    "windows": {
+      "identity": {
+        "platform": "windows",
+        "channel": "windows-x64-test",
+        "architecture": "x86_64",
+        "bundleId": "ai.satoris.amplifai.phone.windows-candidate"
+      },
+      "disclosure": {
+        "version": "phone-run-windows-v1",
+        "sentences": [
+          "AMPLIFai Phone creates a temporary iPhone backup on this Windows PC and extracts contact, call and message metadata. After you choose contacts and continue, their available metadata is saved to the account and course shown. Backup files and message content stay on this PC. Interrupted cleanup can leave temporary files."
+        ],
+        "agreement": "I approve this one phone collection and automatic saving of the contacts I choose, with their available call and message metadata, to this account and course.",
+        "policyVersion": "account-2026-10-v7",
+        "policySha256": "446be198f41a9c3d335b64f094b3ed2506810c0a5862de1422cd62fa9af5cf89",
+        "privacyHref": "/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving",
+        "supplementVersion": "phone-platforms-2026-10-v1",
+        "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+        "supplementHref": "/experience/phone-platform-privacy?version=phone-platforms-2026-10-v1",
+        "platform": "windows",
+        "channel": "windows-x64-test",
+        "sha256": "795c0423c9c15c4c13e79145e75b93f42e329b53acd5c10d5eb387fa48cc0f23"
+      },
+      "sourcePrefix": "iphone-native-"
+    },
+    "android": {
+      "identity": {
+        "platform": "android",
+        "channel": "android-website",
+        "architecture": "universal",
+        "bundleId": "ai.satoris.amplifai.phone"
+      },
+      "disclosure": {
+        "version": "phone-run-android-v1",
+        "sentences": [
+          "AMPLIFai Phone reads contact names and phone numbers, plus available call and SMS metadata, locally on this Android phone with your Android permissions. After you choose contacts and continue, their available metadata is saved to the account and course shown. Message text and attachments are never read. Android or installer restrictions can leave sources unavailable."
+        ],
+        "agreement": "I approve this one phone collection and automatic saving of the contacts I choose, with their available call and SMS metadata, to this account and course.",
+        "policyVersion": "account-2026-10-v7",
+        "policySha256": "446be198f41a9c3d335b64f094b3ed2506810c0a5862de1422cd62fa9af5cf89",
+        "privacyHref": "/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving",
+        "supplementVersion": "phone-platforms-2026-10-v1",
+        "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+        "supplementHref": "/experience/phone-platform-privacy?version=phone-platforms-2026-10-v1",
+        "platform": "android",
+        "channel": "android-website",
+        "sha256": "cce897f226ab97045058dc1ddf68a1fa8633a40071429bddf5f21fbf1b79bdba"
+      },
+      "sourcePrefix": "android-native-"
+    }
+  },
+  "supplement": {
+    "version": "phone-platforms-2026-10-v1",
+    "title": "Phone collection and saving on Windows or Android",
+    "paragraphs": [
+      "This supplement applies only to the Windows or Android account flow shown on your approval screen. Before collection, the app shows the AMPLIFai account and course that will receive your selected metadata. You give one approval for that collection, then choose when to start. You review and choose contacts in the app. When you continue, their available metadata is transferred to the website and saved under that collection's approval. Contacts you leave out are not saved.",
+      "On Windows, AMPLIFai Phone creates a temporary local backup of your iPhone on this Windows PC. The backup can contain private content. The app extracts contact names and phone numbers plus available call and message metadata. Backup files, backup passwords, message bodies, subjects and attachments are not uploaded to AMPLIFai. Local cleanup is attempted after collection; a crash or interruption can leave temporary files for you to inspect and remove with the app's temporary-data controls. iPhone Trust and any backup password remain decisions on your devices.",
+      "On Android, AMPLIFai Phone reads contact names and phone numbers plus permitted call and SMS metadata locally on this phone. Android permissions are separate. Calls or SMS may be unavailable because of Android or installer restrictions; MMS, RCS and complete historical coverage are not promised. Message text and attachments are never read. Temporary review is held in the app's private storage. The app does not create an encrypted phone backup or add its own encryption to that temporary storage. Its one-use connection to this phone's browser is local and is not end-to-end encrypted; saving selected metadata to your account uses a secure web connection. Sanitized error reports may be sent automatically.",
+      "Device permissions, encryption, available history, supported identifiers, group-size limits and safety limits can leave a source partial or unavailable. The interface reports those limitations and distinguishes an unavailable source from a readable source with no records. This approval does not authorize marketing, contacting people, another collection, or another account or course. Pairing or receiving a preview does not mean the account has saved it.",
+      "Unsaved local review remains temporary; do not rely on closing and reopening the app to keep it. This supplement does not extend local retention or the existing phone policy for 90 days of genuine-user inactivity and its receipt limits. Existing account controls for stopping a collection and deleting saved phone data continue to apply. Other phone flows retain their existing separate Save approvals."
+    ],
+    "sha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+    "serialization": "UTF-8 of title and paragraphs joined by two LF characters, with no terminal LF; preserve exact code points."
+  },
+  "disclosureSerializationFields": [
+    "version",
+    "sentences[0]",
+    "agreement",
+    "policyVersion",
+    "policySha256",
+    "privacyHref",
+    "supplementVersion",
+    "supplementSha256",
+    "supplementHref",
+    "platform",
+    "channel"
+  ],
+  "disclosureSerialization": "UTF-8 values in the listed order joined by one LF; no terminal LF or Unicode normalization. sha256 is excluded.",
+  "publicBuildAllowlist": [],
+  "schemaSource": "src/lib/onboarding/phone-platform-setup.ts",
+  "fixtures": {
+    "windows": {
+      "syntheticOnly": true,
+      "capabilities": {
+        "schema": 2,
+        "product": "amplifai-phone",
+        "platform": "windows",
+        "channel": "windows-x64-test",
+        "architecture": "x86_64",
+        "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+        "version": "2026.10.21-test",
+        "build": "26102101",
+        "protocols": [
+          "phone-native-setup-v2"
+        ]
+      },
+      "createRequest": {
+        "protocol": "phone-native-setup-v2",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "enrollmentId": "66666666-6666-4666-8666-666666666666",
+        "bootstrap": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "categories": [
+          "contacts",
+          "calls",
+          "messages"
+        ],
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        }
+      },
+      "createResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "state": "pending_claim",
+        "expiresAt": "2026-10-21T22:10:00.000Z"
+      },
+      "claimRequest": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "bootstrap": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "capability": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        }
+      },
+      "claimResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "state": "pending_approval",
+        "ownerId": "55555555-5555-4555-8555-555555555555",
+        "enrollmentId": "66666666-6666-4666-8666-666666666666",
+        "courseId": "77777777-7777-4777-8777-777777777777",
+        "destinationEmail": "fixture@example.test",
+        "destinationCourse": "Synthetic platform course",
+        "categories": [
+          "contacts",
+          "calls",
+          "messages"
+        ],
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "expiresAt": "2026-10-21T22:10:00.000Z",
+        "setupSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "disclosure": {
+          "version": "phone-run-windows-v1",
+          "sentences": [
+            "AMPLIFai Phone creates a temporary iPhone backup on this Windows PC and extracts contact, call and message metadata. After you choose contacts and continue, their available metadata is saved to the account and course shown. Backup files and message content stay on this PC. Interrupted cleanup can leave temporary files."
+          ],
+          "agreement": "I approve this one phone collection and automatic saving of the contacts I choose, with their available call and message metadata, to this account and course.",
+          "policyVersion": "account-2026-10-v7",
+          "policySha256": "446be198f41a9c3d335b64f094b3ed2506810c0a5862de1422cd62fa9af5cf89",
+          "privacyHref": "/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving",
+          "supplementVersion": "phone-platforms-2026-10-v1",
+          "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+          "supplementHref": "/experience/phone-platform-privacy?version=phone-platforms-2026-10-v1",
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "sha256": "795c0423c9c15c4c13e79145e75b93f42e329b53acd5c10d5eb387fa48cc0f23"
+        }
+      },
+      "approveRequest": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "capability": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "runCapability": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCA",
+        "setupSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "disclosure": {
+          "version": "phone-run-windows-v1",
+          "sha256": "795c0423c9c15c4c13e79145e75b93f42e329b53acd5c10d5eb387fa48cc0f23",
+          "supplementVersion": "phone-platforms-2026-10-v1",
+          "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667"
+        }
+      },
+      "approveResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "setupSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runId": "88888888-8888-4888-8888-888888888888",
+        "approvalId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "approvalLocation": "native",
+        "disclosureVersion": "phone-run-windows-v1",
+        "disclosureSha256": "795c0423c9c15c4c13e79145e75b93f42e329b53acd5c10d5eb387fa48cc0f23",
+        "supplementVersion": "phone-platforms-2026-10-v1",
+        "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+        "ownerId": "55555555-5555-4555-8555-555555555555",
+        "enrollmentId": "66666666-6666-4666-8666-666666666666",
+        "courseId": "77777777-7777-4777-8777-777777777777",
+        "destinationEmail": "fixture@example.test",
+        "destinationCourse": "Synthetic platform course",
+        "categories": [
+          "contacts",
+          "calls",
+          "messages"
+        ],
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "approvedAt": "2026-10-21T22:00:00.000Z",
+        "expiresAt": "2026-10-22T10:00:00.000Z",
+        "preparation": {
+          "protocol": "phone-start-v1",
+          "approvalId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "enrollmentId": "66666666-6666-4666-8666-666666666666",
+          "destinationEmail": "fixture@example.test",
+          "destinationCourse": "Synthetic platform course",
+          "categories": [
+            "contacts",
+            "calls",
+            "messages"
+          ],
+          "disclosureVersion": "phone-run-windows-v1",
+          "expiresAt": "2026-10-22T10:00:00.000Z",
+          "state": "current",
+          "operation": null
+        }
+      },
+      "statusResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "client": {
+          "platform": "windows",
+          "channel": "windows-x64-test",
+          "architecture": "x86_64",
+          "bundleId": "ai.satoris.amplifai.phone.windows-candidate",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "state": "approved",
+        "expiresAt": "2026-10-21T22:10:00.000Z",
+        "run": {
+          "runId": "88888888-8888-4888-8888-888888888888",
+          "approvalId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "expiresAt": "2026-10-22T10:00:00.000Z"
+        }
+      }
+    },
+    "android": {
+      "syntheticOnly": true,
+      "capabilities": {
+        "schema": 2,
+        "product": "amplifai-phone",
+        "platform": "android",
+        "channel": "android-website",
+        "architecture": "universal",
+        "bundleId": "ai.satoris.amplifai.phone",
+        "version": "2026.10.21-test",
+        "build": "26102101",
+        "protocols": [
+          "phone-native-setup-v2"
+        ]
+      },
+      "createRequest": {
+        "protocol": "phone-native-setup-v2",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "enrollmentId": "66666666-6666-4666-8666-666666666666",
+        "bootstrap": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "categories": [
+          "contacts",
+          "calls",
+          "messages"
+        ],
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        }
+      },
+      "createResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "state": "pending_claim",
+        "expiresAt": "2026-10-21T22:10:00.000Z"
+      },
+      "claimRequest": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "bootstrap": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "capability": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        }
+      },
+      "claimResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "state": "pending_approval",
+        "ownerId": "55555555-5555-4555-8555-555555555555",
+        "enrollmentId": "66666666-6666-4666-8666-666666666666",
+        "courseId": "77777777-7777-4777-8777-777777777777",
+        "destinationEmail": "fixture@example.test",
+        "destinationCourse": "Synthetic platform course",
+        "categories": [
+          "contacts",
+          "calls",
+          "messages"
+        ],
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "expiresAt": "2026-10-21T22:10:00.000Z",
+        "setupSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "disclosure": {
+          "version": "phone-run-android-v1",
+          "sentences": [
+            "AMPLIFai Phone reads contact names and phone numbers, plus available call and SMS metadata, locally on this Android phone with your Android permissions. After you choose contacts and continue, their available metadata is saved to the account and course shown. Message text and attachments are never read. Android or installer restrictions can leave sources unavailable."
+          ],
+          "agreement": "I approve this one phone collection and automatic saving of the contacts I choose, with their available call and SMS metadata, to this account and course.",
+          "policyVersion": "account-2026-10-v7",
+          "policySha256": "446be198f41a9c3d335b64f094b3ed2506810c0a5862de1422cd62fa9af5cf89",
+          "privacyHref": "/experience/account-privacy?version=account-2026-10-v7#phone-collection-and-saving",
+          "supplementVersion": "phone-platforms-2026-10-v1",
+          "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+          "supplementHref": "/experience/phone-platform-privacy?version=phone-platforms-2026-10-v1",
+          "platform": "android",
+          "channel": "android-website",
+          "sha256": "cce897f226ab97045058dc1ddf68a1fa8633a40071429bddf5f21fbf1b79bdba"
+        }
+      },
+      "approveRequest": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "capability": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "runCapability": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCA",
+        "setupSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "disclosure": {
+          "version": "phone-run-android-v1",
+          "sha256": "cce897f226ab97045058dc1ddf68a1fa8633a40071429bddf5f21fbf1b79bdba",
+          "supplementVersion": "phone-platforms-2026-10-v1",
+          "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667"
+        }
+      },
+      "approveResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "setupSnapshotSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "runId": "88888888-8888-4888-8888-888888888888",
+        "approvalId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "approvalLocation": "native",
+        "disclosureVersion": "phone-run-android-v1",
+        "disclosureSha256": "cce897f226ab97045058dc1ddf68a1fa8633a40071429bddf5f21fbf1b79bdba",
+        "supplementVersion": "phone-platforms-2026-10-v1",
+        "supplementSha256": "995c62d8f67ea2ac5e295b50dfaf65f9e6bd0f6d3b962a91cfe3555bd1ad1667",
+        "ownerId": "55555555-5555-4555-8555-555555555555",
+        "enrollmentId": "66666666-6666-4666-8666-666666666666",
+        "courseId": "77777777-7777-4777-8777-777777777777",
+        "destinationEmail": "fixture@example.test",
+        "destinationCourse": "Synthetic platform course",
+        "categories": [
+          "contacts",
+          "calls",
+          "messages"
+        ],
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "approvedAt": "2026-10-21T22:00:00.000Z",
+        "expiresAt": "2026-10-22T10:00:00.000Z",
+        "preparation": {
+          "protocol": "phone-start-v1",
+          "approvalId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "enrollmentId": "66666666-6666-4666-8666-666666666666",
+          "destinationEmail": "fixture@example.test",
+          "destinationCourse": "Synthetic platform course",
+          "categories": [
+            "contacts",
+            "calls",
+            "messages"
+          ],
+          "disclosureVersion": "phone-run-android-v1",
+          "expiresAt": "2026-10-22T10:00:00.000Z",
+          "state": "current",
+          "operation": null
+        }
+      },
+      "statusResponse": {
+        "protocol": "phone-native-setup-v2",
+        "setupId": "44444444-4444-4444-8444-444444444444",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "client": {
+          "platform": "android",
+          "channel": "android-website",
+          "architecture": "universal",
+          "bundleId": "ai.satoris.amplifai.phone",
+          "version": "2026.10.21-test",
+          "build": "26102101"
+        },
+        "state": "approved",
+        "expiresAt": "2026-10-21T22:10:00.000Z",
+        "run": {
+          "runId": "88888888-8888-4888-8888-888888888888",
+          "approvalId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "expiresAt": "2026-10-22T10:00:00.000Z"
+        }
+      }
+    }
+  }
+}
