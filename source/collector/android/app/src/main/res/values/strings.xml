@@ -1,8 +1,9 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">AMPLIFai Phone</string>
-    <string name="selection_no_matches">No matches · Selected: %1$d across all pages</string>
+    <!-- The number is a selected count; "across all pages" has no quantity-dependent noun. -->
+    <string name="selection_no_matches" tools:ignore="PluralsCandidate">No matches · Selected: %1$d across all pages</string>
     <string name="selection_all_contacts_count">All contacts · Selected: %1$d</string>
-    <string name="selection_page_count">%1$d–%2$d of %3$d · Selected: %4$d across all pages</string>
+    <string name="selection_page_count" tools:ignore="PluralsCandidate">%1$d–%2$d of %3$d · Selected: %4$d across all pages</string>
     <string name="handoff_channel">Phone handoff</string>
     <string name="handoff_channel_description">Visible status and cancellation for an approved same-phone browser transfer.</string>
     <string name="handoff_notification_title">Phone handoff is active</string>
