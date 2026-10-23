@@ -67,6 +67,33 @@ class Wire:
 
 
 class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_many_small_files_throttle_telemetry_but_preserve_final_counters(self) -> None:
+        seconds, events = [0.0], []
+        def clock():
+            return seconds[0]
+        def received(payload):
+            if payload == b"payload":
+                seconds[0] += 0.01
+        payload = b"".join(file_transfer(f"phone/file-{index}", b"payload") for index in range(200))
+        with tempfile.TemporaryDirectory(prefix="amplifai-progress-throttle-") as temporary:
+            workspace = SessionWorkspace(Path(temporary) / "sessions")
+            with workspace as directory:
+                wire = Wire(payload + prefixed(""), after_read=received)
+                link = StreamedDeviceLink(wire, directory, workspace=workspace, watchdog=BackupWatchdog(),
+                    transfer_callback=events.append, clock=clock,
+                    preserve_file=lambda name, _: int(name.rsplit("-", 1)[1]) % 2 == 0)
+                await link.upload_files([])
+                self.assertLessEqual(len(events), 4)
+                self.assertGreaterEqual(len(events), 3)
+                self.assertTrue(all(b["elapsedSeconds"] - a["elapsedSeconds"] >= 0.5
+                    for a, b in zip(events, events[1:])))
+                link.publish_progress(final=True)
+                final = events[-1]
+                self.assertEqual((final["receivedBytes"], final["retainedBytes"], final["discardedBytes"], final["filesReceived"]),
+                                 (1400, 700, 700, 200))
+                self.assertEqual((directory / "phone/file-0").read_bytes(), b"payload")
+                self.assertEqual((directory / "phone/file-1").read_bytes(), b"")
+
     async def test_large_legitimate_control_frame_streams_in_bounded_chunks(self) -> None:
         content = "x" * (MAX_CONTROL_BYTES + 1)
         payload = plistlib.dumps(
@@ -301,6 +328,7 @@ class StreamedBackupTest(unittest.IsolatedAsyncioTestCase):
                     clock=lambda: clock[0],
                 )
                 await link.upload_files([])
+                link.publish_progress(final=True)
                 self.assertEqual((directory / "phone/selected").read_bytes(), payload)
                 self.assertEqual((directory / "phone/discarded").stat().st_size, 0)
                 self.assertEqual(link._discarded_files, set())
