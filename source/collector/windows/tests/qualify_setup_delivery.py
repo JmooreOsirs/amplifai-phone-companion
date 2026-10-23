@@ -22,7 +22,7 @@ def main():
         "tests": result.testsRun, "failures": len(result.failures), "errors": len(result.errors),
         "python": platform.python_version(), "platform": platform.platform(), "syntheticOnly": True,
         "authorityTransportCreated": False, "collectorCreated": False,
-        "scenarios": ["protected-logon-dacl", "primary-exclusion", "plain-open", "delivery", "duplicate",
+        "scenarios": ["protected-logon-dacl", "primary-exclusion", "plain-open", "delivery", "duplicate", "empty-root-path-delivery",
                       "busy", "ui-timeout", "late-delivery-denial", "idle-cancellation", "primary-release"]
     }, indent=2) + "\n", encoding="utf-8")
     return 0 if result.wasSuccessful() else 1
