@@ -157,8 +157,10 @@ def build_and_render(source, output):
                  for item in sorted(package.rglob("*")) if item.is_file()]
     executable_hash = sha256(executable)
     with (output / "render.log").open("w", encoding="utf-8") as log:
+        # The 180-case matrix exceeds seven minutes while still advancing;
+        # this suite deadline is separate from the renderer's latency guards.
         subprocess.run([str(executable), "--render", "--output", str(output / "render")], check=True,
-                       stdout=log, stderr=subprocess.STDOUT, env=clean_child_environment(), timeout=420)
+                       stdout=log, stderr=subprocess.STDOUT, env=clean_child_environment(), timeout=600)
     receipt = json.loads((output / "render/render-guided-receipt.json").read_text(encoding="utf-8"))
     if (receipt["guiSourceSha256"] != manifest["guiSourceSha256"]
             or receipt["frozenFixture"]["executableSha256"] != executable_hash):
