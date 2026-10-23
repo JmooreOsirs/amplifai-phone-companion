@@ -58,6 +58,7 @@ def apply_style(window, font_path=None):
                     font=(family, 12), padding=space(8))
     style.map("TEntry", bordercolor=[("focus", BLUE)], lightcolor=[("focus", BLUE)], darkcolor=[("focus", BLUE)])
     install_control_styles(window, style, scale=float(window.tk.call("tk", "scaling")) / (96 / 72))
+    style.configure("Header.Quiet.TButton", padding=(space(8), 0))
     return family
 
 
@@ -84,18 +85,19 @@ def build(view, logo):
     shell.columnconfigure(0, weight=1)
     shell.rowconfigure(2, weight=1)
     header = ttk.Frame(shell)
+    header.columnconfigure(1, weight=1)
     header.grid(row=0, column=0, sticky="ew", pady=(0, space(12)))
     original_logo = tk.PhotoImage(file=str(logo))
     view._logo_images = {}
-    for compact, width in ((False, space(180)), (True, min(space(120), 140))):
+    for compact, width in ((False, space(180)), (True, min(space(120), 140)), ("contacts", min(space(84), 100))):
         ratio = Fraction(width, original_logo.width()).limit_denominator(16)
         view._logo_images[compact] = original_logo.zoom(ratio.numerator).subsample(ratio.denominator)
     view.logo = view._logo_images[False]
     logo_label = ttk.Label(header, image=view.logo)
-    logo_label.pack(side="left")
+    logo_label.grid(row=0, column=0, sticky="w")
     view.recovery_toggle = ttk.Button(header, text="Details & recovery", style="Quiet.TButton",
         command=lambda: view.show_workspace("setup" if view._visible_workspace == "details" else "details"))
-    view.recovery_toggle.pack(side="right")
+    view.recovery_toggle.grid(row=0, column=2, sticky="e")
     view.navigation = view.journey = JourneySteps(shell, scale=view.layout_scale)
     view.navigation.grid(row=1, column=0, sticky="ew", pady=(0, space(SECTION_SPACE)))
     view.journey_steps = view.journey.labels
@@ -164,20 +166,29 @@ def build(view, logo):
     view._layout_contacts()
     def compact_layout(_event=None):
         compact = view.window.winfo_height() < space(760)
-        if getattr(view, "compact_layout", None) == compact:
+        inline = compact and view._journey_stage == "contacts" and view._visible_workspace != "details"
+        if getattr(view, "_shell_layout", None) == (compact, inline):
             return
+        view._shell_layout = (compact, inline)
         view.compact_layout = compact
+        view.compact_contacts_header = inline
         shell.configure(padding=space(12 if compact else PAGE_SPACE))
-        view.logo = view._logo_images[compact]
+        view.logo = view._logo_images["contacts" if inline else compact]
         logo_label.configure(image=view.logo)
-        header.grid_configure(pady=(0, space(8 if compact else 12)))
-        view.navigation.grid_configure(pady=(0, space(12 if compact else SECTION_SPACE)))
+        header.grid_configure(pady=(0, 0 if inline else space(8 if compact else 12)))
+        if inline:
+            view.navigation.grid(in_=header, row=0, column=1, sticky="ew", padx=space(8), pady=0)
+        else:
+            view.navigation.grid(in_=shell, row=1, column=0, sticky="ew", padx=0,
+                                 pady=(0, space(12 if compact else SECTION_SPACE)))
+        view.recovery_toggle.configure(style="Header.Quiet.TButton" if inline else "Quiet.TButton")
         view.contact_workspace.set_padding(space(12 if compact else 20))
         view.contacts_well.set_padding(space(8 if compact else 12))
         view.contact_actions.grid_configure(pady=(space(8 if compact else 12), 0))
         view.resize_contact_header()
         view.resize_contact_controls()
     shell.bind("<Configure>", compact_layout)
+    view.resize_shell = compact_layout
     compact_layout()
     for widget in descendants(outer):
         if isinstance(widget, (ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.Radiobutton,
@@ -347,6 +358,7 @@ def refresh(view, current):
         view._visible_workspace = "setup"
         view._journey_stage = stage
         view.details_canvas.yview_moveto(0)
+    view.resize_shell()
     details = view._visible_workspace == "details" or stage == "attention"
     selected = "details" if details else "save" if stage == "complete" else "approval" if stage == "prepare" else stage
     for name, panel in view.stage_panels.items():
@@ -357,7 +369,8 @@ def refresh(view, current):
     else:
         view.contact_workspace.grid_remove()
         view.details_pane.grid()
-    view.recovery_toggle.configure(text="Back to current step" if details and stage != "attention" else "Details & recovery")
+    view.recovery_toggle.configure(text="Details" if view.compact_contacts_header else
+                                   "Back to current step" if details and stage != "attention" else "Details & recovery")
     if stage == "collection":
         refresh_collection(view)
     if view.state.phase == "password_required":

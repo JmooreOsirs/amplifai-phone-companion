@@ -57,6 +57,12 @@ CONTACT_LAYOUT_DIAGNOSTIC = frozenset((
 
 @contextmanager
 def synthetic_view(root, logo):
+    with callback_timings(root), synthetic_window(root, logo) as view:
+        yield view
+
+
+@contextmanager
+def synthetic_window(root, logo):
     helper = Mock()
     with (patch.object(app, "HelperProcess", return_value=helper),
           patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"),
@@ -274,14 +280,15 @@ def assert_group_workspace(root, view, name):
 
 
 @contextmanager
-def callback_timings():
+def callback_timings(root):
     """Attribute deferred Tk work in this synthetic harness, without product hooks."""
     metrics = {}
+    root.qualification_callback_timings = metrics
     original = app.tk.CallWrapper.__call__
 
     def measured(callback, *args):
         function = callback.func
-        if getattr(function, "__name__", "") == "callit" and function.__closure__:
+        if getattr(function, "__qualname__", "").endswith(".callit") and function.__closure__:
             for name, cell in zip(function.__code__.co_freevars, function.__closure__):
                 if name == "func":
                     function = cell.cell_contents
@@ -309,6 +316,8 @@ def measure_pump(root, view):
     measurements = {}
     root.qualification_pump_measurements = measurements
     for eager in (True, False):
+        callbacks = root.qualification_callback_timings
+        callbacks.clear()
         durations, beats, renders, refresh_durations, eager_job = [], [], [], [], [None]
         original_refresh = view.refresh
         start_wall, start_cpu = time.perf_counter(), time.process_time()
@@ -329,7 +338,7 @@ def measure_pump(root, view):
         def eager_refresh():
             refresh()
             eager_job[0] = root.after(50, eager_refresh)
-        with patch.object(view, "refresh", side_effect=refresh), callback_timings() as callbacks:
+        with patch.object(view, "refresh", side_effect=refresh):
             view._next_visual_refresh = 0.0
             view.pump()
             if eager:
@@ -350,7 +359,7 @@ def measure_pump(root, view):
                        "refreshMaxSeconds": max(refresh_durations, default=0),
                        "heartbeatMaxSeconds": max(durations),
                        "heartbeatP95Seconds": sorted(durations)[math.floor((len(durations) - 1) * .95)],
-                       "deferredCallbacks": sorted(callbacks.values(), key=lambda value: value["totalSeconds"], reverse=True)[:16],
+                       "deferredCallbacks": [dict(value) for value in sorted(callbacks.values(), key=lambda value: value["totalSeconds"], reverse=True)[:16]],
                        "singlePumpContinuation": True}
         measurements["syntheticEager20HzComparator" if eager else "productionDirtyRefresh"] = measurement
         if not eager and not 2 <= len(renders) <= math.ceil(wall) + 1:

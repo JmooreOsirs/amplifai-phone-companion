@@ -197,8 +197,10 @@ def computed_styles(root, view) -> dict:
                               "navigationGapPixels": [int(str(value)) for value in root.tk.splitlist(view.navigation.grid_info()["pady"])],
                               "logicalRhythm": [12, 20, 28]}
     result["layoutSpacing"]["compact"] = view.compact_layout
+    result["layoutSpacing"]["compactContactsHeader"] = view.compact_contacts_header
+    expected_navigation_gap = [0] if view.compact_contacts_header else [0, round((12 if view.compact_layout else 20) * scale)]
     if (result["layoutSpacing"]["shellPaddingPixels"] != [round((12 if view.compact_layout else 28) * scale)]
-            or result["layoutSpacing"]["navigationGapPixels"] != [0, round((12 if view.compact_layout else 20) * scale)]):
+            or result["layoutSpacing"]["navigationGapPixels"] != expected_navigation_gap):
         raise RuntimeError("Outer spacing diverged from the DPI-scaled Mac rhythm")
     result["contactCards"] = {"type": type(view.contacts).__name__, "font": list(view.contacts.cget("font")),
                                "columns": view.contacts._columns, "scale": view.contacts.scale}

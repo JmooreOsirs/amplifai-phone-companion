@@ -579,7 +579,8 @@ class PhoneWindow:
         if self.native_active and self.state.can_review and self.state.selected_ids:
             status = "Continue saves your chosen contacts."
         if self.native_active and self.state.reviewed and not self.state.handoff_id:
-            status = "Continue saves this selection to your approved account."
+            status = ("Continue saves your chosen contacts." if getattr(self, "compact_layout", False)
+                      else "Continue saves this selection to your approved account.")
             if self.native.phase == "handoff_expired":
                 status = "Handoff expired. Open Details & recovery to check your account or cancel locally."
         elif self.native_active and self.state._browser_received and not self.state.save_receipt_pending and not self.state.saved_acknowledged:
@@ -593,6 +594,11 @@ class PhoneWindow:
                 status = "Confirmation paused. Return to the approved account tab or open Details & recovery."
             elif self.native.phase == "bound" and not self.state._browser_received:
                 status = "Return to your original account tab. If it is missing, choose Continue in browser. Keep this review open."
+        if self.native_active and getattr(self, "compact_layout", False) and self.state._capture_received:
+            if self.state.selecting_all:
+                status = "Checking contacts. Your choices are kept."
+            elif self.state.total_contacts == 0:
+                status = "No contacts are available in this collection."
         self.workspace_coverage.set(coverage)
         self.workspace_status.set(status)
         if hasattr(self, "contact_selected"):

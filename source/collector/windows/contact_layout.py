@@ -238,6 +238,7 @@ def refresh(view):
         count = workspace.filtered_count
         start = workspace.page_start + 1 if count else 0
         view.contact_page.set(f"Showing {start:,}–{workspace.page_start + len(state.contacts):,} of {count:,} in {workspace.group}")
-    elif getattr(view, "compact_layout", False) and not state.selecting_all:
+    elif getattr(view, "compact_layout", False):
         # The selected total is already in the fixed heading.
-        view.contact_page.set(f"{len(state.contacts):,} on page / {state.total_contacts:,} total")
+        view.contact_page.set(f"Checking {state.select_all_visited:,} / {state.total_contacts:,}" if state.selecting_all else
+                              f"{len(state.contacts):,} on page / {state.total_contacts:,} total")

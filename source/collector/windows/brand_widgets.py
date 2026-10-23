@@ -193,6 +193,7 @@ class _ContactCard:
         self.variable = tk.BooleanVar(master=owner, value=False)
         self.panel = RoundPanel(owner._content, fill=RAISED, radius=CARD_RADIUS, padding=ITEM_GAP,
                                 scale=owner.scale)
+        self.panel.bind("<Configure>", owner._queue_layout, add="+")
         self.panel.content.grid_columnconfigure(0, weight=1)
         self.panel.content.grid_rowconfigure(0, minsize=round(32 * owner.scale))
         self.button = ttk.Checkbutton(self.panel.content, text=self.name, variable=self.variable,
@@ -204,6 +205,7 @@ class _ContactCard:
         self.ending.grid(row=1, column=0, sticky="ew", padx=(round(34 * owner.scale), 0))
         self.tools_enabled = False
         self.layout_key = None
+        self.placement = None
         self.mark_command = self.move_command = None
         self.marked = tk.BooleanVar(master=owner, value=False)
         self.move_menu = tk.Menu(self.panel, tearoff=False)
@@ -245,21 +247,23 @@ class ContactCards(tk.Frame):
         self._checkbutton_style = checkbutton_style
         self._layout_job = None
         self._viewport_width = None
-        self._layout_width = None
         self._scroll_bounds = None
+        self._positions = ()
+        self._placed_viewport = None
+        self._yscrollcommand = None
         self._columns = 1
         self._wheel_remainder = 0
         self._aqua = self.tk.call("tk", "windowingsystem") == "aqua"
         self._canvas = tk.Canvas(self, background=BACKGROUND, highlightbackground=BORDER,
                                  highlightthickness=1, borderwidth=0, takefocus=False,
                                  width=round((CONTACT_MINIMUM + 2 * ITEM_GAP) * self.scale),
-                                 height=round(240 * self.scale), yscrollincrement=1)
+                                 height=round(240 * self.scale), yscrollincrement=1,
+                                 yscrollcommand=self._scrolled)
         self._canvas.pack(fill="both", expand=True)
         self._content = tk.Frame(self._canvas, background=BACKGROUND, borderwidth=0)
         self._content_window = self._canvas.create_window(round(ITEM_GAP * self.scale / 2), 0,
                                                           anchor="nw", window=self._content)
         self._canvas.bind("<Configure>", self._viewport_changed)
-        self._content.bind("<Configure>", self._content_changed)
         self._bind_wheel(self._canvas)
         self._bind_wheel(self._content)
 
@@ -280,7 +284,7 @@ class ContactCards(tk.Frame):
                     if disabled:
                         card.panel.set_focus(False)
         if "yscrollcommand" in options:
-            self._canvas.configure(yscrollcommand=options.pop("yscrollcommand"))
+            self._yscrollcommand = options.pop("yscrollcommand")
         return super().configure(**options) if options or not (cnf or kwargs) else None
 
     config = configure
@@ -300,6 +304,8 @@ class ContactCards(tk.Frame):
         for card in self._cards:
             card.panel.destroy()
         self._cards.clear()
+        self._positions = ()
+        self._placed_viewport = None
         self._canvas.yview_moveto(0)
         self._queue_layout()
 
@@ -399,16 +405,18 @@ class ContactCards(tk.Frame):
         return "break"
 
     def _see(self, card) -> None:
-        total, viewport = self._content.winfo_height(), self._canvas.winfo_height()
+        if card.index >= len(self._positions):
+            return
+        total, viewport = self._scroll_bounds[3] if self._scroll_bounds else 0, self._canvas.winfo_height()
         if total <= viewport:
             return
-        top = self._canvas.canvasy(0)
-        y, height = card.panel.winfo_y(), card.panel.winfo_height()
+        top = self._canvas.canvasy(0) + 1
+        _x, y, _width, height = self._positions[card.index]
         # A tall card can exceed a compact viewport. Reveal the actual focused
         # control in that case; aligning the whole card hides its top control.
         focused = self.focus_get()
         if height > viewport - 2 and focused in (card.button, card.move_button, card.mark_button):
-            y = focused.winfo_rooty() - self._content.winfo_rooty()
+            y += focused.winfo_rooty() - card.panel.winfo_rooty()
             height = focused.winfo_height()
         if y < top:
             self._canvas.yview_moveto(max(0, y - 1) / total)
@@ -433,20 +441,42 @@ class ContactCards(tk.Frame):
         return "break"
 
     def _viewport_changed(self, event) -> None:
-        if event.width == self._viewport_width:
+        if event.width != self._viewport_width:
+            self._viewport_width = event.width
+            self._queue_layout()
+        self._place_viewport()
+
+    def _scrolled(self, first, last) -> None:
+        self._place_viewport()
+        if self._yscrollcommand is not None:
+            self._yscrollcommand(first, last)
+
+    def _place_viewport(self) -> None:
+        # Tk canvas window coordinates saturate at signed-short limits. Keep
+        # the native frame at the viewport and position the bounded page around
+        # that origin; the virtual scroll range can safely exceed 32,768px.
+        offset = self._canvas.canvasy(0) + 1
+        width, height = self._canvas.winfo_width(), self._canvas.winfo_height()
+        key = (offset, width, height, self._positions)
+        if key == self._placed_viewport:
             return
-        self._viewport_width = event.width
+        self._placed_viewport = key
         gap = round(ITEM_GAP * self.scale)
-        self._canvas.itemconfigure(self._content_window, width=max(1, event.width - 2 - gap))
-        self._queue_layout()
+        self._canvas.coords(self._content_window, gap // 2 + 1, offset)
+        self._canvas.itemconfigure(self._content_window, width=max(1, width - 2 - gap),
+                                   height=max(1, height - 2))
+        for card, (x, y, card_width, card_height) in zip(self._cards, self._positions):
+            relative_y = y - offset
+            if relative_y + card_height < 0 or relative_y > height - 2:
+                # Keep offscreen native children mapped for ttk Tab traversal,
+                # at one bounded hidden position instead of distant row offsets.
+                relative_y = -card_height - 1
+            placement = (x, relative_y, card_width, card_height)
+            if card.placement != placement:
+                card.placement = placement
+                card.panel.place(x=x, y=relative_y, width=card_width, height=card_height)
 
-    def _content_changed(self, _event=None) -> None:
-        bounds = self._canvas.bbox(self._content_window)
-        if bounds and bounds != self._scroll_bounds:
-            self._scroll_bounds = bounds
-            self._canvas.configure(scrollregion=(0, 0, bounds[2], bounds[3] + round(ITEM_GAP * self.scale)))
-
-    def _queue_layout(self) -> None:
+    def _queue_layout(self, _event=None) -> None:
         if self._layout_job is None:
             self._layout_job = self.after_idle(self._layout)
 
@@ -457,28 +487,39 @@ class ContactCards(tk.Frame):
         columns = contact_columns(width, self.scale)
         gap = round(ITEM_GAP * self.scale)
         card_width = max(1, (width - (columns + 1) * gap) // columns)
-        if width != self._layout_width:
-            for column in range(max(self._columns, columns)):
-                active = column < columns
-                self._content.grid_columnconfigure(column, weight=1 if active else 0,
-                                                    uniform="contact-cards" if active else "",
-                                                    minsize=card_width + gap if active else 0)
-            self._layout_width = width
         self._columns = columns
-        for index, card in enumerate(self._cards):
+        for card in self._cards:
             menu_width = card.move_button.winfo_reqwidth() if card.tools_enabled else 0
             key = (columns, card_width, menu_width)
             if card.layout_key == key:
                 continue
             card.layout_key = key
-            card.panel.grid(row=index // columns, column=index % columns, sticky="nsew",
-                            padx=(gap // 2, gap - gap // 2), pady=(gap, 0))
             card.panel.configure(width=card_width)
             text_width = max(1, card_width - round(62 * self.scale) - menu_width)
             card.button.configure(text=wrap_name(card.name, text_width, self._name_font.measure))
             card.ending.configure(wraplength=text_width)
             card.reason.configure(wraplength=max(1, card_width - 2 * card.panel.padding))
-        self._content_changed()
+        positions, y = [], gap
+        for start in range(0, len(self._cards), columns):
+            row = self._cards[start:start + columns]
+            row_height = max(card.panel.winfo_reqheight() for card in row)
+            positions.extend((gap // 2 + column * (card_width + gap), y, card_width, row_height)
+                             for column in range(len(row)))
+            y += row_height + gap
+        positions = tuple(positions)
+        moved = positions != self._positions
+        self._positions = positions
+        bounds = (0, 0, width, y)
+        if bounds != self._scroll_bounds:
+            self._scroll_bounds = bounds
+            self._canvas.configure(scrollregion=bounds)
+        self._place_viewport()
+        if moved:
+            focused = self.focus_get()
+            for card in self._cards:
+                if focused in (card.button, card.move_button, card.mark_button):
+                    self._see(card)
+                    break
 
     def destroy(self) -> None:
         if self._layout_job is not None:

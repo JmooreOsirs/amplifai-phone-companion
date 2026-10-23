@@ -176,6 +176,32 @@ class ContactCardsTkTests(unittest.TestCase):
         self.assertLess(self.cards._cards[0].move_button.winfo_reqwidth(), round(48 * self.cards.scale))
         self.assertLessEqual(len(self.cards._cards[0].button.cget("text").splitlines()), 2)
 
+    def test_tall_native_page_keeps_last_organize_control_inside_viewport(self):
+        from guided_layout import apply_style
+        apply_style(self.root)
+        self.root.geometry("420x260")
+        self.root.deiconify()
+        self.cards.delete(0, tk.END)
+        for index in range(200):
+            self.cards.insert(tk.END, "Synthetic long contact name for a tall review card · phone ending 0123")
+            self.cards.set_contact_tools(index, review=True, reason="Company or organization", marked=False,
+                                         organizing=True, mark_command=lambda _index: None, move_command=lambda *_args: None)
+        self.root.update()
+        self.assertGreater(self.cards._scroll_bounds[3], 32768)
+        last = self.cards._cards[-1]
+        self.root.focus_force()
+        last.mark_button.focus_set()
+        self.root.update()
+        for width in (420, 720, 420):
+            self.root.geometry(f"{width}x260")
+            self.root.update()
+            self.assertIs(self.root.focus_get(), last.mark_button)
+            canvas = self.cards._canvas
+            top = last.mark_button.winfo_rooty() - canvas.winfo_rooty()
+            self.assertGreaterEqual(top, 1)
+            self.assertLessEqual(top + last.mark_button.winfo_height(), canvas.winfo_height() - 1)
+        self.assertEqual(self.cards.curselection(), ())
+
     def test_panel_measures_wrapped_content_and_releases_pending_measurement(self):
         panel = widgets.RoundPanel(self.root, width=260)
         label = tk.Label(panel.content, text="Synthetic wrapped content " * 8, wraplength=200)
