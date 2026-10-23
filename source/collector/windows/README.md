@@ -20,6 +20,10 @@ Backup file telemetry now uses the existing 0.5-second throttle and exact final 
 
 Required candidate evidence: actual Windows source/frozen guided state renders and resolved styles, keyboard/text-scale checks, event-loop measurement, full-size shared helper/frozen worker, RC21 MSI replacement and signed update handoff. Physical phone/account acceptance stays separate. Windows remains unsigned TEST; the distribution signature does not add publisher trust.
 
+## Connection failure guidance
+
+Known device-connection, Trust, timeout and interrupted-connection errors now retain distinct safe next actions in collection and the read-only backup-setting check. The existing `phone_connection` code covers an unavailable Apple device service as well as no unique connected iPhone; it does not diagnose a specific driver failure. The setting remains Unknown after any failed check. Raw provider errors are never displayed, unknown failures keep the generic fallback, and helper exit plus temporary-data inspection remain required before another collection. This diagnostic change does not establish the cause or resolution of any reported physical-device failure.
+
 ## RC20 supplemental native/bridge boundary test
 
 `test_native_bridge_boundary.py` joins the production Windows `NativeRun` to the real shared `BridgeServer` over ephemeral loopback HTTP. It reuses the existing pinned synthetic setup exchanges, disk-backed capture and HTTP client; only remote authority replies are replaced. Claim, exact `phone-run-windows-v1` approval, separate Start, reviewed Continue, current status, immutable bind and destination verification precede v3 release. Lost claim/approval/Start/Continue/bind/consume/local-release replies preserve the exact request or transfer token. Changed selection, handoff, digest and release proofs are denied; source pages remain blocked before release and during uncertain authority. Selected rows and page/manifest hashes are checked through actual HTTP responses.
