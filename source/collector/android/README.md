@@ -1,9 +1,10 @@
 # AMPLIFai Phone — Android
 
-`2026.10.21-rc11` (`26102111`) adds account-bound native approval, a separate
-Start action, contact selection and Review, and deliberate Continue. The
-selected transfer stays immutable across retry, and the app reports delivery
-separately from a matching saved-account receipt. See
+`2026.10.23-rc12` (`26102312`) exposes Select all contacts and Deselect all
+beside search and keeps selection usable with the keyboard visible. Bulk actions
+cover all contact pages, including search-hidden contacts. Native approval,
+Start, Review and deliberate Continue remain separate; selected transfers stay
+immutable across retry, and delivery remains separate from a saved-account receipt. See
 [Native setup contract implementation](#native-setup-contract-implementation).
 Website admission of this exact version is activated separately after package
 qualification and public byte readback.
@@ -18,10 +19,10 @@ The existing manual reviewed pairing path is retained.
 
 Support-code wire format is
 `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
-This release uses exact version name `2026.10.21-rc11`; before pairing its bytes
+This release uses exact version name `2026.10.23-rc12`; before pairing its bytes
 are `0|0` and status is `-`. Website build admission is explicit.
 
-Install RC11 over RC10 without uninstalling or clearing app data. The application
+Install RC12 over RC11 without uninstalling or clearing app data. The application
 ID and publisher certificate are unchanged and the version code increases.
 Android will not install an older version over a newer one through a normal
 update. Physical-device permission, browser, normal installation and account-save
@@ -567,7 +568,7 @@ sign the update feed without a password in shell arguments:
 ```sh
 swift script/android_release_signing.swift sign-feed \
   /absolute/path/to/verified.apk \
-  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.21-rc11/AMPLIFai-Phone-Android-2026.10.21-rc11.apk \
+  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.23-rc12/AMPLIFai-Phone-Android-2026.10.23-rc12.apk \
   /absolute/path/to/android-update-v1.txt
 ```
 
