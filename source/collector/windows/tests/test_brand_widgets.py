@@ -204,27 +204,32 @@ class ContactCardsTkTests(unittest.TestCase):
             self.assertLessEqual(top + last.mark_button.winfo_height(), canvas.winfo_height() - 1)
         self.cards._cards[0].button.focus_set()
         self.root.update()
+        visited = {str(self.root.focus_get())}
         for _ in range(600):
             current = self.root.focus_get()
             if current is last.mark_button:
                 break
             following = self.root.nametowidget(self.root.tk.call("tk_focusNext", str(current)))
+            self.assertNotIn(str(following), visited)
+            visited.add(str(following))
             following.focus_set()
             self.root.update()
             top = following.winfo_rooty() - canvas.winfo_rooty()
             self.assertGreaterEqual(top, 1)
             self.assertLessEqual(top + following.winfo_height(), canvas.winfo_height() - 1)
         self.assertIs(self.root.focus_get(), last.mark_button)
-        self.assertEqual(self.root.tk.call("tk_focusNext", str(last.mark_button)), str(after_grid))
+        self.assertEqual(visited, {str(control) for card in self.cards._cards
+                                   for control in (card.button, card.move_button, card.mark_button)})
+        self.assertEqual(str(self.root.tk.call("tk_focusNext", str(last.mark_button))), str(after_grid))
         after_grid.focus_set()
         self.root.update()
-        self.assertEqual(self.root.tk.call("tk_focusPrev", str(after_grid)), str(last.mark_button))
+        self.assertEqual(str(self.root.tk.call("tk_focusPrev", str(after_grid))), str(last.mark_button))
         first = self.cards._cards[0].button
         first.focus_set()
         self.root.update()
-        self.assertEqual(self.root.tk.call("tk_focusPrev", str(first)), str(after_grid))
+        self.assertEqual(str(self.root.tk.call("tk_focusPrev", str(first))), str(after_grid))
         self.cards.configure(state="disabled")
-        self.assertEqual(self.root.tk.call("tk_focusNext", str(after_grid)), str(after_grid))
+        self.assertEqual(str(self.root.tk.call("tk_focusNext", str(after_grid))), str(after_grid))
         self.assertEqual(self.cards.curselection(), ())
 
     def test_panel_measures_wrapped_content_and_releases_pending_measurement(self):

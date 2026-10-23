@@ -209,7 +209,7 @@ class _ContactCard:
         self.marked = tk.BooleanVar(master=owner, value=False)
         self.move_menu = tk.Menu(self.panel, tearoff=False)
         self.move_button = ttk.Menubutton(self.panel.content, text="⋯", menu=self.move_menu,
-                                          style="Card.TMenubutton", takefocus=True)
+                                          style="Card.TMenubutton", takefocus="ttk::takefocus")
         self.reason = tk.Label(self.panel.content, background=RAISED, foreground=MUTED,
                                font=owner._detail_font, anchor="nw", justify="left", borderwidth=0, padx=0, pady=0)
         self.mark_button = ttk.Checkbutton(self.panel.content, text="Mark to move", variable=self.marked,
