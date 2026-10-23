@@ -123,7 +123,7 @@ jobs:
           for key in ('guiSourceSha256', 'sourceProof', 'productionIdentity', 'computedStylesByViewport', 'windowLifecycle'):
               if source[key] != frozen[key]:
                   raise RuntimeError('Source/frozen guided evidence differs: ' + key)
-          fields = ('scenario', 'stage', 'panel', 'width', 'height', 'tkScaling', 'geometry', 'contactGroups', 'selectedContacts', 'accountSaveAcknowledged')
+          fields = ('scenario', 'stage', 'panel', 'width', 'height', 'tkScaling', 'geometry', 'contactGroups', 'selectedContacts', 'accountSaveAcknowledged', 'roundedFillPixels')
           expected = [{key: item[key] for key in fields} for item in source['screenshots']]
           actual = [{key: item[key] for key in fields} for item in frozen['screenshots']]
           if expected != actual:
@@ -232,7 +232,7 @@ jobs:
             python source/collector/windows/tests/visible_desktop.py --restore $mode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Freeze rc21 wrapper and matching shared helper
+      - name: Freeze rc22 wrapper and matching shared helper
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
