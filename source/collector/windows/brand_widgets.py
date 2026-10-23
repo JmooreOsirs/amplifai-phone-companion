@@ -119,6 +119,7 @@ class RoundPanel(tk.Canvas):
         self._content_window = self.create_window(self.padding, self.padding, anchor="nw", window=self.content)
         self.content.bind("<Configure>", self._queue_measure)
         self.bind("<Configure>", self._resize)
+        self.bind("<Map>", self._queue_measure)
         self._queue_measure()
 
     def set_border(self, color: str) -> None:
@@ -138,7 +139,12 @@ class RoundPanel(tk.Canvas):
 
     def _queue_measure(self, _event=None) -> None:
         if self._measure_job is None:
-            self._measure_job = self.after_idle(self._measure)
+            self._measure_job = self.after_idle(self._defer_measure)
+
+    def _defer_measure(self) -> None:
+        # Child pack/grid requests queued during construction must settle first,
+        # including when this stage is hidden and emits no Configure event.
+        self._measure_job = self.after_idle(self._measure)
 
     def _measure(self) -> None:
         self._measure_job = None

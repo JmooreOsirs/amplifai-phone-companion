@@ -530,18 +530,40 @@ class PhoneWindow:
         from brand_widgets import ContactCards
         workspace = self.contact_workspace
         workspace.columnconfigure(0, weight=1)
-        workspace.rowconfigure(4, weight=1)
+        workspace.rowconfigure(5, weight=1)
+        header = ttk.Frame(workspace, style="Panel.TFrame")
+        header.grid(row=0, column=0, sticky="ew", pady=(0, self.space(12)))
+        header.columnconfigure(0, weight=1)
+        self.contact_heading = ttk.Label(header, text="Choose contacts", style="Panel.Heading.TLabel")
+        self.contact_heading.grid(row=0, column=0, sticky="w")
+        count = ttk.Frame(header, style="Panel.TFrame")
+        count.grid(row=0, column=1, sticky="e")
+        self.contact_selected = ttk.Label(count, style="Selected.TLabel")
+        self.contact_selected.pack(side="left", padx=(0, self.space(8)))
+        self.contact_total = ttk.Label(count, style="Panel.Muted.TLabel")
+        self.contact_total.pack(side="left")
+        def resize_header(_event):
+            if header.winfo_width() <= 1:
+                return
+            stacked = header.winfo_width() < self.contact_heading.winfo_reqwidth() + count.winfo_reqwidth() + self.space(20)
+            position = (1, 0) if stacked else (0, 1)
+            current = count.grid_info()
+            if (current["row"], current["column"]) != position:
+                count.grid(row=position[0], column=position[1], sticky="w" if stacked else "e",
+                           pady=(self.space(12) if stacked else 0, 0))
+        header.bind("<Configure>", resize_header)
+        count.bind("<Configure>", resize_header)
         self.workspace_context = ttk.Label(workspace, textvariable=self.workspace_coverage, justify="left", style="Panel.TLabel")
-        self.workspace_context.grid(row=0, column=0, sticky="ew", pady=(0, self.space(12)))
+        self.workspace_context.grid(row=1, column=0, sticky="ew", pady=(0, self.space(12)))
         search = ttk.Frame(workspace, style="Panel.TFrame")
-        search.grid(row=1, column=0, sticky="ew", pady=(0, self.space(12)))
+        search.grid(row=2, column=0, sticky="ew", pady=(0, self.space(12)))
         self.search_entry = ttk.Entry(search, textvariable=self.contact_query, width=20)
         self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, self.space(12)))
         self.search_entry.bind("<Return>", lambda _event: self.search_contacts())
         self.search_button = ttk.Button(search, text="Search names", command=self.search_contacts)
         self.search_button.pack(side="left")
         selection = ttk.Frame(workspace, style="Panel.TFrame")
-        selection.grid(row=2, column=0, sticky="ew", pady=(0, self.space(12)))
+        selection.grid(row=3, column=0, sticky="ew", pady=(0, self.space(12)))
         self.select_all_button = ttk.Button(selection, text="Select all contacts", command=self.select_all_contacts)
         self.select_all_button.pack(side="left", padx=(0, self.space(12)))
         self.cancel_select_all_button = ttk.Button(selection, text="Stop check", command=self.cancel_select_all)
@@ -549,7 +571,7 @@ class PhoneWindow:
         self.clear_all_button = ttk.Button(selection, text="Clear all", command=self.clear_all_contacts)
         self.clear_all_button.pack(side="left")
         paging = ttk.Frame(workspace, style="Panel.TFrame")
-        paging.grid(row=3, column=0, sticky="ew", pady=(0, self.space(12)))
+        paging.grid(row=4, column=0, sticky="ew", pady=(0, self.space(12)))
         self.previous_button = ttk.Button(paging, text="Previous", command=self.previous_contacts)
         self.previous_button.pack(side="left", padx=(0, self.space(12)))
         self.next_button = ttk.Button(paging, text="Next", command=self.next_contacts)
@@ -558,7 +580,7 @@ class PhoneWindow:
         self.page_label.pack(side="left", fill="x", expand=True)
         self.page_label.bind("<Configure>", lambda event: self.page_label.configure(wraplength=event.width))
         contact_frame = ttk.Frame(workspace, style="Panel.TFrame")
-        contact_frame.grid(row=4, column=0, sticky="nsew")
+        contact_frame.grid(row=5, column=0, sticky="nsew")
         self.contacts = ContactCards(contact_frame, font=(self.body_font, 12))
         scrollbar = ttk.Scrollbar(contact_frame, command=self.contacts.yview)
         self.contacts.configure(yscrollcommand=scrollbar.set)
@@ -566,9 +588,9 @@ class PhoneWindow:
         scrollbar.pack(side="right", fill="y")
         self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
         self.workspace_status_label = ttk.Label(workspace, textvariable=self.workspace_status, justify="left", style="Panel.TLabel")
-        self.workspace_status_label.grid(row=5, column=0, sticky="ew", pady=(self.space(12), self.space(12)))
+        self.workspace_status_label.grid(row=6, column=0, sticky="ew", pady=(self.space(12), self.space(12)))
         self.contact_actions = ttk.Frame(workspace, style="Panel.TFrame")
-        self.contact_actions.grid(row=6, column=0, sticky="ew")
+        self.contact_actions.grid(row=7, column=0, sticky="ew")
         self.review_button = ttk.Button(self.contact_actions, text="Continue", style="Primary.TButton",
             command=lambda: self.review(continue_to_account=self.native_active))
         self.review_button.grid(row=0, column=0, sticky="w", padx=(0, self.space(12)), pady=(0, self.space(12)))
@@ -625,6 +647,9 @@ class PhoneWindow:
                 status = "Return to your original account tab. If it is missing, choose Continue in browser. Keep this review open."
         self.workspace_coverage.set(coverage)
         self.workspace_status.set(status)
+        if hasattr(self, "contact_selected"):
+            self.contact_selected.configure(text=f"{len(self.state.selected_ids):,} selected")
+            self.contact_total.configure(text=f"of {self.state.total_contacts:,}")
         if hasattr(self, "contact_actions"):
             if self.state.can_change_selection and not self.native_selection_locked:
                 self.change_selection_button.grid()

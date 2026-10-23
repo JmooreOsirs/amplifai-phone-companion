@@ -165,6 +165,11 @@ class ContactCardsTkTests(unittest.TestCase):
         self.assertGreaterEqual(panel.winfo_reqheight(), label.winfo_reqheight() + 2 * panel.padding)
         panel.destroy()
         self.root.update_idletasks()
+        commands = set(self.root.tk.call("info", "commands"))
+        pending = widgets.RoundPanel(self.root)
+        pending.destroy()
+        self.root.update_idletasks()
+        self.assertEqual(set(self.root.tk.call("info", "commands")), commands)
 
 
 if __name__ == "__main__":

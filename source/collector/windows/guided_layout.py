@@ -35,7 +35,8 @@ def apply_style(window, font_path=None):
     style.configure("Muted.TLabel", foreground=MUTED)
     style.configure("Heading.TLabel", foreground=HEADING, font=("Arial", 21, "bold"))
     style.configure("Panel.Heading.TLabel", background=PANEL, foreground=HEADING, font=("Arial", 21, "bold"))
-    style.configure("Metric.TLabel", background=PANEL, foreground=LIME, font=("Arial", 24, "bold"))
+    style.configure("Selected.TLabel", background=PANEL, foreground=LIME, font=("Arial", 18, "bold"))
+    style.configure("Panel.Muted.TLabel", background=PANEL)
     style.configure("Journey.TLabel", font=("Arial", 11, "bold"), foreground=MUTED, padding=(space(8), space(10)))
     style.configure("Current.Journey.TLabel", foreground=LIME)
     style.configure("TButton", background=BORDER, foreground=HEADING, bordercolor=BORDER,

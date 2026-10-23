@@ -52,7 +52,7 @@ def require_bounds(root, widget, name):
 def workspace_geometry(root, view) -> dict:
     if not isinstance(view.contacts, ContactCards):
         raise RuntimeError("Contact workspace did not use the production contact-card component")
-    names = ("workspace_context", "search_entry", "search_button", "select_all_button",
+    names = ("contact_heading", "contact_selected", "contact_total", "workspace_context", "search_entry", "search_button", "select_all_button",
              "cancel_select_all_button", "clear_all_button", "previous_button", "next_button",
              "page_label", "contacts", "workspace_status_label", "contact_actions", "review_button",
              "pair_button", "details_button", "change_selection_button")
@@ -60,6 +60,13 @@ def workspace_geometry(root, view) -> dict:
                if getattr(view, name).winfo_ismapped()}
     if "contacts" not in records or "contact_actions" not in records:
         raise RuntimeError("Contact grid or action dock is missing")
+    for name in ("contact_heading", "contact_selected", "contact_total"):
+        if name not in records or records[name][2] < getattr(view, name).winfo_reqwidth():
+            raise RuntimeError(f"Contact heading or selection count is clipped: {name}")
+    if (str(view.contact_heading.cget("text")) != "Choose contacts"
+            or str(view.contact_selected.cget("text")) != f"{len(view.state.selected_ids):,} selected"
+            or str(view.contact_total.cget("text")) != f"of {view.state.total_contacts:,}"):
+        raise RuntimeError("Contact heading or count does not match the current selection")
     line = font.Font(root=root, font=view.contacts.cget("font")).metrics("linespace")
     if records["contacts"][3] < 3 * line:
         raise RuntimeError("Contact workspace leaves no readable contact card viewport")
@@ -101,6 +108,9 @@ def computed_styles(root, view) -> dict:
         "Heading.TLabel": {"foreground": app.HEADING, "font": ("Arial", "21", "bold")},
         "Panel.Heading.TLabel": {"background": app.PANEL, "foreground": app.HEADING,
                                  "font": ("Arial", "21", "bold")},
+        "Selected.TLabel": {"background": app.PANEL, "foreground": app.LIME,
+                             "font": ("Arial", "18", "bold")},
+        "Panel.Muted.TLabel": {"background": app.PANEL, "foreground": app.MUTED},
         "Primary.TButton": {"background": app.LIME, "foreground": app.BACKGROUND},
         "TButton": {"background": app.BORDER, "foreground": app.HEADING, "bordercolor": app.BORDER,
                     "padding": (spacing(16), spacing(10)), "font": ("Arial", "11", "bold")},
