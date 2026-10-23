@@ -183,7 +183,7 @@ class ContactCardsTkTests(unittest.TestCase):
         self.root.deiconify()
         self.cards.delete(0, tk.END)
         for index in range(200):
-            self.cards.insert(tk.END, "Synthetic long contact name for a tall review card · phone ending 0123")
+            self.cards.insert(tk.END, "Synthetic long contact name with several additional words to exercise scrolling beyond the native window coordinate boundary · phone ending 0123")
             self.cards.set_contact_tools(index, review=True, reason="Company or organization", marked=False,
                                          organizing=True, mark_command=lambda _index: None, move_command=lambda *_args: None)
         self.root.update()
