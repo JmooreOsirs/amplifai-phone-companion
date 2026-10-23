@@ -1,0 +1,24 @@
+{
+  "authorityCommit": "dfc80751b8a4a5b16fb67833727130fb2ec3d44f",
+  "files": {
+    "contact_oracle.swift": "0141b002b4f09ec3ea04aa2a3409097ac383e92fde4915423f7697ef15befc99",
+    "unicode_properties.swift": "0b9a48b19e65ec6043aa6fea3615517022fec44fbfab20ebf74e0e8633d608de",
+    "unicode_boundaries.swift": "573c8ac10f9d4ea6ad212d58de456703680c765ea9f480bcf525428fd9b63a3e",
+    "contacts.json": "bfdb72534f7bc4d5fef3e94e6ca355873517116c3fa4b0a8e0beec3bf27aa65f",
+    "boundaries.json": "61d2791be02133188a09685b659b32099667b33bfcba28a392d5e4a07bc5945b",
+    "version-boundaries.json": "82093680a625ad9a4e5f6fe637cbf59a8d5269079f5e9f81cf7e3adaf0b6aa57",
+    "unicode-ranges.json": "0283e1c0d57bda9d8438843306cc87bd6050298a5e7e8243062ca775bdd16ad4"
+  },
+  "originalCaptureSha256": {
+    "scalar": "346f41524ca888b89411b2693bbb65e3f43906df9f6bcb3afc2c08858dca4d09",
+    "boundary": "42b7693131ff3d4c3c7df806df11d87d4497fe2a512fcc9c3674197db9bdd913"
+  },
+  "runtime": "Apple Swift6.0.3 / Foundation en_US; Python3.12 Unicode15.0.0 table baseline",
+  "purpose": "Synthetic local name/group/search equivalence and reproducible Unicode property tables; not universal locale equivalence",
+  "reproduce": [
+    "python3.12 source/collector/windows/tests/oracle/generate_contact_unicode.py",
+    "swift source/collector/windows/tests/oracle/contact_oracle.swift source/collector/windows/tests/oracle/contacts.json",
+    "swift source/collector/windows/tests/oracle/unicode_properties.swift",
+    "swift source/collector/windows/tests/oracle/unicode_boundaries.swift"
+  ]
+}

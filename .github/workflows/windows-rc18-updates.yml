@@ -8,7 +8,7 @@ on:
         required: true
         default: build
         type: choice
-        options: [build, handoff, parity-ui, parity-normal-open, native-delivery, native-setup, guided-ui]
+        options: [build, handoff, parity-ui, parity-normal-open, native-delivery, native-setup, guided-diagnostic, guided-ui]
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   parity_ui:
-    if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open' || inputs.phase == 'native-delivery' || inputs.phase == 'native-setup' || inputs.phase == 'guided-ui'
+    if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open' || inputs.phase == 'native-delivery' || inputs.phase == 'native-setup' || inputs.phase == 'guided-diagnostic' || inputs.phase == 'guided-ui'
     runs-on: windows-2025
     timeout-minutes: 20
     env:
@@ -71,16 +71,16 @@ jobs:
         if: inputs.phase == 'parity-ui'
         shell: pwsh
         run: |
-          python -m unittest test_startup_geometry test_visible_desktop test_brand_widgets test_journey test_pump_cadence test_contact_workspace test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
+          python -m unittest test_startup_geometry test_visible_desktop test_brand_widgets test_journey test_pump_cadence test_contact_workspace test_contact_groups test_contact_group_session test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify native setup, run, app and discovery state boundaries
-        if: inputs.phase == 'native-setup' || inputs.phase == 'guided-ui'
+        if: inputs.phase == 'native-setup' || inputs.phase == 'guided-diagnostic' || inputs.phase == 'guided-ui'
         shell: pwsh
         run: |
-          python -m unittest test_native_setup test_native_run test_native_app test_companion_status test_contact_workspace test_brand_widgets test_journey test_pump_cadence test_startup_geometry test_visible_desktop -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetupTests.log')
+          python -m unittest test_native_setup test_native_run test_native_app test_companion_status test_contact_workspace test_contact_groups test_contact_group_session test_brand_widgets test_journey test_pump_cadence test_startup_geometry test_visible_desktop -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetupTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Render and freeze the complete guided journey on the actual Windows desktop
-        if: inputs.phase == 'parity-ui' || inputs.phase == 'native-setup' || inputs.phase == 'guided-ui'
+      - name: Render the guided journey on the actual Windows desktop; freeze only the full gate
+        if: inputs.phase == 'parity-ui' || inputs.phase == 'native-setup' || inputs.phase == 'guided-diagnostic' || inputs.phase == 'guided-ui'
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiGuidedQualification'
@@ -105,8 +105,11 @@ jobs:
           path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
           '@ | python - $desktopMode
             if ($LASTEXITCODE -ne 0) { throw 'Guided viewport desktop preparation failed' }
-            python source/collector/windows/tests/render_guided_journey.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output 'source-render')
+            $sourceArgs = @('source/collector/windows/tests/render_guided_journey.py', '--source', 'source', '--logo', 'source/public/brand/amplifai-by-nexus-original.png', '--output', (Join-Path $output 'source-render'))
+            if ('${{ inputs.phase }}' -eq 'guided-diagnostic') { $sourceArgs += '--collect-all-failures' }
+            python @sourceArgs
             if ($LASTEXITCODE -ne 0) { throw 'Guided source UI qualification failed' }
+            if ('${{ inputs.phase }}' -ne 'guided-diagnostic') {
             python source/collector/windows/tests/frozen_guided_fixture.py --source source --output (Join-Path $output 'frozen')
             if ($LASTEXITCODE -ne 0) { throw 'Isolated frozen guided UI qualification failed' }
             @'
@@ -115,10 +118,10 @@ jobs:
           output = Path(sys.argv[1])
           source = json.loads((output / 'source-render/render-guided-receipt.json').read_text(encoding='utf-8'))
           frozen = json.loads((output / 'frozen/render/render-guided-receipt.json').read_text(encoding='utf-8'))
-          for key in ('guiSourceSha256', 'productionIdentity', 'computedStylesByViewport', 'windowLifecycle'):
+          for key in ('guiSourceSha256', 'sourceProof', 'productionIdentity', 'computedStylesByViewport', 'windowLifecycle'):
               if source[key] != frozen[key]:
                   raise RuntimeError('Source/frozen guided evidence differs: ' + key)
-          fields = ('scenario', 'stage', 'panel', 'width', 'height', 'tkScaling', 'geometry')
+          fields = ('scenario', 'stage', 'panel', 'width', 'height', 'tkScaling', 'geometry', 'contactGroups', 'selectedContacts', 'accountSaveAcknowledged')
           expected = [{key: item[key] for key in fields} for item in source['screenshots']]
           actual = [{key: item[key] for key in fields} for item in frozen['screenshots']]
           if expected != actual:
@@ -126,6 +129,7 @@ jobs:
           (output / 'source-frozen-comparison.json').write_text(json.dumps({'status': 'matched-source-and-frozen-guided-stages', 'screenshotsCompared': len(expected), 'guiSourceSha256': source['guiSourceSha256'], 'geometryAndResolvedStylesMatch': True}, indent=2) + '\n', encoding='utf-8')
           '@ | python - $output
             if ($LASTEXITCODE -ne 0) { throw 'Guided source/frozen evidence differs' }
+            }
           } finally {
             if (Test-Path $desktopMode) {
               python source/collector/windows/tests/visible_desktop.py --restore $desktopMode

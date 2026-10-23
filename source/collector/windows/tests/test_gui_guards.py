@@ -34,6 +34,9 @@ class DisabledWidget:
     def selection_set(self, _index):
         pass
 
+    def set_contact_tools(self, index, **options):
+        self.contact_tools = (index, options)
+
 
 def source_window():
     toolkit = types.ModuleType("tkinter")
@@ -295,6 +298,8 @@ class GuiGuardsTests(unittest.TestCase):
             "availableCalls": 2, "availableMessages": 3, "missing": []})
         window.pump()
         self.assertEqual(window.contacts.values, ["Avery Lindqvist · phone ending 0123"])
+        self.assertFalse(window.contacts.contact_tools[1]["review"])
+        self.assertEqual(window.state.selected_ids, {1})
 
     def test_failure_clears_an_already_disabled_password_widget(self):
         window = source_window()

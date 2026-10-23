@@ -3,21 +3,24 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import platform
+import subprocess
 import sys
 import time
+import traceback
 from tkinter import font, ttk
 from unittest.mock import Mock, patch
 
 import app
-from build_windows_candidate import gui_digest
+from build_windows_candidate import FONT, GUI_FILES, LOCK, LOGO, gui_digest
 from journey import journey
 from native_setup import DISCLOSURE
-from native_setup_fixture import (collecting, exercise_controls, require_full_text_scroll,
+from native_setup_fixture import (collecting, exercise_controls, exercise_group_controls, require_full_text_scroll,
                                   scenarios, text_scroll_evidence)
 from render_candidate import capture, create_root, descendants, place_viewport, visible_snapshot
 from render_contact_workspace import (bounds, check_keyboard, computed_styles, keyboard_traversal,
@@ -40,6 +43,10 @@ EXPECTED_STAGE = {
     "authority-paused": "attention", "authority-refused": "attention", "authority-cancelled": "attention",
     "authority-expired": "attention", "handoff-expired": "attention",
     "legacy-awaiting-destination": "save", "legacy-pending-destination": "save",
+    "group-main": "contacts", "group-review": "contacts", "group-all": "contacts",
+    "group-empty-review": "contacts", "group-empty-search": "contacts", "group-next-page": "contacts",
+    "group-scoped-selection": "contacts", "group-organize-marked": "contacts", "group-moved": "contacts",
+    "group-undo": "contacts", "group-continue-pending": "save", "group-bind-pending": "save",
 }
 
 
@@ -84,12 +91,23 @@ def assert_stage(root, view, name):
     if visible != expected or bool(view.contact_workspace.winfo_viewable()) != (expected_panel == "contacts"):
         raise RuntimeError(f"Unrelated stage is visible in {name}: {visible}")
     labels = [item.cget("text") for item in view.journey_steps]
-    if labels != ["1  Approve", "2  Collect", "3  Choose", "4  Save & report"] or any(isinstance(child, ttk.Button) for child in view.navigation.winfo_children()):
+    if labels != ["Approve", "Collect", "Choose", "Save & report"] or any(isinstance(child, ttk.Button) for child in descendants(view.navigation)):
         raise RuntimeError("The guided four-step journey reverted to workspace navigation")
+    step = 4 if current.stage == "complete" else current.step
+    if view.journey.current != step:
+        raise RuntimeError("Connected journey is not on the current stage")
     for index, item in enumerate(view.journey_steps):
-        require_bounds(root, item, "journey step")
-        if (item.cget("style") == "Current.Journey.TLabel") != (index == current.step):
+        visible_label = not view.journey._compact or index == min(3, step)
+        if bool(item.winfo_viewable()) != visible_label:
+            raise RuntimeError("Compact journey hid the current label or exposed unrelated labels")
+        if visible_label:
+            require_bounds(root, item, "journey step")
+        require_bounds(root, view.journey.circles[index], "journey circle")
+        if (item.cget("style") == "Current.Journey.TLabel") != (index <= step):
             raise RuntimeError("Journey indicator does not match the active stage")
+    for connector in view.journey.connectors:
+        if connector.winfo_width() < 1 or not connector.winfo_viewable():
+            raise RuntimeError("The connected journey lost a stage connector")
     for attribute in ("legacy_consent", "agreement", "approve", "connect"):
         widget = getattr(view, attribute, None)
         if widget is not None and widget.winfo_viewable():
@@ -104,6 +122,22 @@ def assert_stage(root, view, name):
                 raise RuntimeError("Unrelated approval/selection control is visible while collecting")
         if bool(view.password.winfo_viewable()) != (name == "password"):
             raise RuntimeError("Backup password entry is shown outside the password stage")
+        if [item.cget("text") for item in view.collection_stage_labels] != ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]:
+            raise RuntimeError("Collection lost its local substage hierarchy")
+        active = 2 if name in ("password", "processing") else 1 if name == "collecting" else 0
+        if view.collection_eyebrow.cget("text") != f"ON THIS PC · STAGE {active + 1} OF 4":
+            raise RuntimeError("Collection substage does not describe the current local operation")
+        for index, item in enumerate(view.collection_stage_labels):
+            expected_style = "Completed.Stage.TLabel" if index < active else "Active.Stage.TLabel" if index == active else "Stage.TLabel"
+            if item.cget("style") != expected_style or not item.winfo_viewable():
+                raise RuntimeError("Collection substage indicator is incorrect")
+        metric = name != "connecting"
+        if bool(view.collection_metric_well.winfo_viewable()) != metric:
+            raise RuntimeError("Collection invents or hides its actual byte measurement")
+        if metric:
+            expected_value, expected_label = ("774.8 MiB", "PROCESSED") if name == "processing" else ("67.2 GiB", "RECEIVED")
+            if view.collection_metric_value.cget("text") != expected_value or view.collection_metric_label.cget("text") != expected_label:
+                raise RuntimeError("Received and locally processed bytes were conflated")
     if current.stage == "approval":
         text = view.native_disclosure.get("1.0", "end-1c")
         if (DISCLOSURE["sentences"][0] not in text
@@ -117,20 +151,32 @@ def assert_stage(root, view, name):
 
 def stage_geometry(root, view, panel):
     if panel == "contacts":
-        return workspace_geometry(root, view)
+        records = workspace_geometry(root, view)
+        records["journey"] = [bounds(root, circle) for circle in view.journey.circles]
+        return records
     container = view.stage_panels[panel]
     x, _y, width, _height = bounds(root, container)
     if x < 0 or width <= 1 or x + width > root.winfo_width():
         raise RuntimeError("Current stage panel is clipped horizontally")
-    records = {"panel": bounds(root, container), "recovery_toggle": require_bounds(root, view.recovery_toggle, "recovery toggle")}
+    records = {"panel": bounds(root, container), "recovery_toggle": require_bounds(root, view.recovery_toggle, "recovery toggle"),
+               "journey": [bounds(root, circle) for circle in view.journey.circles]}
     # Scrollable setup/recovery controls must be horizontally sound and become
     # fully visible when reached by native keyboard focus.
     for widget in descendants(container):
-        if isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Entry)) and widget.winfo_viewable():
+        if isinstance(widget, (ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.Entry)) and widget.winfo_viewable():
             box = bounds(root, widget)
             if box[0] < x or box[0] + box[2] > x + width or box[2] < widget.winfo_reqwidth():
                 raise RuntimeError(f"Current-stage control is horizontally clipped: {widget}: {box}")
             records[str(widget)] = box
+    if panel == "collection":
+        for name in ("collection_heading", "collection_detail", "collection_eyebrow", "collection_illustration_well",
+                     "collection_stages", "collection_metric_well", "collection_metric_value", "collection_next"):
+            widget = getattr(view, name)
+            if widget.winfo_viewable():
+                box = bounds(root, widget)
+                if box[0] < x or box[0] + box[2] > x + width:
+                    raise RuntimeError(f"Collection hierarchy is horizontally clipped: {name}: {box}")
+                records[name] = box
     return records
 
 
@@ -163,6 +209,59 @@ def assert_actions(view, name):
     if name == "collecting" and ("backup transfer only" not in view.progress_caption.get()
                                   or "not been read" not in view.coverage_status.get()):
         raise RuntimeError("Device 100% is incorrectly presented as complete source or account coverage")
+
+
+def assert_group_workspace(root, view, name):
+    state, workspace = view.state, view.state.contact_workspace
+    main = set(range(1, 406 if name == "group-empty-review" else 401))
+    review = set(range(401, 406)) if name != "group-empty-review" else set()
+    if name == "group-moved":
+        main.remove(1)
+        review.add(1)
+    if (workspace.known_ids != set(range(1, 406)) or workspace.main_ids != main or workspace.review_ids != review
+            or state.selected_ids != main or len(state.contacts) > 200
+            or state.contacts != list(workspace.visible)):
+        raise RuntimeError("Group membership, preserved selection, or bounded current page differs from the synthetic review")
+    group = "Review" if name in ("group-review", "group-empty-review") else "All" if name == "group-all" else "Main"
+    if workspace.group != group:
+        raise RuntimeError("The displayed contact group changed unexpectedly")
+    expected_marks = {1, 201} if name == "group-organize-marked" else set()
+    if state.marked_group_ids != expected_marks:
+        raise RuntimeError("Organizing marks were lost or confused with contact selection")
+    expected_page = 200 if name in ("group-next-page", "group-scoped-selection", "group-organize-marked") else 0
+    if workspace.page_start != expected_page:
+        raise RuntimeError("Group/search paging did not retain the expected local page")
+    if name in ("group-empty-review", "group-empty-search"):
+        if state.contacts or not view.contact_empty_label.winfo_viewable():
+            raise RuntimeError("Empty group or search has no visible explanation")
+        require_bounds(root, view.contact_empty_label, "empty contact explanation")
+        text = view.contact_empty_label.cget("text").lower()
+        if not text or ("review" not in text if name == "group-empty-review" else "match" not in text):
+            raise RuntimeError("Empty group/search explanation does not describe the current scope")
+    locked = name in ("group-continue-pending", "group-bind-pending")
+    controls = (*view.group_buttons.values(), view.select_all_button, view.organize_button,
+                view.scope_select_button, view.scope_clear_button, view.scope_menu_button, view.search_entry)
+    if locked and (not view.native_selection_locked or any(not item.instate(("disabled",)) for item in controls)):
+        raise RuntimeError("Pending Continue/bind leaves an editable group or selection control")
+    if not locked:
+        for item in (*view.group_buttons.values(), view.organize_button, view.select_all_button):
+            if not item.winfo_viewable() or item.instate(("disabled",)):
+                raise RuntimeError("An editable contact review hides or disables group controls")
+        for group_name, button in view.group_buttons.items():
+            if (button.cget("style") == "Selected.Group.TButton") != (group_name == group):
+                raise RuntimeError("Selected group has no accurate native state")
+        for contact, card in zip(state.contacts, view.contacts._cards, strict=True):
+            if card.variable.get() != (contact["id"] in state.selected_ids):
+                raise RuntimeError("Contact checkbox disagrees with the preserved selection")
+            if card.marked.get() != (contact["id"] in expected_marks):
+                raise RuntimeError("Contact move mark disagrees with independent organization state")
+            if bool(card.mark_button.winfo_viewable()) != (name == "group-organize-marked"):
+                raise RuntimeError("Quiet contact cards expose move marks outside Organize")
+    return {"group": workspace.group, "query": workspace.query, "mainCount": len(main), "reviewCount": len(review),
+            "filteredCount": workspace.filtered_count, "pageStart": workspace.page_start,
+            "visibleIds": [item["id"] for item in state.contacts], "selectedCount": len(state.selected_ids),
+            "markedIds": sorted(state.marked_group_ids), "undoAvailable": state.group_undo is not None,
+            "nativeSelectionLocked": locked}
 
 
 def measure_pump(root, view):
@@ -236,95 +335,245 @@ def measure_pump(root, view):
     return measurements
 
 
+def widget_diagnostic(root, widget):
+    record = {"widget": str(widget), "class": widget.winfo_class(),
+              "pythonType": type(widget).__name__, "bounds": bounds(root, widget),
+              "requestedSize": [widget.winfo_reqwidth(), widget.winfo_reqheight()],
+              "mapped": bool(widget.winfo_ismapped()), "viewable": bool(widget.winfo_viewable())}
+    for key in ("takefocus", "state", "text", "style", "scrollregion"):
+        if key in widget.keys():
+            record[key] = str(widget.cget(key))[:512]
+    record["bindings"] = list(widget.bind())
+    if hasattr(widget, "yview"):
+        record["yview"] = list(widget.yview())
+    return record
+
+
+def failure_context(root, view):
+    """Describe only this runner-owned synthetic window, including clipping ancestors."""
+    result = {}
+    readers = {
+        "clientSize": lambda: [root.winfo_width(), root.winfo_height()],
+        "keyboardTraversal": lambda: getattr(root, "qualification_keyboard_trace", []),
+        "tkFocusOK": lambda: str(root.tk.call("info", "body", "::tk::FocusOK")),
+        "controls": lambda: [widget_diagnostic(root, widget) for widget in descendants(root)
+                             if isinstance(widget, (ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.Entry))],
+    }
+    def focus_chain():
+        widget = root.focus_get()
+        chain = []
+        while widget is not None:
+            chain.append(widget_diagnostic(root, widget))
+            widget = widget.master
+        return chain
+    readers["focusedWidgetAndAncestors"] = focus_chain
+    if view is not None:
+        readers["scrollViewports"] = lambda: {
+            name: widget_diagnostic(root, widget) for name, widget in
+            (("details", view.details_canvas), ("contacts", view.contacts._canvas))}
+    for name, reader in readers.items():
+        try:
+            result[name] = reader()
+        except Exception as error:
+            result[name] = {"diagnosticError": f"{type(error).__name__}: {error}"}
+    return result
+
+
+def source_proof(source, frozen_identity):
+    paths = (*GUI_FILES, FONT, LOGO, LOCK, "collector/windows/tests/fixtures/native-setup-v2.json",
+             *("collector/windows/tests/" + name for name in
+               ("render_guided_journey.py", "render_contact_workspace.py", "native_setup_fixture.py", "frozen_guided_fixture.py")))
+    return {"sourceCommit": frozen_identity["sourceCommit"] if frozen_identity else
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=source, text=True).strip(),
+            "sha256ByPath": {path: hashlib.sha256((source / path).read_bytes()).hexdigest() for path in paths}}
+
+
 def render(args, *, contacts_only=False, frozen_identity=None):
     if sys.platform != "win32" or os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows":
         raise RuntimeError("Guided fixture requires the disposable actual Windows CI desktop")
+    collect_all = bool(getattr(args, "collect_all_failures", False))
+    if collect_all and frozen_identity:
+        raise RuntimeError("Collect-all diagnostics are source-only; frozen qualification remains strict")
     args.output.mkdir(parents=True, exist_ok=False)
+    identity = source_proof(args.source, frozen_identity)
+    (args.output / "source-proof.json").write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
     records, styles, interactions, lifecycle, performance = [], [], [], [], None
-    for width, height, scaling in VIEWPORTS:
-        root = create_root()
-        errors = []
-        root.report_callback_exception = lambda kind, value, trace: errors.append(f"{kind.__name__}: {value}")
+    checks, failures, cases = [], [], []
+    root = view = None
+    errors = []
+    width = height = scaling = None
+
+    def check(name, phase, operation, *, callback_errors=True):
+        metadata = {"scenario": name, "phase": phase, "viewport": [width, height], "tkScaling": scaling}
+        before_callbacks = len(errors)
         try:
+            result = operation()
+            if callback_errors and len(errors) > before_callbacks:
+                raise RuntimeError("Tk callback failed: " + "; ".join(errors[before_callbacks:]))
+        except Exception as error:
+            if not collect_all and getattr(error, "_guided_diagnostic_recorded", False):
+                raise
+            if not collect_all:
+                error._guided_diagnostic_recorded = True
+            failure = {**metadata, "errorType": type(error).__name__, "error": str(error),
+                       "traceback": traceback.format_exc(), "callbackErrors": errors[before_callbacks:]}
+            if root is not None:
+                failure["window"] = failure_context(root, view)
+                try:
+                    failure["capture"] = capture(root, args.output,
+                        f"FAILED-{width}x{height}-scale-{scaling:.2f}-{name}-{phase}")
+                except Exception as capture_error:
+                    # Never mask the original failure when the visible-window guard
+                    # correctly refuses an unavailable or off-desktop capture.
+                    failure["captureError"] = f"{type(capture_error).__name__}: {capture_error}"
+            failures.append(failure)
+            checks.append({**metadata, "passed": False, "failureIndex": len(failures) - 1})
+            for filename, contents in (("failure.json", failure), ("failures.json", failures)):
+                (args.output / filename).write_text(json.dumps(contents, indent=2) + "\n", encoding="utf-8")
+            print(json.dumps({**metadata, "failed": str(error)}), flush=True)
+            if not collect_all:
+                raise
+            return False, None
+        checks.append({**metadata, "passed": True})
+        return True, result
+
+    for width, height, scaling in VIEWPORTS:
+        root = view = None
+        errors = []
+        created, root = check("viewport", "create-root", create_root)
+        if not created:
+            continue
+        root.report_callback_exception = lambda kind, value, trace: errors.append(f"{kind.__name__}: {value}")
+
+        def run_viewport():
+            nonlocal view, performance
             root.tk.call("tk", "scaling", scaling)
-            with synthetic_view(root, args.logo) as view:
+            with synthetic_view(root, args.logo) as current_view:
+                view = current_view
                 place_viewport(root, width, height)
                 if not contacts_only:
+                    passed, result = check("viewport", "button-interactions", lambda: exercise_controls(view))
                     interactions.append({"viewport": [width, height], "tkScaling": scaling,
-                                         "checks": exercise_controls(view)})
+                                         "passed": passed, "checks": result})
+                    if (width, height, scaling) == VIEWPORTS[0]:
+                        passed, result = check("viewport", "group-button-interactions", lambda: exercise_group_controls(view))
+                        interactions.append({"viewport": [width, height], "tkScaling": scaling,
+                                             "kind": "contact-groups", "passed": passed, "checks": result})
                 for name, native, state in scenarios():
                     if contacts_only and name not in ("contacts", "contacts-empty", "contacts-partial", "contacts-select-all", "reviewed-contacts"):
                         continue
-                    view.native_worker = SyntheticWorker()
-                    view.native, view.state = native, state
-                    view.native_checked.set(name == "approval-checked")
-                    view._visible_workspace = "setup"
-                    view._journey_stage = None
-                    view.render_contacts()
-                    view.refresh()
-                    if name == "recovery":
-                        view.show_workspace("details")
-                    root.update()
-                    try:
-                        current, panel = assert_stage(root, view, name)
-                        assert_actions(view, name)
-                        geometry = stage_geometry(root, view, panel)
-                    except Exception as error:
-                        failure = capture(root, args.output, f"FAILED-{width}x{height}-scale-{scaling:.2f}-{name}")
-                        failure.update(scenario=name, error=str(error), controls=[
-                            {"widget": str(widget), "mapped": bool(widget.winfo_ismapped()),
-                             "viewable": bool(widget.winfo_viewable())}
-                            for widget in descendants(root)
-                            if isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Entry))])
-                        (args.output / "failure.json").write_text(json.dumps(failure, indent=2) + "\n", encoding="utf-8")
-                        raise
-                    focus, scroll = [], None
-                    if panel == "contacts":
-                        selected = set(state.selected_ids)
-                        view.contacts.yview_moveto(1)
+                    case_start = len(failures)
+                    stage = EXPECTED_STAGE[name]
+                    panel = ("details" if name == "recovery" or stage == "attention" else
+                             "save" if stage == "complete" else "approval" if stage == "prepare" else stage)
+                    def prepare():
+                        root.qualification_keyboard_trace = []
+                        view.native_worker = SyntheticWorker()
+                        view.native, view.state = native, state
+                        view.native_checked.set(name == "approval-checked")
+                        view.organizing = name == "group-organize-marked"
+                        view._visible_workspace = "setup"
+                        view._journey_stage = None
+                        view.render_contacts()
+                        view.refresh()
+                        if name == "recovery":
+                            view.show_workspace("details")
                         root.update()
-                        if geometry != stage_geometry(root, view, panel) or selected != state.selected_ids:
-                            raise RuntimeError("Contact scroll moved the fixed action dock or changed selection")
-                        if len(state.contacts) > 20 and view.contacts.yview()[0] <= 0:
-                            raise RuntimeError("Contact cards did not scroll independently")
-                        if name == "contacts":
-                            focus = check_keyboard(root, view)
-                        view.contacts.yview_moveto(0)
-                    elif name == "approval-checked":
-                        focus = keyboard_traversal(root, (view.native_agreement, view.native_approve, view.native_cancel),
-                                                   start=view.native_disclosure)
-                    if name == "long-scope-error":
-                        content = view.native_disclosure.get("1.0", "end-1c")
-                        scroll = text_scroll_evidence(root, view.native_disclosure)
-                        scroll["containsFullScopeAndError"] = all(value in content for value in
-                            (native.claim.scope.email, native.claim.scope.course, native.message))
-                        require_full_text_scroll(scroll)
-                        view.native_disclosure.yview_moveto(0)
-                    view.details_canvas.yview_moveto(0)
-                    root.update()
-                    record = capture(root, args.output, f"guided-{width}x{height}-scale-{scaling:.2f}-{name}")
-                    record.update(scenario=name, stage=current.stage, panel=panel, geometry=geometry,
-                                  tkScaling=float(root.tk.call("tk", "scaling")), keyboardTraversal=focus,
-                                  scrollEvidence=scroll, selectedContacts=len(state.selected_ids),
-                                  accountSaveAcknowledged=state.saved_acknowledged)
-                    records.append(record)
-                    if errors:
-                        raise RuntimeError("Tk callback failed: " + "; ".join(errors))
-                styles.append({"viewport": [width, height], "tkScaling": float(root.tk.call("tk", "scaling")),
-                               "nativeWindowDpi": visible_snapshot(root)["windowDpi"], "styles": computed_styles(root, view)})
+                    prepared, _ = check(name, "render", prepare)
+                    geometry, focus, scroll, groups = None, [], None, None
+                    if prepared:
+                        check(name, "stage", lambda: assert_stage(root, view, name))
+                        check(name, "actions", lambda: assert_actions(view, name))
+                        if name.startswith("group-"):
+                            _, groups = check(name, "contact-groups", lambda: assert_group_workspace(root, view, name))
+                        _, geometry = check(name, "geometry", lambda: stage_geometry(root, view, panel))
+                        if panel == "contacts":
+                            def contact_scroll():
+                                selected = set(state.selected_ids)
+                                dock = {key: bounds(root, getattr(view, key)) for key in
+                                        ("contacts", "contact_actions", "workspace_status_label")}
+                                view.contacts.yview_moveto(1)
+                                root.update()
+                                if dock != {key: bounds(root, getattr(view, key)) for key in dock} or selected != state.selected_ids:
+                                    raise RuntimeError("Contact scroll moved the fixed action dock or changed selection")
+                                if len(state.contacts) > 20 and view.contacts.yview()[0] <= 0:
+                                    raise RuntimeError("Contact cards did not scroll independently")
+                                view.contacts.yview_moveto(0)
+                                root.update()
+                            check(name, "contact-scroll", contact_scroll)
+                            if name in ("contacts", "group-main", "group-review", "group-empty-search", "group-organize-marked"):
+                                _, focus = check(name, "keyboard", lambda: check_keyboard(root, view))
+                        elif name == "approval-checked":
+                            _, focus = check(name, "keyboard", lambda: keyboard_traversal(root,
+                                (view.native_agreement, view.native_approve, view.native_cancel), start=view.native_disclosure))
+                        elif panel == "collection":
+                            required = [view.stop_button, view.collection_details_button]
+                            if name == "password":
+                                required.extend((view.password, view.password_button))
+                            _, focus = check(name, "keyboard", lambda: keyboard_traversal(root, required, start=view.stop_button))
+                            def collection_scroll():
+                                before = list(view.details_canvas.yview())
+                                view.details_canvas.yview_moveto(1)
+                                root.update()
+                                return {"before": before, "after": list(view.details_canvas.yview()),
+                                        "lastExplanation": require_bounds(root, view.collection_next, "collection next step")}
+                            _, scroll = check(name, "collection-scroll", collection_scroll)
+                        if name == "long-scope-error":
+                            def disclosure_scroll():
+                                content = view.native_disclosure.get("1.0", "end-1c")
+                                evidence = text_scroll_evidence(root, view.native_disclosure)
+                                evidence["containsFullScopeAndError"] = all(value in content for value in
+                                    (native.claim.scope.email, native.claim.scope.course, native.message))
+                                require_full_text_scroll(evidence)
+                                view.native_disclosure.yview_moveto(0)
+                                return evidence
+                            _, scroll = check(name, "disclosure-scroll", disclosure_scroll)
+                        def reset_scroll():
+                            view.contacts.yview_moveto(0)
+                            view.details_canvas.yview_moveto(0)
+                            root.update()
+                        check(name, "reset-scroll", reset_scroll)
+                    # Capture is deliberately inside the diagnostic boundary too.
+                    captured, record = check(name, "capture", lambda: capture(root, args.output,
+                        f"guided-{width}x{height}-scale-{scaling:.2f}-{name}"))
+                    passed = prepared and len(failures) == case_start
+                    cases.append({"scenario": name, "viewport": [width, height], "tkScaling": scaling, "passed": passed})
+                    if captured:
+                        record.update(scenario=name, stage=journey(view.state, view.native).stage, panel=panel,
+                                      geometry=geometry, tkScaling=float(root.tk.call("tk", "scaling")),
+                                      keyboardTraversal=focus, scrollEvidence=scroll, selectedContacts=len(state.selected_ids),
+                                      accountSaveAcknowledged=state.saved_acknowledged, contactGroups=groups, qualified=passed)
+                        records.append(record)
+                def resolve_styles():
+                    return {"viewport": [width, height], "tkScaling": float(root.tk.call("tk", "scaling")),
+                            "nativeWindowDpi": visible_snapshot(root)["windowDpi"], "styles": computed_styles(root, view)}
+                passed, resolved = check("viewport", "computed-styles", resolve_styles)
+                if passed:
+                    styles.append(resolved)
                 if not contacts_only and (width, height, scaling) == VIEWPORTS[0]:
-                    performance = measure_pump(root, view)
-                if errors:
-                    raise RuntimeError("Tk callback failed: " + "; ".join(errors))
+                    _, performance = check("viewport", "pump", lambda: measure_pump(root, view))
+        try:
+            check("viewport", "window", run_viewport, callback_errors=False)
         finally:
-            root.destroy()
-            pending_callbacks = root.tk.splitlist(root.tk.call("after", "info"))
-            if pending_callbacks:
-                raise RuntimeError("Destroyed guided window retained scheduled callbacks: " + str(pending_callbacks))
-            lifecycle.append({"viewport": [width, height], "tkScaling": scaling, "callbacksAfterDestroy": 0})
-    receipt = {"schema": 2, "status": "actual-windows-frozen-synthetic-guided-ui" if frozen_identity else "actual-windows-source-synthetic-guided-ui",
+            view = None
+            def destroy():
+                root.destroy()
+                pending_callbacks = root.tk.splitlist(root.tk.call("after", "info"))
+                if pending_callbacks:
+                    raise RuntimeError("Destroyed guided window retained scheduled callbacks: " + str(pending_callbacks))
+                return {"viewport": [width, height], "tkScaling": scaling, "callbacksAfterDestroy": 0}
+            passed, destroyed = check("viewport", "destroy", destroy)
+            if passed:
+                lifecycle.append(destroyed)
+
+    status = ("actual-windows-source-guided-diagnostic" if collect_all else
+              "actual-windows-frozen-synthetic-guided-ui" if frozen_identity else "actual-windows-source-synthetic-guided-ui")
+    receipt = {"schema": 3, "status": status, "passed": not failures, "collectAllFailures": collect_all,
+               "sourceProof": identity, "plannedScenarioCount": (5 if contacts_only else len(EXPECTED_STAGE)) * len(VIEWPORTS),
                "guiSourceSha256": gui_digest(args.source), "productionIdentity": {"version": app.VERSION, "build": app.BUILD,
                "channel": app.CHANNEL, "bundleId": app.BUNDLE_ID}, "screenshots": records, "computedStylesByViewport": styles,
+               "scenarioResults": cases, "checks": checks, "failureCount": len(failures),
+               "failuresFile": "failures.json" if failures else None,
                "buttonInteractions": interactions, "windowLifecycle": lifecycle,
                "pumpMeasurement": performance, "python": platform.python_version(),
                "frozenFixture": frozen_identity, "realHelperCreated": False, "realAuthorityTransportCreated": False,
@@ -333,7 +582,10 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                "installedProductExecutableOrPhysicalPhoneAccountProved": False}
     destination = args.output / "render-guided-receipt.json"
     destination.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"status": receipt["status"], "screenshots": len(records), "guiSourceSha256": receipt["guiSourceSha256"]}))
+    print(json.dumps({"status": status, "passed": not failures, "screenshots": len(records),
+                      "failures": len(failures), "guiSourceSha256": receipt["guiSourceSha256"]}))
+    if failures:
+        raise RuntimeError(f"Guided source diagnostic failed {len(failures)} checks; see {destination}")
     return receipt
 
 
@@ -341,6 +593,8 @@ def main():
     parser = argparse.ArgumentParser()
     for name in ("source", "logo", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--collect-all-failures", action="store_true",
+                        help="Source-only bounded census; retain every failure and exit nonzero if any check fails")
     render(parser.parse_args())
 
 

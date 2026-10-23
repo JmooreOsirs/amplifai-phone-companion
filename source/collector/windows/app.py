@@ -527,83 +527,8 @@ class PhoneWindow:
         build(self, logo)
 
     def _layout_contacts(self) -> None:
-        from brand_widgets import ContactCards
-        workspace = self.contact_workspace
-        workspace.columnconfigure(0, weight=1)
-        workspace.rowconfigure(5, weight=1)
-        header = ttk.Frame(workspace, style="Panel.TFrame")
-        header.grid(row=0, column=0, sticky="ew", pady=(0, self.space(12)))
-        header.columnconfigure(0, weight=1)
-        self.contact_heading = ttk.Label(header, text="Choose contacts", style="Panel.Heading.TLabel")
-        self.contact_heading.grid(row=0, column=0, sticky="w")
-        count = ttk.Frame(header, style="Panel.TFrame")
-        count.grid(row=0, column=1, sticky="e")
-        self.contact_selected = ttk.Label(count, style="Selected.TLabel")
-        self.contact_selected.pack(side="left", padx=(0, self.space(8)))
-        self.contact_total = ttk.Label(count, style="Panel.Muted.TLabel")
-        self.contact_total.pack(side="left")
-        def resize_header(_event):
-            if header.winfo_width() <= 1:
-                return
-            stacked = header.winfo_width() < self.contact_heading.winfo_reqwidth() + count.winfo_reqwidth() + self.space(20)
-            position = (1, 0) if stacked else (0, 1)
-            current = count.grid_info()
-            if (current["row"], current["column"]) != position:
-                count.grid(row=position[0], column=position[1], sticky="w" if stacked else "e",
-                           pady=(self.space(12) if stacked else 0, 0))
-        header.bind("<Configure>", resize_header)
-        count.bind("<Configure>", resize_header)
-        self.workspace_context = ttk.Label(workspace, textvariable=self.workspace_coverage, justify="left", style="Panel.TLabel")
-        self.workspace_context.grid(row=1, column=0, sticky="ew", pady=(0, self.space(12)))
-        search = ttk.Frame(workspace, style="Panel.TFrame")
-        search.grid(row=2, column=0, sticky="ew", pady=(0, self.space(12)))
-        self.search_entry = ttk.Entry(search, textvariable=self.contact_query, width=20)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, self.space(12)))
-        self.search_entry.bind("<Return>", lambda _event: self.search_contacts())
-        self.search_button = ttk.Button(search, text="Search names", command=self.search_contacts)
-        self.search_button.pack(side="left")
-        selection = ttk.Frame(workspace, style="Panel.TFrame")
-        selection.grid(row=3, column=0, sticky="ew", pady=(0, self.space(12)))
-        self.select_all_button = ttk.Button(selection, text="Select all contacts", command=self.select_all_contacts)
-        self.select_all_button.pack(side="left", padx=(0, self.space(12)))
-        self.cancel_select_all_button = ttk.Button(selection, text="Stop check", command=self.cancel_select_all)
-        self.cancel_select_all_button.pack(side="left", padx=(0, self.space(12)))
-        self.clear_all_button = ttk.Button(selection, text="Clear all", command=self.clear_all_contacts)
-        self.clear_all_button.pack(side="left")
-        paging = ttk.Frame(workspace, style="Panel.TFrame")
-        paging.grid(row=4, column=0, sticky="ew", pady=(0, self.space(12)))
-        self.previous_button = ttk.Button(paging, text="Previous", command=self.previous_contacts)
-        self.previous_button.pack(side="left", padx=(0, self.space(12)))
-        self.next_button = ttk.Button(paging, text="Next", command=self.next_contacts)
-        self.next_button.pack(side="left", padx=(0, self.space(12)))
-        self.page_label = ttk.Label(paging, textvariable=self.contact_page, justify="left", style="Panel.TLabel")
-        self.page_label.pack(side="left", fill="x", expand=True)
-        self.page_label.bind("<Configure>", lambda event: self.page_label.configure(wraplength=event.width))
-        contact_frame = ttk.Frame(workspace, style="Panel.TFrame")
-        contact_frame.grid(row=5, column=0, sticky="nsew")
-        self.contacts = ContactCards(contact_frame, font=(self.body_font, 12))
-        scrollbar = ttk.Scrollbar(contact_frame, command=self.contacts.yview)
-        self.contacts.configure(yscrollcommand=scrollbar.set)
-        self.contacts.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
-        self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
-        self.workspace_status_label = ttk.Label(workspace, textvariable=self.workspace_status, justify="left", style="Panel.TLabel")
-        self.workspace_status_label.grid(row=6, column=0, sticky="ew", pady=(self.space(12), self.space(12)))
-        self.contact_actions = ttk.Frame(workspace, style="Panel.TFrame")
-        self.contact_actions.grid(row=7, column=0, sticky="ew")
-        self.review_button = ttk.Button(self.contact_actions, text="Continue", style="Primary.TButton",
-            command=lambda: self.review(continue_to_account=self.native_active))
-        self.review_button.grid(row=0, column=0, sticky="w", padx=(0, self.space(12)), pady=(0, self.space(12)))
-        self.pair_button = ttk.Button(self.contact_actions, text="Connect signed-in account", style="Primary.TButton", command=self.pair)
-        self.pair_button.grid(row=0, column=0, sticky="w", padx=(0, self.space(12)), pady=(0, self.space(12)))
-        self.details_button = ttk.Button(self.contact_actions, text="Contact details", command=self.show_source_details)
-        self.details_button.grid(row=0, column=1, sticky="w", pady=(0, self.space(12)))
-        self.change_selection_button = ttk.Button(self.contact_actions, text="Change selected contacts", command=self.change_selection)
-        self.change_selection_button.grid(row=1, column=0, sticky="w", padx=(0, self.space(12)))
-        def resize(event):
-            for label in (self.workspace_context, self.workspace_status_label):
-                label.configure(wraplength=event.width)
-        workspace.bind("<Configure>", resize)
+        from contact_layout import build
+        build(self)
 
     def show_workspace(self, name: str, *, account: bool = False) -> None:
         if name not in ("setup", "contacts", "details"):
@@ -650,6 +575,9 @@ class PhoneWindow:
         if hasattr(self, "contact_selected"):
             self.contact_selected.configure(text=f"{len(self.state.selected_ids):,} selected")
             self.contact_total.configure(text=f"of {self.state.total_contacts:,}")
+        if hasattr(self, "group_buttons"):
+            from contact_layout import refresh
+            refresh(self)
         if hasattr(self, "contact_actions"):
             if self.state.can_change_selection and not self.native_selection_locked:
                 self.change_selection_button.grid()
@@ -844,6 +772,12 @@ class PhoneWindow:
                 self.contacts.insert(tk.END, item["name"] + " · phone ending " + ", ".join(item["phoneEnds"]))
                 if item["id"] in self.state.selected_ids:
                     self.contacts.selection_set(index)
+                workspace = self.state.contact_workspace
+                if workspace is not None:
+                    self.contacts.set_contact_tools(index, review=workspace.is_in_review(item["id"]),
+                        reason=workspace.reason(item["id"]), marked=item["id"] in self.state.marked_group_ids,
+                        organizing=getattr(self, "organizing", False) and workspace.group != "All",
+                        mark_command=self.mark_contact_for_move, move_command=self.move_contact)
             self.contact_query.set(self.state.contact_query)
             shown = len(self.state.contacts)
             self.contact_page.set(
@@ -858,6 +792,8 @@ class PhoneWindow:
             return
         try:
             self.send(method())
+            if self.state.contact_workspace is not None:
+                self.render_contacts()
         except ProtocolError:
             self.state.status = "Wait for the current contact page before navigating."
         self.refresh()
@@ -883,6 +819,101 @@ class PhoneWindow:
     def cancel_select_all(self) -> None:
         self.state.cancel_select_all()
         self.refresh()
+
+    def _contact_operation(self, operation) -> None:
+        if self.native_selection_locked:
+            return
+        try:
+            self.send(operation())
+        except (ProtocolError, IndexError):
+            self.state.status = "The current contact operation is unavailable. Your reviewed selection is unchanged."
+        self.render_contacts()
+        self.refresh()
+
+    def toggle_all_contacts(self) -> None:
+        if self.include_all.get():
+            self.select_all_contacts()
+        else:
+            self.clear_all_contacts()
+        if self.state.contact_workspace is not None:
+            self.render_contacts()
+            self.refresh()
+
+    def show_contact_group(self, group: str) -> None:
+        self._contact_operation(lambda: self.state.show_contact_group(group))
+
+    def select_contact_scope(self, selected: bool) -> None:
+        self._contact_operation(lambda: self.state.select_workspace_contacts(selected))
+
+    def prepare_contact_groups(self) -> None:
+        self._contact_operation(self.state.prepare_contact_workspace)
+
+    def toggle_organizing(self) -> None:
+        if self.native_selection_locked or not self.state.can_edit_workspace:
+            return
+        self.organizing = not self.organizing
+        self.render_contacts()
+        self.refresh()
+
+    def mark_contact_for_move(self, index: int) -> None:
+        self._contact_operation(lambda: self.state.mark_contact_for_move(self.state.contacts[index]["id"]))
+
+    def move_contact(self, index: int, destination: str) -> None:
+        self._contact_operation(lambda: self.state.move_contact(self.state.contacts[index]["id"], destination))
+
+    def move_contact_group(self, *, marked=False) -> None:
+        if self.native_selection_locked:
+            return
+        try:
+            move = self.state.begin_group_move(marked=marked)
+            approved = messagebox.askyesno("Move contacts", f"Move {len(move.ids):,} contacts from {move.source} to {move.destination}?\n\n"
+                + ("Moving to Review also removes these contacts from the selection. You can undo this move."
+                   if move.destination == "Review" else "Moving to Main does not select these contacts. You can undo this move."))
+            if approved and not self.native_selection_locked:
+                self.send(self.state.confirm_group_move(move))
+            else:
+                self.state.cancel_group_move()
+        except ProtocolError:
+            self.state.cancel_group_move()
+            self.state.status = "The group or selection changed while the move was awaiting confirmation. No move was applied."
+        self.render_contacts()
+        self.refresh()
+
+    def undo_contact_group(self) -> None:
+        self._contact_operation(self.state.undo_group_move)
+
+    def refresh_organize_menu(self) -> None:
+        menu, state = self.organize_menu, self.state
+        menu.delete(0, tk.END)
+        editing = state.can_edit_workspace and not self.native_selection_locked
+        availability = "normal" if editing else "disabled"
+        if state.contact_workspace is None:
+            menu.add_command(label="Check Main and Review groups", command=self.prepare_contact_groups,
+                             state="normal" if state.can_review and not self.native_selection_locked else "disabled")
+        else:
+            workspace = state.contact_workspace
+            menu.add_command(label="Hide move marks" if self.organizing else "Mark contacts to move",
+                             command=self.toggle_organizing, state=availability)
+            if workspace.group != "All":
+                destination = "Review" if workspace.group == "Main" else "Main"
+                menu.add_command(label=f"Move all {workspace.filtered_count:,} matches to {destination}",
+                                 command=self.move_contact_group, state=availability if workspace.filtered_count else "disabled")
+                menu.add_command(label=f"Mark all {workspace.filtered_count:,} matches to move",
+                                 command=lambda: self._contact_operation(self.state.mark_all_for_move), state=availability)
+                menu.add_command(label=f"Move {len(state.marked_group_ids):,} marked to {destination}",
+                                 command=lambda: self.move_contact_group(marked=True),
+                                 state=availability if state.marked_group_ids else "disabled")
+                menu.add_command(label="Clear move marks", command=lambda: self._contact_operation(self.state.clear_move_marks),
+                                 state=availability if state.marked_group_ids else "disabled")
+            menu.add_command(label="Undo last group move", command=self.undo_contact_group,
+                             state=availability if state.group_undo is not None else "disabled")
+        menu.add_separator()
+        menu.add_command(label="About Main and Review", command=lambda: self.show_readonly_details(
+            "Main and Review", "Local contact suggestions",
+            "Main starts with a display name and supported phone number. Review holds missing details or an organization-like name marker. "
+            "One name is enough. These are local suggestions; nothing changes on your phone.\n\n"
+            "Move marks organize Main and Review. They do not include or exclude anyone; only the selection checkboxes do. "
+            "Moving to Review removes those contacts from the selection. Undo restores their previous group and selection.", height=8))
 
     def clear_all_contacts(self) -> None:
         if self.native_selection_locked:
@@ -1248,6 +1279,8 @@ class PhoneWindow:
                 else:
                     command = self.state.handle(event)
                     self.send(command)
+                    if event.get("kind") == "capture":
+                        self.send(self.state.prepare_contact_workspace())
                     if event.get("kind") == "pairing" and self.native_active and self.state.handoff_id == event.get("handoffId"):
                         self.dispatch_native(self.native.pair_received(self.state.handoff_id, event["payloadSha256"]))
                     if event.get("kind") in {"capture", "contacts"} and self.state._capture_received and not self.state.selecting_all:

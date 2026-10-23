@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import ctypes
-import math
 import sys
 import tkinter as tk
+from fractions import Fraction
 from pathlib import Path
 from tkinter import font, ttk
 
-from brand_widgets import RoundPanel
-from brand_tokens import BACKGROUND, PANEL, BORDER, HEADING, BODY, MUTED, LIME, RAISED, PAGE_SPACE, SECTION_SPACE
+from brand_controls import CollectionIllustration, JourneySteps, install_control_styles, surface
+from brand_tokens import BACKGROUND, PANEL, BORDER, HEADING, BODY, MUTED, LIME, BLUE, RAISED, PAGE_SPACE, SECTION_SPACE
 
 
 def pixels(widget, value):
@@ -30,40 +30,46 @@ def apply_style(window, font_path=None):
     # Tk points resolve to the Mac logical scale at 96dpi (12pt -> 16px).
     style.configure("TFrame", background=BACKGROUND)
     style.configure("Panel.TFrame", background=PANEL)
+    style.configure("Well.TFrame", background=BACKGROUND)
     style.configure("TLabel", background=BACKGROUND, foreground=BODY, font=(family, 12))
     style.configure("Panel.TLabel", background=PANEL)
+    style.configure("Well.TLabel", background=BACKGROUND, foreground=BODY)
+    style.configure("Well.Muted.TLabel", background=BACKGROUND, foreground=MUTED)
     style.configure("Muted.TLabel", foreground=MUTED)
     style.configure("Heading.TLabel", foreground=HEADING, font=("Arial", 21, "bold"))
     style.configure("Panel.Heading.TLabel", background=PANEL, foreground=HEADING, font=("Arial", 21, "bold"))
     style.configure("Selected.TLabel", background=PANEL, foreground=LIME, font=("Arial", 18, "bold"))
-    style.configure("Panel.Muted.TLabel", background=PANEL)
-    style.configure("Journey.TLabel", font=("Arial", 11, "bold"), foreground=MUTED, padding=(space(8), space(10)))
-    style.configure("Current.Journey.TLabel", foreground=LIME)
-    style.configure("TButton", background=BORDER, foreground=HEADING, bordercolor=BORDER,
-                    padding=(space(16), space(10)), font=("Arial", 11, "bold"))
-    style.map("TButton", background=[("active", PANEL)], foreground=[("disabled", MUTED)])
-    style.configure("Primary.TButton", background=LIME, foreground=BACKGROUND)
-    style.map("Primary.TButton", background=[("disabled", BORDER), ("active", LIME)], foreground=[("disabled", MUTED)])
-    style.configure("Quiet.TButton", background=BACKGROUND, padding=(space(8), space(6)))
+    style.configure("Panel.Muted.TLabel", background=PANEL, foreground=MUTED)
+    style.configure("Journey.TLabel", font=("Arial", 10, "bold"), foreground=MUTED)
+    style.configure("Current.Journey.TLabel", foreground=HEADING)
+    style.configure("Panel.Eyebrow.TLabel", background=PANEL, foreground=MUTED, font=(family, 10, "bold"))
+    style.configure("Panel.Progress.TLabel", background=PANEL, foreground=HEADING, font=(family, 12, "bold"))
+    style.configure("Raised.Metric.TLabel", background=RAISED, foreground=HEADING, font=("Arial", 21, "bold"))
+    style.configure("Raised.Meta.TLabel", background=RAISED, foreground=MUTED, font=(family, 10))
     style.configure("TCheckbutton", background=PANEL, foreground=BODY, font=(family, 12))
     style.configure("Contact.TCheckbutton", background=RAISED, foreground=HEADING, font=(family, 12, "bold"))
+    style.configure("Well.TCheckbutton", background=BACKGROUND, foreground=BODY, font=(family, 12))
+    style.map("Well.TCheckbutton", background=[("disabled", BACKGROUND), ("active", BACKGROUND)], foreground=[("disabled", MUTED)])
     style.map("Contact.TCheckbutton", background=[("disabled", RAISED), ("active", RAISED)], foreground=[("disabled", MUTED)])
     style.map("TCheckbutton", background=[("disabled", PANEL), ("active", PANEL)], foreground=[("disabled", MUTED)])
     style.map("Native.Disclosure.TCheckbutton", background=[("disabled", PANEL)], foreground=[("disabled", MUTED)])
-    style.configure("TEntry", fieldbackground=BACKGROUND, foreground=HEADING, padding=space(8))
-    style.configure("Horizontal.TProgressbar", background=LIME, troughcolor=BORDER)
+    style.configure("TEntry", background=BACKGROUND, fieldbackground=BACKGROUND, foreground=HEADING,
+                    bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER, insertcolor=HEADING,
+                    font=(family, 12), padding=space(8))
+    style.map("TEntry", bordercolor=[("focus", BLUE)], lightcolor=[("focus", BLUE)], darkcolor=[("focus", BLUE)])
+    install_control_styles(window, style, scale=float(window.tk.call("tk", "scaling")) / (96 / 72))
     return family
 
 
-def label(parent, text=None, *, variable=None, heading=False):
+def label(parent, text=None, *, variable=None, heading=False, style=None):
     widget = ttk.Label(parent, text=text, textvariable=variable, justify="left", wraplength=780,
-                       style="Panel.Heading.TLabel" if heading else "Panel.TLabel")
+                       style=style or ("Panel.Heading.TLabel" if heading else "Panel.TLabel"), takefocus=False)
     widget.pack(fill="x", pady=(0, pixels(parent, 12)))
     return widget
 
 
 def card(parent):
-    panel = RoundPanel(parent)
+    panel = surface(parent)
     panel.grid(row=0, column=0, sticky="new")
     panel.grid_remove()
     return panel
@@ -80,19 +86,15 @@ def build(view, logo):
     header = ttk.Frame(shell)
     header.grid(row=0, column=0, sticky="ew", pady=(0, space(12)))
     view.logo = tk.PhotoImage(file=str(logo))
-    view.logo = view.logo.subsample(max(1, math.ceil(view.logo.width() / space(180))))
+    ratio = Fraction(space(180), view.logo.width()).limit_denominator(16)
+    view.logo = view.logo.zoom(ratio.numerator).subsample(ratio.denominator)
     ttk.Label(header, image=view.logo).pack(side="left")
     view.recovery_toggle = ttk.Button(header, text="Details & recovery", style="Quiet.TButton",
         command=lambda: view.show_workspace("setup" if view._visible_workspace == "details" else "details"))
     view.recovery_toggle.pack(side="right")
-    view.navigation = ttk.Frame(shell)
+    view.navigation = view.journey = JourneySteps(shell, scale=view.layout_scale)
     view.navigation.grid(row=1, column=0, sticky="ew", pady=(0, space(SECTION_SPACE)))
-    view.journey_steps = []
-    for index, name in enumerate(("Approve", "Collect", "Choose", "Save & report")):
-        item = ttk.Label(view.navigation, text=f"{index + 1}  {name}", style="Journey.TLabel")
-        item.grid(row=0, column=index, sticky="w")
-        view.navigation.columnconfigure(index, weight=1)
-        view.journey_steps.append(item)
+    view.journey_steps = view.journey.labels
     host = ttk.Frame(shell)
     host.grid(row=2, column=0, sticky="nsew")
     host.columnconfigure(0, weight=1)
@@ -101,7 +103,7 @@ def build(view, logo):
     view._journey_stage = None
     view.details_pane = ttk.Frame(host)
     view.details_pane.grid(row=0, column=0, sticky="nsew")
-    view.details_canvas = canvas = tk.Canvas(view.details_pane, background=BACKGROUND, highlightthickness=0)
+    view.details_canvas = canvas = tk.Canvas(view.details_pane, background=BACKGROUND, highlightthickness=0, takefocus=False)
     scroll = ttk.Scrollbar(view.details_pane, command=canvas.yview)
     canvas.configure(yscrollcommand=scroll.set)
     scroll.pack(side="right", fill="y")
@@ -116,7 +118,7 @@ def build(view, logo):
         canvas.itemconfigure(content, width=width)
         canvas.coords(content, max(0, (event.width - width) // 2), 0)
         for widget in descendants(outer):
-            if isinstance(widget, ttk.Label):
+            if isinstance(widget, ttk.Label) and not getattr(widget, "_brand_fixed_text", False):
                 widget.configure(wraplength=max(space(160), width - space(56)))
         ttk.Style(view.window).configure("Native.Disclosure.TCheckbutton", wraplength=max(space(160), width - space(76)))
     canvas.bind("<Configure>", resize)
@@ -134,23 +136,7 @@ def build(view, logo):
     view._layout_native_setup(approval.content)
     view.native_pane.grid()
     collection = view.stage_panels["collection"] = card(outer)
-    label(collection.content, variable=view.activity_stage, heading=True)
-    label(collection.content, "The iPhone sends a temporary local backup. Transfer progress does not mean your review or account save is complete.")
-    view.activity = ttk.Frame(collection.content, style="Panel.TFrame")
-    view.activity.pack(fill="x", pady=(space(12), space(12)))
-    view.progress = ttk.Progressbar(view.activity, maximum=100)
-    view.progress_label = label(view.activity, variable=view.progress_caption)
-    label(view.activity, variable=view.activity_measurement)
-    label(view.activity, variable=view.transfer_status)
-    view.status_details_label = label(collection.content, variable=view.status)
-    view.password_row = ttk.Frame(collection.content, style="Panel.TFrame")
-    label(view.password_row, "Enter your encrypted backup password. It is sent privately to the helper and is never stored.")
-    view.password = ttk.Entry(view.password_row, show="•", width=30)
-    view.password.pack(fill="x", pady=(0, space(12)))
-    view.password_button = ttk.Button(view.password_row, text="Unlock local backup", style="Primary.TButton", command=view.send_password)
-    view.password_button.pack(anchor="w", pady=(0, space(12)))
-    view.stop_button = ttk.Button(collection.content, text="Cancel collection", command=view.stop)
-    view.stop_button.pack(anchor="w", pady=(space(12), 0))
+    build_collection(view, collection.content)
     save = view.stage_panels["save"] = card(outer)
     view.save_heading = label(save.content, "Saving your selected contacts", heading=True)
     view.save_selection = label(save.content)
@@ -164,12 +150,16 @@ def build(view, logo):
     view.save_detail = label(save.content)
     recovery = view.stage_panels["details"] = card(outer)
     build_recovery(view, recovery.content)
-    view.contact_workspace = ttk.Frame(host, padding=space(20), style="Panel.TFrame")
+    view.contact_workspace = surface(host, kind="panel", fill_content=True, padding=20)
     view.contact_workspace.grid(row=0, column=0, sticky="nsew")
     view.contact_workspace.grid_remove()
     view._layout_contacts()
     for widget in descendants(outer):
-        widget.bind("<FocusIn>", lambda event: view.reveal_detail_focus(event.widget), add="+")
+        if isinstance(widget, (ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.Radiobutton,
+                               ttk.Entry, ttk.Treeview, tk.Text, tk.Listbox)):
+            widget.bind("<FocusIn>", lambda event: view.reveal_detail_focus(event.widget), add="+")
+        elif isinstance(widget, (tk.Frame, ttk.Frame, ttk.Label, tk.Canvas)):
+            widget.configure(takefocus=False)
         widget.bind("<MouseWheel>", lambda event: canvas.yview_scroll(-int(event.delta / 120), "units"), add="+")
     view.refresh()
 
@@ -180,11 +170,126 @@ def descendants(parent):
         yield from descendants(child)
 
 
+def build_collection(view, parent):
+    """CollectionStatusPanel's hierarchy, using only measured Session values."""
+    space = view.space
+    view.collection_eyebrow = label(parent, style="Panel.Eyebrow.TLabel")
+    view.collection_eyebrow.pack_configure(pady=(0, space(8)))
+    view.collection_heading = label(parent, heading=True)
+    view.collection_heading.pack_configure(pady=(0, space(8)))
+    view.collection_detail = label(parent)
+    view.stop_button = ttk.Button(parent, text="Stop on this PC", command=view.stop)
+    view.stop_button.pack(anchor="w", pady=(0, space(12)))
+    view.password_row = ttk.Frame(parent, style="Panel.TFrame")
+    label(view.password_row, "Enter your encrypted backup password. It is sent privately to the helper and is never stored.")
+    view.password = ttk.Entry(view.password_row, show="•", width=30)
+    view.password.pack(fill="x", pady=(0, space(12)))
+    view.password_button = ttk.Button(view.password_row, text="Unlock local backup", style="Primary.TButton", command=view.send_password)
+    view.password_button.pack(anchor="w", pady=(0, space(12)))
+
+    view.collection_illustration_well = well = surface(parent, kind="well")
+    well.pack(fill="x", pady=(0, space(12)))
+    view.collection_illustration = CollectionIllustration(well.content, scale=view.layout_scale)
+    view.collection_illustration.pack(pady=(space(4), space(12)))
+    view.collection_illustration_caption = ttk.Label(well.content, style="Well.TLabel", anchor="center", takefocus=False)
+    view.collection_illustration_caption.pack(fill="x", pady=(0, space(6)))
+
+    view.collection_stages = stages = ttk.Frame(parent, style="Panel.TFrame", takefocus=False)
+    stages.pack(fill="x", pady=(0, space(12)))
+    view.collection_stage_labels = []
+    for text in ("Connect iPhone", "Receive backup", "Read locally", "Clean up"):
+        item = ttk.Label(stages, text=text, style="Stage.TLabel", takefocus=False)
+        item._brand_fixed_text = True
+        view.collection_stage_labels.append(item)
+    stages._columns = None
+
+    def arrange_stages(event):
+        columns = 4 if event.width >= space(540) else 2
+        if columns == stages._columns:
+            return
+        stages._columns = columns
+        for index in range(4):
+            stages.columnconfigure(index, minsize=space(120) if index < columns else 0)
+        for index, item in enumerate(view.collection_stage_labels):
+            item.grid(row=index // columns, column=index % columns, sticky="ew",
+                      padx=(0, space(6) if index % columns < columns - 1 else 0),
+                      pady=(0, space(6) if index // columns < 4 // columns - 1 else 0))
+
+    stages.bind("<Configure>", arrange_stages)
+    arrange_stages(type("Size", (), {"width": space(540)})())
+
+    view.collection_metric_well = surface(parent, kind="well")
+    view.collection_metric_card = metric = surface(view.collection_metric_well.content, kind="raised", width=space(248))
+    metric.pack(anchor="w")
+    view.collection_metric_value = ttk.Label(metric.content, style="Raised.Metric.TLabel", takefocus=False)
+    view.collection_metric_value.pack(anchor="w", pady=(0, space(6)))
+    view.collection_metric_label = ttk.Label(metric.content, style="Raised.Meta.TLabel", takefocus=False)
+    view.collection_metric_label.pack(anchor="w")
+    view.collection_metric_value._brand_fixed_text = view.collection_metric_label._brand_fixed_text = True
+    view.activity = ttk.Frame(parent, style="Panel.TFrame", takefocus=False)
+    view.activity.pack(fill="x", pady=(0, space(12)))
+    view.progress = ttk.Progressbar(view.activity, maximum=100)
+    view.progress_label = label(view.activity, variable=view.progress_caption, style="Panel.Progress.TLabel")
+    view.progress_label.pack_configure(pady=0)
+    view.collection_details_button = ttk.Button(parent, text="Transfer details", style="Quiet.TButton",
+                                               command=lambda: view.show_workspace("details"))
+    view.collection_details_button.pack(anchor="w", pady=(0, space(12)))
+    view.collection_next = label(parent, style="Panel.Muted.TLabel")
+    view.collection_next.pack_configure(pady=0)
+
+
+def byte_description(value):
+    if value < 1024:
+        return f"{value:,} B"
+    amount = float(value)
+    for unit in ("KiB", "MiB", "GiB", "TiB", "PiB", "EiB"):
+        amount /= 1024
+        if amount < 1024 or unit == "EiB":
+            return f"{amount:.1f} {unit}"
+
+
+def refresh_collection(view):
+    state, space = view.state, view.space
+    presentation = (state.phase, state.transfer_stage, state.transfer_bytes)
+    if getattr(view, "_collection_presentation", None) == presentation:
+        return
+    view._collection_presentation = presentation
+    processing = state.transfer_stage == "processing" or state.phase in {"processing", "password_required"}
+    active = 2 if processing else 1 if state.transfer_stage == "backup" else 0
+    view.collection_eyebrow.configure(text=f"ON THIS PC · STAGE {active + 1} OF 4")
+    view.collection_heading.configure(text=("Unlock your local backup" if state.phase == "password_required" else
+        "Reading available sources" if processing else "Receiving the local backup" if active == 1 else "Connect your iPhone"))
+    view.collection_detail.configure(text=("Enter the password used to encrypt this iPhone backup." if state.phase == "password_required" else
+        "Reading available contacts and activity, then cleaning up temporary backup files." if processing else
+        "Keep the cable connected. The temporary backup stays on this PC." if active == 1 else
+        "Connect by USB, unlock your iPhone and tap Trust if asked."))
+    view.collection_illustration.set_processing(processing)
+    view.collection_illustration_caption.configure(
+        text="Backup received · waiting for your password" if state.phase == "password_required" else
+             "Backup received · reading on this PC" if processing else "iPhone → this PC",
+        foreground=LIME if processing else BODY)
+    for index, item in enumerate(view.collection_stage_labels):
+        item.configure(style="Active.Stage.TLabel" if index == active else "Completed.Stage.TLabel" if index < active else "Stage.TLabel")
+    if state.transfer_stage in {"backup", "processing"}:
+        view.collection_metric_value.configure(text=byte_description(state.transfer_bytes))
+        view.collection_metric_label.configure(text="PROCESSED" if state.transfer_stage == "processing" else "RECEIVED")
+        view.collection_metric_well.pack(fill="x", pady=(0, space(12)), before=view.activity)
+    else:
+        view.collection_metric_well.pack_forget()
+    view.collection_next.configure(text=(
+        "Next: unlock the backup to read available contacts and activity locally." if state.phase == "password_required" else
+        "Next: choose contacts, then review and save in your approved account." if processing else
+        "Next: read available sources locally, then choose which contacts to share." if active == 1 else
+        "Next: receive the iPhone backup on this PC. Keep the phone unlocked for Trust prompts."))
+
+
 def build_recovery(view, parent):
     space = view.space
     view.recovery_heading = label(parent, "Details & recovery", heading=True)
     view.recovery_detail = label(parent)
-    label(parent, variable=view.status)
+    view.status_details_label = label(parent, variable=view.status)
+    label(parent, variable=view.activity_measurement)
+    label(parent, variable=view.transfer_status)
     view.recovery_retry_button = ttk.Button(parent, text="Retry confirmation", command=lambda: view.native_action(view.native.retry))
     label(parent, variable=view.coverage_status)
     view.diagnostic_details_button = ttk.Button(parent, text="Source diagnostic details", command=view.show_source_diagnostics)
@@ -210,8 +315,7 @@ def build_recovery(view, parent):
 
 def refresh(view, current):
     space = view.space
-    for index, item in enumerate(view.journey_steps):
-        item.configure(style="Current.Journey.TLabel" if index == current.step else "Journey.TLabel")
+    view.journey.set_current(4 if current.stage == "complete" else current.step)
     stage = current.stage
     if view._journey_stage != stage:
         view._visible_workspace = "setup"
@@ -228,6 +332,8 @@ def refresh(view, current):
         view.contact_workspace.grid_remove()
         view.details_pane.grid()
     view.recovery_toggle.configure(text="Back to current step" if details and stage != "attention" else "Details & recovery")
+    if stage == "collection":
+        refresh_collection(view)
     if view.state.phase == "password_required":
         view.password_row.pack(fill="x", pady=(0, space(12)), before=view.stop_button)
     else:

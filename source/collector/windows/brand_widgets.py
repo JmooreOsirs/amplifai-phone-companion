@@ -104,13 +104,14 @@ def _rounded_points(width: int, height: int, radius: int, inset: int) -> tuple:
 class RoundPanel(tk.Canvas):
     """Rounded native content host; requested height follows its content frame."""
     def __init__(self, master, *, fill=PANEL, border=BORDER, background=BACKGROUND,
-                 radius=PANEL_RADIUS, padding=SECTION_SPACE, scale=None, **kwargs):
+                 radius=PANEL_RADIUS, padding=SECTION_SPACE, scale=None, fill_content=False, **kwargs):
         self.scale = scale if scale is not None else float(master.tk.call("tk", "scaling")) / (96 / 72)
         self.padding = round(padding * self.scale)
         self.radius = round(radius * self.scale)
         self._fill, self._border = fill, border
         self._focused = False
         self._measure_job = None
+        self._fill_content = fill_content
         kwargs.setdefault("width", round(CONTACT_MINIMUM * self.scale))
         kwargs.setdefault("height", 2 * self.padding + 1)
         super().__init__(master, background=background, highlightthickness=0, borderwidth=0,
@@ -134,6 +135,8 @@ class RoundPanel(tk.Canvas):
 
     def _resize(self, event) -> None:
         self.itemconfigure(self._content_window, width=max(1, event.width - 2 * self.padding))
+        if self._fill_content:
+            self.itemconfigure(self._content_window, height=max(1, event.height - 2 * self.padding))
         self._draw()
         self._queue_measure()
 
@@ -148,6 +151,8 @@ class RoundPanel(tk.Canvas):
 
     def _measure(self) -> None:
         self._measure_job = None
+        if self._fill_content:
+            return
         height = self.content.winfo_reqheight() + 2 * self.padding
         if int(self.cget("height")) != height:
             self.configure(height=height)
@@ -188,13 +193,26 @@ class _ContactCard:
                                background=RAISED, foreground=MUTED, font=owner._detail_font,
                                borderwidth=0, padx=0, pady=0)
         self.ending.grid(row=1, column=0, sticky="ew", padx=(round(34 * owner.scale), 0))
+        self.tools_enabled = False
+        self.mark_command = self.move_command = None
+        self.marked = tk.BooleanVar(master=owner, value=False)
+        self.move_menu = tk.Menu(self.panel, tearoff=False)
+        self.move_button = ttk.Menubutton(self.panel.content, text="Move", menu=self.move_menu,
+                                          style="Card.TMenubutton", takefocus=True)
+        self.reason = tk.Label(self.panel.content, background=RAISED, foreground=MUTED,
+                               font=owner._detail_font, anchor="nw", justify="left", borderwidth=0, padx=0, pady=0)
+        self.mark_button = ttk.Checkbutton(self.panel.content, text="Mark to move", variable=self.marked,
+                                           style=owner._checkbutton_style, command=lambda: owner._mark_card(self))
         self.button.bind("<FocusIn>", lambda _event: owner._focus_card(self))
         self.button.bind("<FocusOut>", lambda _event: self.panel.set_focus(False))
+        for item in (self.move_button, self.mark_button):
+            item.bind("<FocusIn>", lambda _event: owner._focus_card(self))
+            item.bind("<FocusOut>", lambda _event: self.panel.set_focus(False))
         for key in ("Left", "Right", "Up", "Down", "Home", "End"):
             self.button.bind(f"<Key-{key}>", lambda event: owner._navigate(self, event.keysym))
-        for widget in (self.panel, self.panel.content, self.button, self.ending):
+        for widget in (self.panel, self.panel.content, self.button, self.ending, self.move_button, self.reason, self.mark_button):
             owner._bind_wheel(widget)
-            if widget is not self.button:
+            if widget in (self.panel, self.panel.content, self.ending, self.reason):
                 widget.bind("<Button-1>", lambda _event: owner._click_card(self))
 
 
@@ -244,7 +262,8 @@ class ContactCards(tk.Frame):
             if disabled != self._model.disabled:
                 self._model.disabled = disabled
                 for card in self._cards:
-                    card.button.state(["disabled"] if disabled else ["!disabled"])
+                    for control in (card.button, card.move_button, card.mark_button):
+                        control.state(["disabled"] if disabled else ["!disabled"])
                     if disabled:
                         card.panel.set_focus(False)
         if "yscrollcommand" in options:
@@ -281,6 +300,35 @@ class ContactCards(tk.Frame):
     def selection_set(self, index: int) -> None:
         if self._model.select(index, True):
             self._refresh_card(self._cards[index])
+
+    def set_contact_tools(self, index: int, *, review: bool, reason: str | None, marked: bool,
+                          organizing: bool, mark_command, move_command) -> None:
+        card = self._cards[index]
+        card.tools_enabled = True
+        card.mark_command, card.move_command = mark_command, move_command
+        card.marked.set(marked)
+        card.move_menu.delete(0, tk.END)
+        destination = "Main" if review else "Review"
+        card.move_menu.add_command(label=f"Move to {destination}", command=lambda: self._move_card(card, destination))
+        card.move_button.grid(row=0, column=1, sticky="ne")
+        if reason:
+            card.reason.configure(text=reason)
+            card.reason.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(round(6 * self.scale), 0))
+        else:
+            card.reason.grid_remove()
+        if organizing:
+            card.mark_button.grid(row=3, column=0, columnspan=2, sticky="w", pady=(round(6 * self.scale), 0))
+        else:
+            card.mark_button.grid_remove()
+        self._queue_layout()
+
+    def _mark_card(self, card) -> None:
+        if self._current(card) and not self._model.disabled and card.mark_command is not None:
+            card.mark_command(card.index)
+
+    def _move_card(self, card, destination: str) -> None:
+        if self._current(card) and not self._model.disabled and card.move_command is not None:
+            card.move_command(card.index, destination)
 
     def curselection(self) -> tuple[int, ...]:
         return tuple(sorted(self._model.selected))
@@ -397,8 +445,11 @@ class ContactCards(tk.Frame):
                             padx=(gap // 2, gap - gap // 2), pady=(gap, 0))
             card.panel.configure(width=card_width)
             text_width = max(1, card_width - round(58 * self.scale))
+            if card.tools_enabled:
+                text_width = max(1, text_width - card.move_button.winfo_reqwidth())
             card.button.configure(text=wrap_name(card.name, text_width, self._name_font.measure))
             card.ending.configure(wraplength=text_width)
+            card.reason.configure(wraplength=max(1, card_width - 2 * card.panel.padding))
         self._content_changed()
 
     def destroy(self) -> None:
