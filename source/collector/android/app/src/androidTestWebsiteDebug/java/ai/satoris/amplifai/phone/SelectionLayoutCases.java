@@ -168,6 +168,7 @@ final class SelectionLayoutCases {
                     "Fixed controls extend outside the actual visible window");
             requireFullyVisible("reviewAction", review);
             requireFullyVisible("search", search);
+            requireBulkActions();
             requireFullyVisible("previousPage", get("previousPage", Button.class));
             requireFullyVisible("nextPage", get("nextPage", Button.class));
             require(navigation.getContentDescription().toString().contains("privacy help"), "Options lost its accessible help label");
@@ -226,13 +227,10 @@ final class SelectionLayoutCases {
             Set<Long> before = new HashSet<>(selected);
             cancel.performClick();
             require(before.equals(selected) && !get("bulkSelectionActive", Boolean.class), "Fixed bulk Cancel changed the prior selection");
-            navigation.performClick();
-            require(detailsScroll.isShown(), "Source/progress/help pane is inaccessible");
-            Button selectAll = get("selectAllContacts", Button.class);
-            LinearLayout options = (LinearLayout) selectAll.getParent();
-            LinearLayout body = (LinearLayout) options.getParent();
-            body.getChildAt(body.indexOfChild(options) - 1).performClick();
+            requireBulkActions();
+            search.setText("305");
         });
+        awaitLayout(() -> choices.getChildCount() == 1, "Filtered contact did not render before all-page selection");
         instrumentation.waitForIdleSync();
         focusWithKeyboard("selectAll", get("selectAllContacts", Button.class));
         main(() -> {
@@ -241,10 +239,12 @@ final class SelectionLayoutCases {
             selectAll.performClick();
         });
         awaitLayout(() -> !get("bulkSelectionActive", Boolean.class) && get("selectedIds", Set.class).size() == 305 &&
-                choices.getChildCount() == 100, "All-page action did not select every synthetic contact");
+                choices.getChildCount() == 1, "All-page action did not select every synthetic contact during search");
         main(() -> {
             require(contactScroll.isShown(), "All-page selection did not return to the contact choices");
-            navigation.performClick();
+            requireBulkActions();
+            require(get("pageIndicator", TextView.class).getText().toString().contains("Selected: 305 across all pages"),
+                    "Filtered view did not report the complete all-page selected count");
         });
         instrumentation.waitForIdleSync();
         focusWithKeyboard("clearSelection", get("clearSelectedContacts", Button.class));
@@ -253,10 +253,12 @@ final class SelectionLayoutCases {
             requireFullyVisible("clearSelection", clear);
             clear.performClick();
         });
-        awaitLayout(() -> get("selectedIds", Set.class).isEmpty() && choices.getChildCount() == 100,
+        awaitLayout(() -> get("selectedIds", Set.class).isEmpty() && choices.getChildCount() == 1,
                 "Clear action did not clear the all-page selection");
         main(() -> {
             require(!review.isEnabled() && !get("handoffButton", Button.class).isShown(), "Clear left a reviewed transfer action available");
+            require(get("pageIndicator", TextView.class).getText().toString().contains("Selected: 0 across all pages"),
+                    "Deselect all left a stale selected count");
             navigation.performClick();
             TextView status = get("status", TextView.class);
             status.setText("A selected record is too large for one transfer batch, or the source count exceeds the supported range. Review the source; no partial transfer started.");
@@ -271,6 +273,27 @@ final class SelectionLayoutCases {
         });
         capture("error-details");
         evidence.put("checks", "fixed controls; independent choices; actual bounds; native styles; paging; empty search; review/change; bulk Cancel; keyboard focus; all-page selection/clear; zero/unavailable; full review/error");
+    }
+
+    private void requireBulkActions() {
+        Button selectAll = get("selectAllContacts", Button.class);
+        Button deselectAll = get("clearSelectedContacts", Button.class);
+        require(selectAll.getParent() == deselectAll.getParent() &&
+                ((View) selectAll.getParent()).getParent() == header,
+                "Bulk actions are not in the visible selection header");
+        requireFullyVisible("selectAll", selectAll);
+        requireFullyVisible("deselectAll", deselectAll);
+        require(selectAll.getHeight() >= Math.round(48 * density) &&
+                deselectAll.getHeight() >= Math.round(48 * density), "Bulk action touch targets are below 48dp");
+        require("Select all contacts".contentEquals(selectAll.getText()) && "Deselect all".contentEquals(deselectAll.getText()),
+                "Bulk actions lost their visible labels");
+        require(selectAll.getContentDescription().toString().contains("including contacts hidden by search") &&
+                deselectAll.getContentDescription().toString().contains("including contacts hidden by search"),
+                "Bulk action accessibility scope does not include hidden search results");
+        require(get("pageIndicator", TextView.class).getText().toString().contains("across all pages"),
+                "Visible selected count lost its all-page scope");
+        require(selectAll.getTextSize() == new Button(activity).getTextSize() &&
+                deselectAll.getTextSize() == selectAll.getTextSize(), "Bulk actions changed native typography");
     }
 
     private void verifyFullReviewReachable() throws Exception {
@@ -457,6 +480,7 @@ final class SelectionLayoutCases {
         require(docked, "A docked installed keyboard is required to measure its actual occlusion");
         requireFullyVisible(identity + "Search", search);
         requireFullyVisible(identity + "Count", get("pageIndicator", TextView.class));
+        requireBulkActions();
         requireFullyVisible(identity + "Action", action);
         require(search.isFocused() && action.isEnabled(), "IME input or applicable action is unavailable: " + identity);
         require(usable.contains(bounds(search)) && usable.contains(bounds(action)), "Search or action overlaps the actual IME/system bounds: " + identity);

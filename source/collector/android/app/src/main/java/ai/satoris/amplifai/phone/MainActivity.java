@@ -336,8 +336,7 @@ public final class MainActivity extends Activity {
             status.setText("Safe support code copied. Submit it through AMPLIFai contact if you want help; it contains no phone records or account credentials.");
         });
 
-        LinearLayout selectionTools = disclosure("Contact selection options", body);
-        addLegacyCopy("Search by name or phone ending. Only selected contacts and their matched available interactions belong in a later, separately consented account transfer.", 13, selectionTools);
+        addLegacyCopy("Search by name or phone ending. Only selected contacts and their matched available interactions belong in a later, separately consented account transfer.", 13, body);
         search = new EditText(this);
         search.setSingleLine(true);
         search.setHint("Search contacts");
@@ -351,7 +350,15 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(Editable s) {}
         });
         selectionHeader.addView(search);
-        selectAllContacts = button("Select all contacts across every page", selectionTools);
+        LinearLayout selectionBulkActions = new LinearLayout(this);
+        selectionBulkActions.setOrientation(LinearLayout.HORIZONTAL);
+        selectionHeader.addView(selectionBulkActions);
+        selectAllContacts = button("Select all contacts", selectionBulkActions);
+        selectAllContacts.setContentDescription("Select all contacts across every page, including contacts hidden by search");
+        LinearLayout.LayoutParams selectAllParams = new LinearLayout.LayoutParams(0, -2, 1);
+        selectAllParams.topMargin = dp(8);
+        selectAllParams.rightMargin = dp(4);
+        selectAllContacts.setLayoutParams(selectAllParams);
         selectAllContacts.setOnClickListener(view -> selectEveryContact());
         cancelSelectAll = button("Cancel all-contact selection", actionBar);
         cancelSelectAll.setVisibility(View.GONE);
@@ -361,7 +368,12 @@ public final class MainActivity extends Activity {
             status.setText("All-contact selection cancelled. Your previous contact choices are unchanged.");
             updater.onSafetyChanged();
         });
-        clearSelectedContacts = button("Clear all selected contacts", selectionTools);
+        clearSelectedContacts = secondaryButton("Deselect all", selectionBulkActions);
+        clearSelectedContacts.setContentDescription("Deselect all contacts across every page, including contacts hidden by search");
+        LinearLayout.LayoutParams deselectAllParams = new LinearLayout.LayoutParams(0, -2, 1);
+        deselectAllParams.topMargin = dp(8);
+        deselectAllParams.leftMargin = dp(4);
+        clearSelectedContacts.setLayoutParams(deselectAllParams);
         clearSelectedContacts.setOnClickListener(view -> clearContactSelection());
         choices = new LinearLayout(this);
         choices.setOrientation(LinearLayout.VERTICAL);
@@ -703,7 +715,7 @@ public final class MainActivity extends Activity {
         ((View) selectionNavigation.getParent()).setVisibility(available ? View.VISIBLE : View.GONE);
         selectionNavigation.setText(selectionVisible ? "Sources & options" : "Return to contact selection");
         selectionNavigation.setContentDescription(selectionVisible
-                ? "Sources, contact selection options, progress and privacy help" : "Return to contact selection");
+                ? "Sources, progress and privacy help" : "Return to contact selection");
         selectionPanel.setVisibility(selectionVisible ? View.VISIBLE : View.GONE);
         detailsScroll.setVisibility(selectionVisible ? View.GONE : View.VISIBLE);
         updateSelectionControls();

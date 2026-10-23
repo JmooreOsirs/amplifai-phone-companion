@@ -73,7 +73,7 @@ and [Google Play install-permission policy](https://support.google.com/googlepla
 Use the signed APK's normal Android download/install flow. No developer mode, USB debugging, root, default SMS/dialer takeover, or security bypass is part of this product. If the installer or a restricted permission blocks progress, report that limitation; do not disable device protections.
 
 1. Choose **Read contacts**, **Read call history**, and/or **Read SMS history** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
-2. Select contacts, then **Review selected metadata**. **Select all contacts across every page** verifies every stable local contact ID before changing the selection; **Clear all selected contacts** affects the local selection only. Search and visible 100-row pages do not limit an all-page selection. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
+2. Select contacts, then **Review selected metadata**. **Select all contacts** verifies every stable local contact ID across every page before changing the selection; **Deselect all** affects the local selection only. Search and visible 100-row pages do not limit an all-page selection. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
 3. Choose **Approve same-phone browser handoff**. Notification access is optional. The app still starts the required foreground service with a valid notification; if its shortcut is hidden, return from Recent apps to confirm the destination or use **Cancel browser handoff**. Android may stop the app after a permission change, requiring a fresh local review.
 4. Use **Open AMPLIFai account in browser** on this same phone. For a current signed-in account, choose **Connect reviewed Android app**, check the account and course displayed by the app from server proof, and approve that destination. The browser then receives the reviewed preview without typing a code. The app's **One-use pairing code** is a five-minute fallback if discovery is unavailable. Each progressing page fetch, valid keepalive and completion extends the active browser session, bounded by inactivity and the visible Cancel action. Review each available source and approve its account save separately.
 5. After delivery, browser-only users can **Cancel browser handoff**. Signed-in users separately save or decline each source, then use **Finalize reviewed sources**. The browser verifies durable account readback before the matching saved assertion; the companion only reports a confirmed save after the final bound receipt. Cancelling cannot retract already saved account data.
@@ -129,8 +129,9 @@ boundary. Its runtime qualification must use the unchanged strict fixture;
 floating keyboards, pan mode and OEM behavior remain unqualified.
 
 **Sources & options** opens the full setup, optional source controls, progress,
-review details and privacy/help content. **Contact selection options** contains
-the existing all-page selection and Clear actions. **Return to contact
+review details and privacy/help content. **Select all contacts** and **Deselect all**
+stay visible beside search in contact selection. They affect all contacts across every page, including contacts hidden
+by search; the selected count states this scope. **Return to contact
 selection** restores the choices. Review and errors open their full text in the
 details view. Source consent, available-zero versus unavailable coverage,
 selection invalidation, bound saved receipts and temporary-store cleanup are

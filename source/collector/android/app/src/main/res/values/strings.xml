@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">AMPLIFai Phone</string>
-    <string name="selection_no_matches">No matches · Selected: %1$d</string>
-    <string name="selection_page_count">%1$d–%2$d of %3$d · Selected: %4$d</string>
+    <string name="selection_no_matches">No matches · Selected: %1$d across all pages</string>
+    <string name="selection_page_count">%1$d–%2$d of %3$d · Selected: %4$d across all pages</string>
     <string name="handoff_channel">Phone handoff</string>
     <string name="handoff_channel_description">Visible status and cancellation for an approved same-phone browser transfer.</string>
     <string name="handoff_notification_title">Phone handoff is active</string>
