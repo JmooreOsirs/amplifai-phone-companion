@@ -150,7 +150,9 @@ class SetupLink:
 
     @classmethod
     def parse(cls, url: str):
-        if type(url) is not str or not url.startswith("amplifai-phone://setup?") or len(url) > 512:
+        # An authority's empty path can arrive as either spelling from a URL handler.
+        if (type(url) is not str or not url.startswith(("amplifai-phone://setup?", "amplifai-phone://setup/?"))
+                or len(url) > 512):
             raise SetupProtocolError("Invalid native setup link")
         if any(ord(char) <= 32 or ord(char) >= 127 for char in url) or "%" in url or "#" in url:
             raise SetupProtocolError("Invalid native setup link")
@@ -159,7 +161,7 @@ class SetupLink:
             pairs = parse_qsl(parts.query, keep_blank_values=True, strict_parsing=True)
         except ValueError:
             raise SetupProtocolError("Invalid native setup link") from None
-        if parts.netloc != "setup" or parts.path or len(pairs) != 3 or len(dict(pairs)) != 3:
+        if parts.netloc != "setup" or parts.path not in ("", "/") or len(pairs) != 3 or len(dict(pairs)) != 3:
             raise SetupProtocolError("Invalid native setup link")
         values = strict_object(dict(pairs), ("protocol", "setup", "bootstrap"))
         if values["protocol"] != PROTOCOL:

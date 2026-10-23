@@ -15,6 +15,7 @@ FIXTURE = json.loads((Path(__file__).parent / "fixtures/native-setup-v2.json").r
 CLIENT = ClientIdentity(**{key: FIXTURE["claimRequest"]["client"][key] for key in ("version", "build")})
 LINK = SetupLink(FIXTURE["claimRequest"]["setupId"], FIXTURE["claimRequest"]["bootstrap"])
 LINK_TEXT = f"amplifai-phone://setup?protocol=phone-native-setup-v2&setup={LINK.setup_id}&bootstrap={LINK.bootstrap}"
+ROOT_LINK_TEXT = LINK_TEXT.replace("://setup?", "://setup/?", 1)
 
 
 def claimed():
@@ -50,15 +51,45 @@ class NativeSetupContractTests(unittest.TestCase):
         with self.assertRaises(SetupProtocolError):
             disclosure({**DISCLOSURE, "extra": True})
 
-    def test_link_rejects_extra_duplicate_encoded_missing_and_foreign_values(self):
-        self.assertEqual(SetupLink.parse(LINK_TEXT), LINK)
-        for changed in (LINK_TEXT + "&extra=true", LINK_TEXT + "&setup=" + LINK.setup_id,
-                        LINK_TEXT.replace("protocol=phone-native-setup-v2", "protocol=phone-native-setup-v1"),
-                        LINK_TEXT.replace("://setup?", "://setup/?"), LINK_TEXT.replace("amplifai-phone:", "https:"),
-                        LINK_TEXT + "#fragment", " " + LINK_TEXT, LINK_TEXT.replace("setup=", "setup=%20"),
-                        LINK_TEXT.replace("bootstrap=", "bootstrap"), LINK_TEXT + "&badfield",
-                        LINK_TEXT.replace(LINK.bootstrap, "A" * 42 + "B")):
-            with self.subTest(link_shape=changed[:30]), self.assertRaises(SetupProtocolError):
+    def test_empty_root_forms_and_query_order_preserve_exact_claim_authority(self):
+        value = FIXTURE["claimRequest"]
+        for uri in (LINK_TEXT, ROOT_LINK_TEXT):
+            reordered = uri.split("?", 1)[0] + "?" + "&".join(reversed(uri.split("?", 1)[1].split("&")))
+            for candidate in (uri, reordered):
+                with self.subTest(root_slash="://setup/?" in uri, reordered=candidate == reordered):
+                    parsed = SetupLink.parse(candidate)
+                    self.assertEqual(parsed, LINK)
+                    request = ClaimRequest(parsed, CLIENT, value["capability"], value["requestId"])
+                    self.assertEqual(json.loads(request.body), value)
+
+    def test_both_root_forms_reject_extra_duplicate_encoded_missing_and_foreign_values(self):
+        for uri in (LINK_TEXT, ROOT_LINK_TEXT):
+            rejected = {
+                "extra_field": uri + "&extra=true",
+                "duplicate_setup": uri + "&setup=" + LINK.setup_id,
+                "duplicate_bootstrap": uri + "&bootstrap=" + LINK.bootstrap,
+                "unsupported_protocol": uri.replace("protocol=phone-native-setup-v2", "protocol=phone-native-setup-v1"),
+                "foreign_scheme": uri.replace("amplifai-phone:", "https:"),
+                "fragment": uri + "#fragment",
+                "leading_space": " " + uri,
+                "trailing_control": uri + "\n",
+                "non_ascii": uri + "\u00a0",
+                "encoded_value": uri.replace("setup=", "setup=%20"),
+                "missing_value_separator": uri.replace("bootstrap=", "bootstrap"),
+                "missing_bootstrap": uri.split("&bootstrap=", 1)[0],
+                "malformed_query": uri + "&badfield",
+                "noncanonical_bootstrap": uri.replace(LINK.bootstrap, "A" * 42 + "B"),
+                "uppercase_identifier": uri.replace(LINK.setup_id, "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"),
+                "over_limit": uri + "&padding=" + "x" * 512,
+            }
+            for case, changed in rejected.items():
+                with self.subTest(root_slash="://setup/?" in uri, case=case), self.assertRaises(SetupProtocolError):
+                    SetupLink.parse(changed)
+
+    def test_only_empty_or_single_root_path_is_accepted(self):
+        for path in ("//", "/other", "/./", "/../", "/setup", "/%2f", "/%2e", "\\"):
+            changed = LINK_TEXT.replace("://setup?", "://setup" + path + "?", 1)
+            with self.subTest(path=path), self.assertRaises(SetupProtocolError):
                 SetupLink.parse(changed)
 
     def test_capability_requires_exact_canonical_32_bytes(self):

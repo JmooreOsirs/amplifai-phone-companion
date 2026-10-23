@@ -5,10 +5,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from native_setup import SetupProtocolError
+from native_setup import SetupLink, SetupProtocolError
 from setup_delivery import (DeliveryError, PendingDelivery, PrimaryExists, SetupDelivery,
                             WindowsPipe, launch_uri, message_uri)
-from test_native_setup import LINK_TEXT
+from test_native_setup import LINK_TEXT, ROOT_LINK_TEXT
 
 
 class WinError(Exception):
@@ -19,12 +19,19 @@ class WinError(Exception):
 class DeliveryTests(unittest.TestCase):
     def test_only_one_exact_setup_uri_or_plain_launch(self):
         self.assertIsNone(launch_uri([]))
-        self.assertEqual(launch_uri([LINK_TEXT]), LINK_TEXT)
-        self.assertEqual(message_uri(LINK_TEXT.encode()), LINK_TEXT)
         self.assertIsNone(message_uri(b"OPEN"))
-        for arguments in ([LINK_TEXT, "extra"], ["--setup", LINK_TEXT], [LINK_TEXT + "&host=evil"], ["--fixture"]):
-            with self.assertRaises(SetupProtocolError):
-                launch_uri(arguments)
+        for uri in (LINK_TEXT, ROOT_LINK_TEXT):
+            with self.subTest(root_slash="://setup/?" in uri):
+                self.assertEqual(launch_uri([uri]), uri)
+                self.assertEqual(message_uri(uri.encode()), uri)
+            for arguments in ([uri, "extra"], ["--setup", uri], [uri + "&host=evil"]):
+                with self.subTest(argument_count=len(arguments)), self.assertRaises(SetupProtocolError):
+                    launch_uri(arguments)
+            for invalid in (uri + "#fragment", uri + "&host=evil", uri.replace("://setup", "://setup/other", 1)):
+                with self.subTest(invalid_shape=invalid[:30]), self.assertRaises(SetupProtocolError):
+                    message_uri(invalid.encode())
+        with self.assertRaises(SetupProtocolError):
+            launch_uri(["--fixture"])
         for body in (b"", b"x" * 513, b"\xff", b"OPEN\n", b"https://example.test"):
             with self.assertRaises(SetupProtocolError):
                 message_uri(body)
@@ -77,10 +84,15 @@ class DeliveryTests(unittest.TestCase):
         delivery = SetupDelivery(backend)
         self.assertFalse(delivery.start())
         self.assertIsNone(delivery.thread)
-        delivery.forward(LINK_TEXT)
-        backend.forward.assert_called_once_with(LINK_TEXT)
-        with self.assertRaises(SetupProtocolError):
-            delivery.forward("https://elsewhere.test")
+        for uri in (LINK_TEXT, ROOT_LINK_TEXT):
+            backend.forward.reset_mock()
+            delivery.forward(uri)
+            backend.forward.assert_called_once_with(uri)
+        backend.forward.reset_mock()
+        for invalid in ("https://elsewhere.test", ROOT_LINK_TEXT + "&extra=true"):
+            with self.assertRaises(SetupProtocolError):
+                delivery.forward(invalid)
+        backend.forward.assert_not_called()
 
     def test_receiver_runs_only_when_ui_drains(self):
         delivery = SetupDelivery(Mock())
@@ -215,6 +227,18 @@ class WindowsPipeRuntimeTests(unittest.TestCase):
     def test_busy_reply_preserves_primary_for_next_delivery(self):
         self.assertEqual(self.exchange(LINK_TEXT, lambda _uri: "busy"), "unavailable")
         self.assertEqual(self.exchange(LINK_TEXT, lambda _uri: "accepted"), "accepted")
+
+    def test_single_root_slash_delivers_the_same_authority_as_empty_path(self):
+        seen = []
+        def receive(uri):
+            link = SetupLink.parse(uri)
+            if link in seen:
+                return "duplicate"
+            seen.append(link)
+            return "accepted"
+        self.assertEqual(self.exchange(LINK_TEXT, receive), "accepted")
+        self.assertEqual(self.exchange(ROOT_LINK_TEXT, receive), "duplicate")
+        self.assertEqual(seen, [SetupLink.parse(LINK_TEXT)])
 
     def test_ui_timeout_never_delivers_later(self):
         self.assertEqual(self.exchange(LINK_TEXT), "unavailable")
