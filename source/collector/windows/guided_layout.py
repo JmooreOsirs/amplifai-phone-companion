@@ -173,6 +173,7 @@ def build(view, logo):
         header.grid_configure(pady=(0, space(8 if compact else 12)))
         view.navigation.grid_configure(pady=(0, space(12 if compact else SECTION_SPACE)))
         view.contact_workspace.set_padding(space(12 if compact else 20))
+        view.contacts_well.set_padding(space(8 if compact else 12))
         view.contact_actions.grid_configure(pady=(space(8 if compact else 12), 0))
         view.resize_contact_header()
         view.resize_contact_controls()

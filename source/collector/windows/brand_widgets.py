@@ -203,6 +203,7 @@ class _ContactCard:
                                borderwidth=0, padx=0, pady=0)
         self.ending.grid(row=1, column=0, sticky="ew", padx=(round(34 * owner.scale), 0))
         self.tools_enabled = False
+        self.layout_key = None
         self.mark_command = self.move_command = None
         self.marked = tk.BooleanVar(master=owner, value=False)
         self.move_menu = tk.Menu(self.panel, tearoff=False)
@@ -243,6 +244,9 @@ class ContactCards(tk.Frame):
         self._detail_font.configure(size=round(abs(self._detail_font.cget("size")) * 13 / 16))
         self._checkbutton_style = checkbutton_style
         self._layout_job = None
+        self._viewport_width = None
+        self._layout_width = None
+        self._scroll_bounds = None
         self._columns = 1
         self._wheel_remainder = 0
         self._aqua = self.tk.call("tk", "windowingsystem") == "aqua"
@@ -429,13 +433,17 @@ class ContactCards(tk.Frame):
         return "break"
 
     def _viewport_changed(self, event) -> None:
+        if event.width == self._viewport_width:
+            return
+        self._viewport_width = event.width
         gap = round(ITEM_GAP * self.scale)
         self._canvas.itemconfigure(self._content_window, width=max(1, event.width - 2 - gap))
         self._queue_layout()
 
     def _content_changed(self, _event=None) -> None:
         bounds = self._canvas.bbox(self._content_window)
-        if bounds:
+        if bounds and bounds != self._scroll_bounds:
+            self._scroll_bounds = bounds
             self._canvas.configure(scrollregion=(0, 0, bounds[2], bounds[3] + round(ITEM_GAP * self.scale)))
 
     def _queue_layout(self) -> None:
@@ -449,19 +457,24 @@ class ContactCards(tk.Frame):
         columns = contact_columns(width, self.scale)
         gap = round(ITEM_GAP * self.scale)
         card_width = max(1, (width - (columns + 1) * gap) // columns)
-        for column in range(max(self._columns, columns)):
-            active = column < columns
-            self._content.grid_columnconfigure(column, weight=1 if active else 0,
-                                                uniform="contact-cards" if active else "",
-                                                minsize=card_width + gap if active else 0)
+        if width != self._layout_width:
+            for column in range(max(self._columns, columns)):
+                active = column < columns
+                self._content.grid_columnconfigure(column, weight=1 if active else 0,
+                                                    uniform="contact-cards" if active else "",
+                                                    minsize=card_width + gap if active else 0)
+            self._layout_width = width
         self._columns = columns
         for index, card in enumerate(self._cards):
+            menu_width = card.move_button.winfo_reqwidth() if card.tools_enabled else 0
+            key = (columns, card_width, menu_width)
+            if card.layout_key == key:
+                continue
+            card.layout_key = key
             card.panel.grid(row=index // columns, column=index % columns, sticky="nsew",
                             padx=(gap // 2, gap - gap // 2), pady=(gap, 0))
             card.panel.configure(width=card_width)
-            text_width = max(1, card_width - round(58 * self.scale))
-            if card.tools_enabled:
-                text_width = max(1, text_width - card.move_button.winfo_reqwidth())
+            text_width = max(1, card_width - round(62 * self.scale) - menu_width)
             card.button.configure(text=wrap_name(card.name, text_width, self._name_font.measure))
             card.ending.configure(wraplength=text_width)
             card.reason.configure(wraplength=max(1, card_width - 2 * card.panel.padding))

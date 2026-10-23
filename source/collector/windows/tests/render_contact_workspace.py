@@ -132,7 +132,7 @@ def computed_styles(root, view) -> dict:
         "Selected.Group.TButton": {"background": app.BACKGROUND, "foreground": app.BACKGROUND},
         "Quiet.TMenubutton": {"background": app.BACKGROUND, "foreground": app.LIME},
         "Card.TMenubutton": {"background": RAISED, "foreground": app.MUTED},
-        "TEntry": {"fieldbackground": app.BACKGROUND, "foreground": app.HEADING, "padding": (spacing(8),)},
+        "TEntry": {"fieldbackground": app.PANEL, "foreground": app.HEADING, "padding": (spacing(8),)},
     }
     result = {}
     for name, properties in expected.items():
@@ -184,11 +184,12 @@ def computed_styles(root, view) -> dict:
         if panel.radius != round(12 * panel.scale) or panel.padding != round(padding * panel.scale):
             raise RuntimeError("Guided panel radius or spacing drifted from the Mac reference")
     result["recessedAndRaisedSurfaces"] = {}
-    for name, fill in (("contact_controls", app.BACKGROUND), ("collection_illustration_well", app.BACKGROUND),
+    for name, fill in (("contact_controls", app.BACKGROUND), ("contacts_well", app.BACKGROUND), ("collection_illustration_well", app.BACKGROUND),
                        ("collection_metric_well", app.BACKGROUND), ("collection_metric_card", RAISED)):
         panel = getattr(view, name)
+        padding = 8 if name in ("contact_controls", "contacts_well") and view.compact_layout else 12
         if (not isinstance(panel, RoundPanel) or panel._fill != fill or panel._border != app.BORDER
-                or panel.radius != round(10 * panel.scale) or panel.padding != round(12 * panel.scale)):
+                or panel.radius != round(10 * panel.scale) or panel.padding != round(padding * panel.scale)):
             raise RuntimeError("Recessed/raised surface drifted from its Mac primitive: " + name)
         result["recessedAndRaisedSurfaces"][name] = {"radiusPixels": panel.radius, "paddingPixels": panel.padding,
                                                     "fill": panel._fill, "border": panel._border}

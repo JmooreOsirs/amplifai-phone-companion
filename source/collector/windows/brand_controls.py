@@ -127,17 +127,17 @@ def install_control_styles(window, style, *, scale=1.0):
     def check_image(selected=False, alternate=False, disabled=False, focus=False):
         def draw_check(draw, s):
             accent = _blend(LIME, BACKGROUND, .55) if disabled else LIME
-            outline = MUTED if disabled else BLUE
+            outline = BLUE if alternate and not disabled else MUTED
             if focus:
-                draw.rounded_rectangle((s(1), s(1), s(27), s(27)), radius=s(6), outline=BLUE, width=s(2))
-            draw.rounded_rectangle((s(4), s(4), s(24), s(24)), radius=s(4),
-                                   fill=accent if selected else None,
+                draw.rounded_rectangle((s(0), s(0), s(32) - 1, s(32) - 1), radius=s(8), outline=BLUE, width=s(3))
+            draw.rounded_rectangle((s(5), s(5), s(27), s(27)), radius=s(5),
+                                   fill=accent if selected else BACKGROUND,
                                    outline=accent if selected else outline, width=s(2))
             if selected:
-                draw.line([(s(8), s(14)), (s(12), s(18)), (s(20), s(9))], fill=BACKGROUND, width=s(2), joint="curve")
+                draw.line([(s(10), s(16)), (s(14), s(20)), (s(22), s(11))], fill=BACKGROUND, width=s(2), joint="curve")
             elif alternate:
-                draw.line([(s(9), s(14)), (s(19), s(14))], fill=outline, width=s(2))
-        return glyph(("check", selected, alternate, disabled, focus), (28, 28), draw_check)
+                draw.line([(s(11), s(16)), (s(21), s(16))], fill=outline, width=s(2))
+        return glyph(("check", selected, alternate, disabled, focus), (32, 32), draw_check)
 
     check_indicator = "Amplifai.Checkbutton.indicator"
     if check_indicator not in style.element_names():
@@ -148,7 +148,7 @@ def install_control_styles(window, style, *, scale=1.0):
             ("focus", "selected", check_image(selected=True, focus=True)),
             ("focus", "alternate", check_image(alternate=True, focus=True)),
             ("focus", check_image(focus=True)), ("selected", check_image(selected=True)),
-            ("alternate", check_image(alternate=True)), width=space(28), height=space(28), sticky="")
+            ("alternate", check_image(alternate=True)), width=space(32), height=space(32), sticky="")
     style.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nsew", "children": [
         (check_indicator, {"side": "left", "sticky": ""}),
         ("Checkbutton.label", {"side": "left", "sticky": ""})]})])
@@ -181,6 +181,7 @@ def install_control_styles(window, style, *, scale=1.0):
             (f"{kind}.padding", {"sticky": "nsew", "children": children})]})])
         style.configure(name, background=backdrop, foreground=foreground, bordercolor=outline,
                         lightcolor=fill, darkcolor=fill, relief="flat", borderwidth=0,
+                        width=0,
                         padding=tuple(space(value) for value in padding),
                         font=("Arial", font_size, "bold", "underline") if quiet and not menu else ("Arial", font_size, "bold"),
                         arrowcolor=foreground, arrowsize=space(12), focuscolor=BLUE)

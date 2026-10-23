@@ -603,7 +603,11 @@ class PhoneWindow:
             refresh(self)
         if hasattr(self, "contact_actions"):
             if self.state.can_change_selection and not self.native_selection_locked:
-                self.change_selection_button.grid()
+                compact = getattr(self, "compact_layout", False)
+                self.change_selection_button.configure(text="Change selection" if compact else "Change selected contacts")
+                self.change_selection_button.grid(row=1 if compact else 2, column=0,
+                                                  sticky="e" if compact else "w",
+                                                  padx=(0, self.space(12) if compact else 0))
             else:
                 self.change_selection_button.grid_remove()
         if hasattr(self, "save_selection"):

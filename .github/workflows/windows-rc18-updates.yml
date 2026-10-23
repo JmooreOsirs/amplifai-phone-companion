@@ -9,6 +9,12 @@ on:
         default: build
         type: choice
         options: [build, handoff, parity-ui, parity-normal-open, native-delivery, native-setup, guided-diagnostic, guided-ui]
+      diagnostic_scope:
+        description: Source diagnostic coverage only; full qualification always covers every scenario
+        required: false
+        default: all
+        type: choice
+        options: [all, contact-layout]
 
 permissions:
   contents: read
@@ -109,6 +115,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Guided viewport desktop preparation failed' }
             $sourceArgs = @('source/collector/windows/tests/render_guided_journey.py', '--source', 'source', '--logo', 'source/public/brand/amplifai-by-nexus-original.png', '--output', (Join-Path $output 'source-render'))
             if ('${{ inputs.phase }}' -eq 'guided-diagnostic') { $sourceArgs += '--collect-all-failures' }
+            if ('${{ inputs.phase }}' -eq 'guided-diagnostic' -and '${{ inputs.diagnostic_scope }}' -eq 'contact-layout') { $sourceArgs += '--diagnostic-contact-layout' }
             python @sourceArgs
             if ($LASTEXITCODE -ne 0) { throw 'Guided source UI qualification failed' }
             if ('${{ inputs.phase }}' -ne 'guided-diagnostic') {

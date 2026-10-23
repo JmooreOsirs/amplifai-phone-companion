@@ -49,6 +49,10 @@ EXPECTED_STAGE = {
     "group-scoped-selection": "contacts", "group-organize-marked": "contacts", "group-moved": "contacts",
     "group-undo": "contacts", "group-continue-pending": "save", "group-bind-pending": "save",
 }
+CONTACT_LAYOUT_DIAGNOSTIC = frozenset((
+    "collecting", "contacts", "contacts-empty", "contacts-partial", "contacts-select-all", "reviewed-contacts",
+    "group-main", "group-review", "group-all", "group-empty-search", "group-organize-marked",
+))
 
 
 @contextmanager
@@ -227,6 +231,8 @@ def assert_group_workspace(root, view, name):
     if workspace.group != group:
         raise RuntimeError("The displayed contact group changed unexpectedly")
     expected_marks = {1, 201} if name == "group-organize-marked" else set()
+    if view.organizing != (name == "group-organize-marked") or not view.organize_button.cget("text").startswith("Organizing" if view.organizing else "Organize"):
+        raise RuntimeError("Organize mode or its visible feedback differs from the current workspace")
     if state.marked_group_ids != expected_marks:
         raise RuntimeError("Organizing marks were lost or confused with contact selection")
     expected_page = 200 if name in ("group-next-page", "group-scoped-selection", "group-organize-marked") else 0
@@ -267,6 +273,34 @@ def assert_group_workspace(root, view, name):
             "nativeSelectionLocked": locked}
 
 
+@contextmanager
+def callback_timings():
+    """Attribute deferred Tk work in this synthetic harness, without product hooks."""
+    metrics = {}
+    original = app.tk.CallWrapper.__call__
+
+    def measured(callback, *args):
+        function = callback.func
+        if getattr(function, "__name__", "") == "callit" and function.__closure__:
+            for name, cell in zip(function.__code__.co_freevars, function.__closure__):
+                if name == "func":
+                    function = cell.cell_contents
+                    break
+        name = getattr(function, "__qualname__", type(function).__name__)
+        entry = metrics.setdefault(name, {"callback": name, "count": 0, "totalSeconds": 0, "maxSeconds": 0})
+        started = time.perf_counter()
+        try:
+            return original(callback, *args)
+        finally:
+            elapsed = time.perf_counter() - started
+            entry["count"] += 1
+            entry["totalSeconds"] += elapsed
+            entry["maxSeconds"] = max(entry["maxSeconds"], elapsed)
+
+    with patch.object(app.tk.CallWrapper, "__call__", measured):
+        yield metrics
+
+
 def measure_pump(root, view):
     """Measure actual production pump, plus an explicitly synthetic eager-render comparator."""
     view.state, view.native = inspected(), app.NativeRun(CLIENT)
@@ -295,7 +329,7 @@ def measure_pump(root, view):
         def eager_refresh():
             refresh()
             eager_job[0] = root.after(50, eager_refresh)
-        with patch.object(view, "refresh", side_effect=refresh):
+        with patch.object(view, "refresh", side_effect=refresh), callback_timings() as callbacks:
             view._next_visual_refresh = 0.0
             view.pump()
             if eager:
@@ -316,6 +350,7 @@ def measure_pump(root, view):
                        "refreshMaxSeconds": max(refresh_durations, default=0),
                        "heartbeatMaxSeconds": max(durations),
                        "heartbeatP95Seconds": sorted(durations)[math.floor((len(durations) - 1) * .95)],
+                       "deferredCallbacks": sorted(callbacks.values(), key=lambda value: value["totalSeconds"], reverse=True)[:16],
                        "singlePumpContinuation": True}
         measurements["syntheticEager20HzComparator" if eager else "productionDirtyRefresh"] = measurement
         if not eager and not 2 <= len(renders) <= math.ceil(wall) + 1:
@@ -402,6 +437,9 @@ def render(args, *, contacts_only=False, frozen_identity=None):
     if sys.platform != "win32" or os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows":
         raise RuntimeError("Guided fixture requires the disposable actual Windows CI desktop")
     collect_all = bool(getattr(args, "collect_all_failures", False))
+    focused = bool(getattr(args, "diagnostic_contact_layout", False))
+    if focused and (not collect_all or frozen_identity):
+        raise RuntimeError("Focused diagnostics cannot replace the strict source/frozen qualification")
     if collect_all and frozen_identity:
         raise RuntimeError("Collect-all diagnostics are source-only; frozen qualification remains strict")
     args.output.mkdir(parents=True, exist_ok=False)
@@ -481,6 +519,8 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                         interactions.append({"viewport": [width, height], "tkScaling": scaling,
                                              "kind": "contact-groups", "passed": passed, "checks": result})
                 for name, native, state in scenarios():
+                    if focused and name not in CONTACT_LAYOUT_DIAGNOSTIC:
+                        continue
                     if contacts_only and name not in ("contacts", "contacts-empty", "contacts-partial", "contacts-select-all", "reviewed-contacts"):
                         continue
                     case_start = len(failures)
@@ -593,7 +633,8 @@ def render(args, *, contacts_only=False, frozen_identity=None):
     status = ("actual-windows-source-guided-diagnostic" if collect_all else
               "actual-windows-frozen-synthetic-guided-ui" if frozen_identity else "actual-windows-source-synthetic-guided-ui")
     receipt = {"schema": 3, "status": status, "passed": not failures, "collectAllFailures": collect_all,
-               "sourceProof": identity, "plannedScenarioCount": (5 if contacts_only else len(EXPECTED_STAGE)) * len(VIEWPORTS),
+               "diagnosticScope": "contact-layout" if focused else "all",
+               "sourceProof": identity, "plannedScenarioCount": (5 if contacts_only else len(CONTACT_LAYOUT_DIAGNOSTIC) if focused else len(EXPECTED_STAGE)) * len(VIEWPORTS),
                "guiSourceSha256": gui_digest(args.source), "productionIdentity": {"version": app.VERSION, "build": app.BUILD,
                "channel": app.CHANNEL, "bundleId": app.BUNDLE_ID}, "screenshots": records, "computedStylesByViewport": styles,
                "scenarioResults": cases, "checks": checks, "failureCount": len(failures),
@@ -619,6 +660,8 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--collect-all-failures", action="store_true",
                         help="Source-only bounded census; retain every failure and exit nonzero if any check fails")
+    parser.add_argument("--diagnostic-contact-layout", action="store_true",
+                        help="Source diagnostic only: affected contact layouts, collection, and measured pump callbacks")
     args = parser.parse_args()
     args.trace_stalls = True
     # A stalled Tk callback must leave its Python stack in the CI log before

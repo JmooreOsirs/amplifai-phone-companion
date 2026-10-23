@@ -157,6 +157,25 @@ class ContactCardsTkTests(unittest.TestCase):
         self.root.update_idletasks()
         self.assertEqual(set(self.root.tk.call("info", "commands")), commands)
 
+    def test_unchanged_width_and_page_do_not_measure_names_again(self):
+        names = [card.button.cget("text") for card in self.cards._cards]
+        with patch.object(self.cards._name_font, "measure", wraps=self.cards._name_font.measure) as measure:
+            self.cards._viewport_width = self.cards._canvas.winfo_width()
+            self.cards._viewport_changed(types.SimpleNamespace(width=self.cards._viewport_width, height=400))
+            self.cards._queue_layout()
+            self.root.update_idletasks()
+            measure.assert_not_called()
+        self.assertEqual([card.button.cget("text") for card in self.cards._cards], names)
+
+    def test_card_menu_uses_text_width_instead_of_theme_minimum(self):
+        from guided_layout import apply_style
+        apply_style(self.root)
+        self.cards.set_contact_tools(0, review=False, reason=None, marked=False, organizing=False,
+                                     mark_command=lambda _index: None, move_command=lambda *_args: None)
+        self.root.update_idletasks()
+        self.assertLess(self.cards._cards[0].move_button.winfo_reqwidth(), round(48 * self.cards.scale))
+        self.assertLessEqual(len(self.cards._cards[0].button.cget("text").splitlines()), 2)
+
     def test_panel_measures_wrapped_content_and_releases_pending_measurement(self):
         panel = widgets.RoundPanel(self.root, width=260)
         label = tk.Label(panel.content, text="Synthetic wrapped content " * 8, wraplength=200)

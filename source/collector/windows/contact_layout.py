@@ -33,6 +33,11 @@ def build(view):
     def resize_header(_event):
         if header.winfo_width() <= 1:
             return
+        compact = getattr(view, "compact_layout", False)
+        key = (header.winfo_width(), view.contact_heading.winfo_reqwidth(), count.winfo_reqwidth(), compact)
+        if getattr(view, "_contact_header_layout", None) == key:
+            return
+        view._contact_header_layout = key
         stacked = header.winfo_width() < view.contact_heading.winfo_reqwidth() + count.winfo_reqwidth() + space(20)
         position = (1, 0) if stacked else (0, 1)
         info = count.grid_info()
@@ -40,7 +45,6 @@ def build(view):
             count.grid(row=position[0], column=position[1], sticky="w" if stacked else "e",
                        pady=(space(8) if stacked else 0, 0))
         view.workspace_context.configure(wraplength=header.winfo_width())
-        compact = getattr(view, "compact_layout", False)
         view.workspace_context.grid_remove() if compact else view.workspace_context.grid()
         header.grid_configure(pady=(0, space(8 if compact else 12)))
     header.bind("<Configure>", resize_header)
@@ -96,16 +100,27 @@ def build(view):
         if width <= 1:
             return
         narrow = width < space(900)
+        compact = getattr(view, "compact_layout", False)
+        workspace = view.state.contact_workspace
+        scoped = workspace is not None and workspace.is_scoped
+        show_recovery = view.state.selecting_all or workspace is None
+        scope_below = narrow and scoped and width < (view.select_all_button.winfo_reqwidth()
+            + scope.winfo_reqwidth() + view.organize_button.winfo_reqwidth() + space(12))
+        key = (width, narrow, compact, scoped, show_recovery, scope_below)
+        if getattr(view, "_contact_controls_layout", None) == key:
+            return
+        view._contact_controls_layout = key
         position = (1, 0) if narrow else (0, 1)
-        info = filters.grid_info()
-        if (info["row"], info["column"]) != position:
-            filters.grid(row=position[0], column=position[1], columnspan=3 if narrow else 1,
-                         sticky="w", pady=(space(8) if narrow else 0, 0))
-            search.grid(row=2 if narrow else 1)
-        if view.state.contact_workspace is not None and view.state.contact_workspace.is_scoped:
-            scope.grid(in_=controls if narrow else search, row=0, column=1 if narrow else 2,
+        filters.grid(row=position[0], column=position[1],
+                     columnspan=(2 if show_recovery or scope_below else 3) if narrow else 1,
+                     sticky="w", pady=(space(4 if compact else 8) if narrow else 0, 0))
+        search.grid(row=2 if narrow else 1, pady=(space(8 if compact else 12), 0))
+        if scoped:
+            scope.grid(in_=controls if narrow else search, row=1 if scope_below else 0,
+                       column=2 if scope_below or not narrow else 1,
                        columnspan=1, sticky="e",
-                       padx=(0 if narrow else space(12), 0), pady=(space(8) if narrow else 0, 0))
+                       padx=(0 if narrow else space(12), 0),
+                       pady=(space(4 if compact else 8) if scope_below else 0, 0))
         else:
             scope.grid_remove()
         if getattr(view, "_contact_controls_narrow", None) != narrow:
@@ -119,12 +134,19 @@ def build(view):
                 view.scope_count_label.pack(side="right")
                 view.scope_select_button.pack(side="left", padx=(0, space(8)))
                 view.scope_clear_button.pack(side="left", padx=(0, space(8)))
-        compact = getattr(view, "compact_layout", False)
+        if show_recovery:
+            recovery.grid(row=1 if narrow else 2, column=2 if narrow else 0,
+                          columnspan=1 if narrow else 3, sticky="e" if narrow else "w")
+        else:
+            # An empty Tk frame keeps its previous requested height. Remove the
+            # row itself when the last recovery action disappears.
+            recovery.grid_remove()
+        well.set_padding(space(8 if compact else 12))
         well.grid_configure(pady=(0, space(8 if compact else 12)))
     controls.bind("<Configure>", resize_controls)
     view.resize_contact_controls = resize_controls
 
-    contacts_well = surface(workspace, kind="well", padding=12, background=PANEL, fill_content=True)
+    contacts_well = view.contacts_well = surface(workspace, kind="well", padding=12, background=PANEL, fill_content=True)
     contacts_well.grid(row=2, column=0, sticky="nsew")
     contacts_well.content.columnconfigure(0, weight=1)
     contacts_well.content.rowconfigure(0, weight=1)
@@ -195,7 +217,6 @@ def refresh(view):
                  "No contacts are available in this collection.")
         view.contact_empty_label.configure(text=empty)
         view.contact_empty_label.grid()
-    view.resize_contact_controls()
     scope = workspace.scope_label if workspace else "All contacts"
     selected = len(state.selected_ids & workspace.filtered_ids) if workspace else len(state.selected_ids)
     view.scope_count_label.configure(text=f"{selected:,} selected in {workspace.group if workspace else 'All'}")
@@ -207,12 +228,16 @@ def refresh(view):
     view.scope_menu.entryconfigure(0, label=f"Select all in {scope}", state="normal" if editing else "disabled")
     view.scope_menu.entryconfigure(1, label=f"Deselect all in {scope}", state="normal" if editing else "disabled")
     view.scope_menu.entryconfigure(3, label=f"{selected:,} of {workspace.filtered_count if workspace else len(state.contacts):,} selected in {scope}")
-    view.organize_button.configure(text="Organize" if getattr(view, "compact_layout", False) else ("Organizing" if view.organizing else "Organize") +
-                                  (f" · {len(state.marked_group_ids):,} marked" if state.marked_group_ids else ""),
+    view.organize_button.configure(text=("Organizing" if view.organizing else "Organize") +
+                                  (f" · {len(state.marked_group_ids):,} marked" if state.marked_group_ids and not getattr(view, "compact_layout", False) else ""),
                                   state="normal" if editing or state.can_review and not view.native_selection_locked else "disabled")
     view.cancel_select_all_button.pack(side="left") if state.selecting_all else view.cancel_select_all_button.pack_forget()
     view.clear_all_button.pack(side="left") if workspace is None and not state.selecting_all else view.clear_all_button.pack_forget()
+    view.resize_contact_controls()
     if workspace:
         count = workspace.filtered_count
         start = workspace.page_start + 1 if count else 0
         view.contact_page.set(f"Showing {start:,}–{workspace.page_start + len(state.contacts):,} of {count:,} in {workspace.group}")
+    elif getattr(view, "compact_layout", False) and not state.selecting_all:
+        # The selected total is already in the fixed heading.
+        view.contact_page.set(f"{len(state.contacts):,} on page / {state.total_contacts:,} total")
