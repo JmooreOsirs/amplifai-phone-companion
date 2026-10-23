@@ -37,6 +37,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -652,7 +653,7 @@ final class SelectionLayoutCases {
                 "Docking accepted an uncovered gap above the navigation bar");
         require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom + 1, systemBottom, observed.system),
                 "Docking accepted system-bar bounds inconsistent with the stable inset");
-        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, List.of()),
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, Collections.emptyList()),
                 "Docking accepted an unobserved bottom system bar");
         List<Rect> duplicate = new ArrayList<>(observed.system); duplicate.add(new Rect(bar));
         require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, duplicate),
