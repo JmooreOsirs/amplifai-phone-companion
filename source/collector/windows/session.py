@@ -22,6 +22,12 @@ MAX_CONTACT_WORKSPACE_PREVIEWS = 100_000
 MAX_CONTACT_WORKSPACE_MEMORY_BYTES = 256 * 1024 * 1024
 CONTACT_WORKSPACE_MEMORY_RESERVE = 8 * 1024 * 1024
 BACKUP_CHECK_MODE = "backup-encryption-status"
+CONNECTION_FAILURE_HINTS = {
+    "phone_connection": "Connect exactly one unlocked iPhone and check that it appears in Apple Devices on this PC.",
+    "trust_required": "The iPhone's Trust connection could not be confirmed. Unlock it and review any Trust prompt yourself.",
+    "connection_timeout": "The iPhone connection timed out. Check that it appears in Apple Devices on this PC and keep it unlocked.",
+    "connection_lost": "The iPhone connection was interrupted. Check the existing cable or Wi-Fi connection and keep the iPhone unlocked.",
+}
 WEBSITE_ORIGIN = "https://amplifai.satoris.ai"
 BRIDGE_PORT = 48751
 OPTIONAL_SOURCES = frozenset({"calls", "messages"})
@@ -146,6 +152,7 @@ class Session:
         self.backup_check_status = "Backup setting: Unknown — no read-only check completed."
         self._backup_check_received = False
         self._pending_backup_setting: bool | None = None
+        self._backup_check_failure_hint = ""
         self.source_counts = (0, 0)
         self.transfer_status = "No phone data has been received."
         self.transfer_stage = ""
@@ -337,6 +344,7 @@ class Session:
             self.checked_backup_setting = None
             self._pending_backup_setting = None
             self._backup_check_received = False
+            self._backup_check_failure_hint = ""
             self.backup_check_status = "Backup setting: checking the currently connected trusted iPhone…"
         if mode == "connect":
             self.contacts = []
@@ -1251,12 +1259,18 @@ class Session:
             self.needs_inspection = True
             self.phase = "error"
             code = event.get("code")
+            connection_hint = CONNECTION_FAILURE_HINTS.get(code, "") if isinstance(code, str) else ""
+            if self.mode == BACKUP_CHECK_MODE:
+                self._backup_check_failure_hint = connection_hint
             messages = {
                 "workspace_marker": "A private empty or marker-only root may remain. No phone data was written by this attempt. Collection is paused; this unverified root is not automatically removed.",
                 "workspace_unsafe": "Private storage could not be verified. Unverified directories are not repaired or automatically removed. Collection is stopped; cleanup is unconfirmed.",
                 "workspace_unavailable": "Private storage is unavailable. Collection completion is not assumed; check the package/runtime and inspect after the helper stops.",
             }
-            self._failure_status = messages.get(code, "Collection or handoff failed. Completion and cleanup are unconfirmed. Check device permissions and inspect temporary data after the helper stops.") if isinstance(code, str) else "Helper communication failed; completion and cleanup are unconfirmed."
+            if connection_hint:
+                self._failure_status = connection_hint + " Completion and cleanup are unconfirmed. Inspect temporary data after the helper stops."
+            else:
+                self._failure_status = messages.get(code, "Collection or handoff failed. Completion and cleanup are unconfirmed. Check device permissions and inspect temporary data after the helper stops.") if isinstance(code, str) else "Helper communication failed; completion and cleanup are unconfirmed."
             self.status = self._failure_status
         else:
             raise ProtocolError("Unknown helper event")
@@ -1277,6 +1291,8 @@ class Session:
                 self.backup_check_status = "Last backup-setting check: On. This is not captured-source coverage; Calls are not guaranteed."
             elif self.checked_backup_setting is False:
                 self.backup_check_status = "Last backup-setting check: Off. Use the guide if you choose to enable encryption yourself; unavailable Calls remain unavailable."
+            elif self._backup_check_failure_hint:
+                self.backup_check_status = f"Backup setting: Unknown. {self._backup_check_failure_hint} No setting was changed."
             else:
                 self.backup_check_status = "Backup setting: Unknown. Connect one unlocked, already trusted iPhone and recheck; no setting was changed."
             self._pending_backup_setting = None

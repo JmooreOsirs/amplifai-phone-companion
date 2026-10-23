@@ -109,6 +109,14 @@ class ConnectionErrorTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(packets, [{"kind": "error", "code": "workspace_unavailable"}])
 
+    def test_inspection_errors_are_not_diagnosed_as_phone_connections(self):
+        for error in (TimeoutError(PRIVATE_DETAIL), ConnectionError(PRIVATE_DETAIL)):
+            sink = io.StringIO()
+            with patch("amplifai_phone.agent.abandoned_sessions", side_effect=error):
+                self.assertEqual(run_admin("inspect", sink), 1)
+            self.assertEqual(json.loads(sink.getvalue()),
+                             {"kind": "error", "code": "workspace_unavailable"})
+
     def test_setting_check_does_not_reuse_an_earlier_failure_hint(self):
         state = inspected_session()
         state.begin(BACKUP_CHECK_MODE)
