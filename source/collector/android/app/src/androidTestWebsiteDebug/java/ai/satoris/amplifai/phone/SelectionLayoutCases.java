@@ -336,7 +336,7 @@ final class SelectionLayoutCases {
         capture("ime-review");
         instrumentation.sendStringSync("305");
         awaitLayout(() -> "305".contentEquals(search.getText()) && choices.getChildCount() == 1 &&
-                get("pageIndicator", TextView.class).getText().toString().startsWith("1–1 of 1"),
+                get("pageIndicator", TextView.class).getContentDescription().toString().startsWith("Contacts 1–1 of 1"),
                 "Typed search did not filter the synthetic contacts");
         main(() -> {
             require(expected.equals(selected), "Typing changed the selected contacts");
