@@ -41,7 +41,7 @@ def bounds(root, widget) -> list[int]:
 def require_bounds(root, widget, name):
     box = bounds(root, widget)
     x, y, width, height = box
-    if (not widget.winfo_ismapped() or min(x, y) < 0 or min(width, height) <= 1
+    if (not widget.winfo_viewable() or min(x, y) < 0 or min(width, height) <= 1
             or x + width > root.winfo_width() or y + height > root.winfo_height()):
         raise RuntimeError(f"Current-stage control clipped or hidden: {name}: {box}")
     if isinstance(widget, ttk.Button) and width < widget.winfo_reqwidth():
@@ -57,7 +57,7 @@ def workspace_geometry(root, view) -> dict:
              "page_label", "contacts", "workspace_status_label", "contact_actions", "review_button",
              "pair_button", "details_button", "change_selection_button")
     records = {name: require_bounds(root, getattr(view, name), name) for name in names
-               if getattr(view, name).winfo_ismapped()}
+               if getattr(view, name).winfo_viewable()}
     if "contacts" not in records or "contact_actions" not in records:
         raise RuntimeError("Contact grid or action dock is missing")
     for name in ("contact_heading", "contact_selected", "contact_total"):
@@ -72,7 +72,7 @@ def workspace_geometry(root, view) -> dict:
         raise RuntimeError("Contact workspace leaves no readable contact card viewport")
     if records["contacts"][1] + records["contacts"][3] > records["workspace_status_label"][1]:
         raise RuntimeError("Contact grid overlaps the fixed status/action dock")
-    if view.details_pane.winfo_ismapped():
+    if view.details_pane.winfo_viewable():
         raise RuntimeError("Setup or recovery pane leaked into the contact workspace")
     return records
 
@@ -179,7 +179,7 @@ def keyboard_traversal(root, required, *, start):
 
 
 def check_keyboard(root, view):
-    required = [view.search_entry, view.review_button if view.review_button.winfo_ismapped() else view.pair_button,
+    required = [view.search_entry, view.review_button if view.review_button.winfo_viewable() else view.pair_button,
                 view.recovery_toggle]
     if view.contacts._cards:
         required.extend((view.contacts._cards[0].button, view.contacts._cards[-1].button))

@@ -77,9 +77,11 @@ def assert_stage(root, view, name):
         raise RuntimeError(f"Wrong user stage for {name}: {current.stage}")
     expected_panel = ("details" if name == "recovery" or current.stage == "attention" else
                       "save" if current.stage == "complete" else "approval" if current.stage == "prepare" else current.stage)
-    visible = [key for key, panel in view.stage_panels.items() if panel.winfo_ismapped()]
+    # Tk retains a child's mapped flag when a stage ancestor is hidden.
+    # Viewable checks the complete ancestor chain, as actual visibility requires.
+    visible = [key for key, panel in view.stage_panels.items() if panel.winfo_viewable()]
     expected = [] if expected_panel == "contacts" else [expected_panel]
-    if visible != expected or bool(view.contact_workspace.winfo_ismapped()) != (expected_panel == "contacts"):
+    if visible != expected or bool(view.contact_workspace.winfo_viewable()) != (expected_panel == "contacts"):
         raise RuntimeError(f"Unrelated stage is visible in {name}: {visible}")
     labels = [item.cget("text") for item in view.journey_steps]
     if labels != ["1  Approve", "2  Collect", "3  Choose", "4  Save & report"] or any(isinstance(child, ttk.Button) for child in view.navigation.winfo_children()):
@@ -90,17 +92,17 @@ def assert_stage(root, view, name):
             raise RuntimeError("Journey indicator does not match the active stage")
     for attribute in ("legacy_consent", "agreement", "approve", "connect"):
         widget = getattr(view, attribute, None)
-        if widget is not None and widget.winfo_ismapped():
+        if widget is not None and widget.winfo_viewable():
             raise RuntimeError("Legacy local approval leaked into the guided flow")
     if expected_panel != "details":
         for widget in (view.inspect, view.clear, view.copy_code_button, view.open_account_button, view.force_button):
-            if widget.winfo_ismapped():
+            if widget.winfo_viewable():
                 raise RuntimeError("Manual recovery controls leaked into a normal stage")
     if current.stage == "collection":
         for widget in (view.native_agreement, view.native_approve, view.native_start, view.contacts, view.pair_button):
-            if widget.winfo_ismapped():
+            if widget.winfo_viewable():
                 raise RuntimeError("Unrelated approval/selection control is visible while collecting")
-        if bool(view.password.winfo_ismapped()) != (name == "password"):
+        if bool(view.password.winfo_viewable()) != (name == "password"):
             raise RuntimeError("Backup password entry is shown outside the password stage")
     if current.stage == "approval":
         text = view.native_disclosure.get("1.0", "end-1c")
@@ -124,7 +126,7 @@ def stage_geometry(root, view, panel):
     # Scrollable setup/recovery controls must be horizontally sound and become
     # fully visible when reached by native keyboard focus.
     for widget in descendants(container):
-        if isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Entry)) and widget.winfo_ismapped():
+        if isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Entry)) and widget.winfo_viewable():
             box = bounds(root, widget)
             if box[0] < x or box[0] + box[2] > x + width or box[2] < widget.winfo_reqwidth():
                 raise RuntimeError(f"Current-stage control is horizontally clipped: {widget}: {box}")
@@ -146,11 +148,11 @@ def assert_actions(view, name):
         if primary.cget("style") != "Primary.TButton" or str(primary.cget("state")) != "normal":
             raise RuntimeError("The contact action dock has no enabled branded primary Continue")
     if name in ("continue-uncertain", "bind-uncertain"):
-        if not view.recovery_retry_button.winfo_ismapped() or str(view.contacts.cget("state")) != "disabled":
+        if not view.recovery_retry_button.winfo_viewable() or str(view.contacts.cget("state")) != "disabled":
             raise RuntimeError("Uncertain Continue lost recovery or unlocked the approved selection")
-    if name == "start-uncertain" and (view.native_agreement.winfo_ismapped() or not view.native_retry.winfo_ismapped()):
+    if name == "start-uncertain" and (view.native_agreement.winfo_viewable() or not view.native_retry.winfo_viewable()):
         raise RuntimeError("Uncertain Start re-asked approval or hid retry")
-    if name == "authority-paused" and not view.recovery_retry_button.winfo_ismapped():
+    if name == "authority-paused" and not view.recovery_retry_button.winfo_viewable():
         raise RuntimeError("Paused retained review lost confirmation recovery")
     if name.startswith("legacy-") and view.save_heading.cget("text") != "Connect your account":
         raise RuntimeError("Legacy local handoff incorrectly claims an approved account connection")
@@ -263,9 +265,19 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                     if name == "recovery":
                         view.show_workspace("details")
                     root.update()
-                    current, panel = assert_stage(root, view, name)
-                    assert_actions(view, name)
-                    geometry = stage_geometry(root, view, panel)
+                    try:
+                        current, panel = assert_stage(root, view, name)
+                        assert_actions(view, name)
+                        geometry = stage_geometry(root, view, panel)
+                    except Exception as error:
+                        failure = capture(root, args.output, f"FAILED-{width}x{height}-scale-{scaling:.2f}-{name}")
+                        failure.update(scenario=name, error=str(error), controls=[
+                            {"widget": str(widget), "mapped": bool(widget.winfo_ismapped()),
+                             "viewable": bool(widget.winfo_viewable())}
+                            for widget in descendants(root)
+                            if isinstance(widget, (ttk.Button, ttk.Checkbutton, ttk.Entry))])
+                        (args.output / "failure.json").write_text(json.dumps(failure, indent=2) + "\n", encoding="utf-8")
+                        raise
                     focus, scroll = [], None
                     if panel == "contacts":
                         selected = set(state.selected_ids)
