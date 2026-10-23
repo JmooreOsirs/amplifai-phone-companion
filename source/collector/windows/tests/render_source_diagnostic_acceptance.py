@@ -81,7 +81,8 @@ def main() -> None:
                     raise RuntimeError("Escape did not close the source diagnostic disclosure")
     computed = {key: str(styles.lookup("TButton", key)) for key in ("font", "foreground", "background", "padding", "bordercolor")}
     label_style = {key: str(styles.lookup("TLabel", key)) for key in ("font", "foreground", "background")}
-    if (computed["background"], computed["foreground"], computed["bordercolor"]) != (app.BORDER, app.HEADING, app.BORDER):
+    # Match the accepted rounded secondary control's PANEL backdrop and BORDER fill.
+    if (computed["background"], computed["foreground"], computed["bordercolor"]) != (app.PANEL, app.HEADING, app.BORDER):
         raise RuntimeError("Diagnostic controls diverged from existing native source tokens")
     if (label_style["background"], label_style["foreground"]) != (app.BACKGROUND, app.BODY):
         raise RuntimeError("Diagnostic labels diverged from existing native source tokens")

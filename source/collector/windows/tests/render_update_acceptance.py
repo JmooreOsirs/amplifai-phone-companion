@@ -61,7 +61,8 @@ def main() -> None:
                 if control.cget("style") not in {"", "TButton"} or str(control.cget("takefocus")) == "0":
                     raise RuntimeError("Update controls diverged from native keyboard/button pattern")
     computed = {key: str(styles.lookup("TButton", key)) for key in ("font", "foreground", "background", "padding", "bordercolor")}
-    if (computed["background"] != app.BORDER or computed["foreground"] != app.HEADING or computed["bordercolor"] != app.BORDER):
+    # The accepted rounded secondary control paints BORDER over the PANEL backdrop.
+    if (computed["background"] != app.PANEL or computed["foreground"] != app.HEADING or computed["bordercolor"] != app.BORDER):
         raise RuntimeError("Update button styles diverged from existing source tokens")
     receipt = {"status": "actual-windows-tk-synthetic-update-states", "guiSourceSha256": gui_digest(args.source),
                "screenshots": records, "computedButtonStyle": computed, "tkScaling": root.tk.call("tk", "scaling"),
