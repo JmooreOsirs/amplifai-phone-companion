@@ -36,6 +36,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -541,6 +542,8 @@ final class SelectionLayoutCases {
     private static final class LegacyWindows {
         final Rect ime = new Rect();
         final Rect application = new Rect();
+        final List<Rect> system = new ArrayList<>();
+        int imeCount;
         final JSONArray windows = new JSONArray();
     }
 
@@ -554,11 +557,13 @@ final class SelectionLayoutCases {
                 result.windows.put(new JSONObject().put("id", window.getId()).put("type", window.getType())
                         .put("layer", window.getLayer()).put("focused", window.isFocused()).put("bounds", rect.toShortString()));
                 if (window.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
-                    require(result.ime.isEmpty(), "Multiple IME windows require separate qualification");
+                    require(++result.imeCount == 1, "Multiple IME windows require separate qualification");
                     result.ime.set(rect);
                 } else if (window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION && window.isFocused()) {
                     require(result.application.isEmpty(), "Multiple focused application windows in fixture");
                     result.application.set(rect);
+                } else if (window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM) {
+                    result.system.add(new Rect(rect));
                 }
             }
         } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
@@ -578,6 +583,13 @@ final class SelectionLayoutCases {
         Rect usable = new Rect(observed.application);
         if (!usable.intersect(screen) || !usable.intersect(window)) usable.setEmpty();
         usable.bottom = Math.min(usable.bottom, visibleIme.top);
+        WindowInsets insets = root.getRootWindowInsets();
+        int stableBottom = insets == null ? -1 : insets.getStableInsetBottom();
+        int systemBottom = insets == null ? -1 : insets.getSystemWindowInsetBottom();
+        Rect bottomBar = legacyBottomBar(observed.system, screen, stableBottom);
+        boolean docked = legacyImeDocked(observed.ime, observed.imeCount, screen, observed.application,
+                window, stableBottom, systemBottom, observed.system);
+        int dockingNegativeCases = verifyLegacyDockingRejections(observed, screen, window, stableBottom, systemBottom);
         JSONObject measurement;
         try {
             measurement = new JSONObject().put("imeVisible", !visibleIme.isEmpty())
@@ -586,12 +598,66 @@ final class SelectionLayoutCases {
                     .put("applicationWindow", observed.application.toShortString())
                     .put("screenBounds", screen.toShortString()).put("visibleWindow", window.toShortString())
                     .put("rootScreenX", origin[0]).put("rootScreenY", origin[1])
+                    .put("stableBottom", stableBottom).put("systemBottom", systemBottom)
+                    .put("bottomSystemWindow", bottomBar == null ? JSONObject.NULL : bottomBar.toShortString())
+                    .put("imeBottomCoverage", observed.ime.bottom == screen.bottom ? "screen-edge" : "observed-system-bar")
+                    .put("docked", docked).put("dockingNegativeCases", dockingNegativeCases)
                     .put("usable", usable.toShortString());
         } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
-        boolean docked = !visibleIme.isEmpty() && !observed.application.isEmpty() &&
-                visibleIme.left == screen.left && visibleIme.right == screen.right &&
-                visibleIme.bottom == screen.bottom && visibleIme.bottom >= window.bottom;
         requireImeChoices(identity, action, usable, measurement, docked);
+    }
+
+    private static Rect legacyBottomBar(List<Rect> system, Rect screen, int stableBottom) {
+        if (stableBottom <= 0 || stableBottom >= screen.height()) return null;
+        Rect found = null;
+        for (Rect bounds : system) {
+            if (bounds.left == screen.left && bounds.right == screen.right && bounds.bottom == screen.bottom &&
+                    bounds.height() == stableBottom) {
+                if (found != null) return null;
+                found = bounds;
+            }
+        }
+        return found;
+    }
+
+    private static boolean legacyImeDocked(Rect ime, int imeCount, Rect screen, Rect application,
+                                            Rect visible, int stableBottom, int systemBottom, List<Rect> system) {
+        if (imeCount != 1 || ime.isEmpty() || !screen.contains(ime) || visible.isEmpty() ||
+                !application.contains(visible) || ime.left != screen.left || ime.right != screen.right ||
+                ime.top != visible.bottom || systemBottom != screen.bottom - ime.top) return false;
+        if (ime.bottom == screen.bottom) return true;
+        Rect bar = legacyBottomBar(system, screen, stableBottom);
+        // API29 may report the IME behind part of the navigation bar; their union must reach the screen edge.
+        return bar != null && ime.top < bar.top && ime.bottom >= bar.top;
+    }
+
+    private int verifyLegacyDockingRejections(LegacyWindows observed, Rect screen, Rect visible,
+                                               int stableBottom, int systemBottom) {
+        Rect ime = observed.ime;
+        require(!legacyImeDocked(ime, 2, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted multiple/split IME windows");
+        Rect partial = new Rect(ime); partial.left++;
+        require(!legacyImeDocked(partial, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted a partial-width keyboard");
+        Rect floating = new Rect(ime); floating.offset(0, -1);
+        require(!legacyImeDocked(floating, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted a floating keyboard separated from the visible application");
+        Rect outside = new Rect(ime); outside.bottom = screen.bottom + 1;
+        require(!legacyImeDocked(outside, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted an offscreen keyboard");
+        Rect bar = legacyBottomBar(observed.system, screen, stableBottom);
+        if (bar == null || ime.bottom == screen.bottom) return 4;
+        Rect gap = new Rect(ime); gap.bottom = bar.top - 1;
+        require(!legacyImeDocked(gap, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted an uncovered gap above the navigation bar");
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom + 1, systemBottom, observed.system),
+                "Docking accepted system-bar bounds inconsistent with the stable inset");
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, List.of()),
+                "Docking accepted an unobserved bottom system bar");
+        List<Rect> duplicate = new ArrayList<>(observed.system); duplicate.add(new Rect(bar));
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, duplicate),
+                "Docking accepted ambiguous bottom system windows");
+        return 8;
     }
 
     private void recordLegacyWindowState(String identity) {

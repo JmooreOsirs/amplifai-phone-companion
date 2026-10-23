@@ -590,3 +590,15 @@ The API 36 emulator instrumentation covers the retained v1 pair/ACK contract and
 - Confirm exact Host/Origin rejection, bad-code exhaustion, token replay rejection, ordered-page retry, one-use delivery, wrong and correct saved acknowledgements, and listener closure only after acknowledgement/cancel/expiry. JVM tests cover the local protocol; these do not establish browser/OEM interoperability.
 
 Record actual physical permission and account results separately from local checks. Never infer complete history from a readable provider or infer a saved account from page delivery.
+
+### API29 keyboard qualification
+
+The legacy selection fixture measures the installed IME and focused application through
+accessibility windows, then intersects the usable viewport with the actual visible frame.
+A full-width IME must meet that frame exactly and agree with the reported system inset.
+Its bottom must reach the screen edge or overlap an observed full-width, bottom-aligned
+system bar whose height equals the stable bottom inset. An uncovered gap is rejected.
+The fixture also rejects partial-width, floating, offscreen, multiple/split IME windows
+and missing, ambiguous or inconsistent bottom-bar evidence. Synthetic geometry checks
+exercise these rejection rules; acceptance still requires the actual installed keyboard,
+native fonts, 48 dp controls, a whole contact row and the existing selection/dismissal guards.
