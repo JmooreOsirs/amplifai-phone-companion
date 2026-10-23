@@ -66,6 +66,9 @@ public final class MainActivity extends Activity {
     private SanitizedStore store;
     private int pageOffset;
     private TextView pageIndicator;
+    private String selectionPageText = "";
+    private String handoffActionText = "Approve browser handoff";
+    private String cancelHandoffText = "Cancel browser handoff";
     private Button previousPage;
     private Button nextPage;
     private Button selectAllContacts;
@@ -336,8 +339,7 @@ public final class MainActivity extends Activity {
             status.setText("Safe support code copied. Submit it through AMPLIFai contact if you want help; it contains no phone records or account credentials.");
         });
 
-        LinearLayout selectionTools = disclosure("Contact selection options", body);
-        addLegacyCopy("Search by name or phone ending. Only selected contacts and their matched available interactions belong in a later, separately consented account transfer.", 13, selectionTools);
+        addLegacyCopy("Search by name or phone ending. Only selected contacts and their matched available interactions belong in a later, separately consented account transfer.", 13, body);
         search = new EditText(this);
         search.setSingleLine(true);
         search.setHint("Search contacts");
@@ -351,7 +353,15 @@ public final class MainActivity extends Activity {
             @Override public void afterTextChanged(Editable s) {}
         });
         selectionHeader.addView(search);
-        selectAllContacts = button("Select all contacts across every page", selectionTools);
+        LinearLayout selectionBulkActions = new LinearLayout(this);
+        selectionBulkActions.setOrientation(LinearLayout.HORIZONTAL);
+        selectionHeader.addView(selectionBulkActions);
+        selectAllContacts = button("Select all contacts", selectionBulkActions);
+        selectAllContacts.setContentDescription("Select all contacts across every page, including contacts hidden by search");
+        LinearLayout.LayoutParams selectAllParams = new LinearLayout.LayoutParams(0, -2, 1);
+        selectAllParams.topMargin = dp(8);
+        selectAllParams.rightMargin = dp(4);
+        selectAllContacts.setLayoutParams(selectAllParams);
         selectAllContacts.setOnClickListener(view -> selectEveryContact());
         cancelSelectAll = button("Cancel all-contact selection", actionBar);
         cancelSelectAll.setVisibility(View.GONE);
@@ -361,7 +371,12 @@ public final class MainActivity extends Activity {
             status.setText("All-contact selection cancelled. Your previous contact choices are unchanged.");
             updater.onSafetyChanged();
         });
-        clearSelectedContacts = button("Clear all selected contacts", selectionTools);
+        clearSelectedContacts = secondaryButton("Deselect all", selectionBulkActions);
+        clearSelectedContacts.setContentDescription("Deselect all contacts across every page, including contacts hidden by search");
+        LinearLayout.LayoutParams deselectAllParams = new LinearLayout.LayoutParams(0, -2, 1);
+        deselectAllParams.topMargin = dp(8);
+        deselectAllParams.leftMargin = dp(4);
+        clearSelectedContacts.setLayoutParams(deselectAllParams);
         clearSelectedContacts.setOnClickListener(view -> clearContactSelection());
         choices = new LinearLayout(this);
         choices.setOrientation(LinearLayout.VERTICAL);
@@ -703,7 +718,7 @@ public final class MainActivity extends Activity {
         ((View) selectionNavigation.getParent()).setVisibility(available ? View.VISIBLE : View.GONE);
         selectionNavigation.setText(selectionVisible ? "Sources & options" : "Return to contact selection");
         selectionNavigation.setContentDescription(selectionVisible
-                ? "Sources, contact selection options, progress and privacy help" : "Return to contact selection");
+                ? "Sources, progress and privacy help" : "Return to contact selection");
         selectionPanel.setVisibility(selectionVisible ? View.VISIBLE : View.GONE);
         detailsScroll.setVisibility(selectionVisible ? View.GONE : View.VISIBLE);
         updateSelectionControls();
@@ -716,6 +731,25 @@ public final class MainActivity extends Activity {
         boolean compact = selectionVisible && keyboardVisible;
         selectionNavigation.setVisibility(compact ? View.GONE : View.VISIBLE);
         if (selectionPages != null) selectionPages.setVisibility(compact ? View.GONE : View.VISIBLE);
+        if (pageIndicator != null) {
+            String count = compact ? getString(R.string.selection_all_contacts_count, selectedIds.size()) : selectionPageText;
+            if (!count.contentEquals(pageIndicator.getText())) pageIndicator.setText(count);
+        }
+        selectionActionLabel(reviewButton, "Review selected metadata", "Review", compact);
+        String shortHandoff = handoffActionText.equals("Retry Continue") ? "Retry Continue" :
+                handoffActionText.equals("Open account in this phone's browser") ? "Open account" :
+                nativeSetup == null ? "Approve handoff" : "Continue";
+        selectionActionLabel(handoffButton, handoffActionText, shortHandoff, compact);
+        selectionActionLabel(cancelSelectAll, "Cancel all-contact selection", "Cancel selection", compact);
+        selectionActionLabel(cancelHandoff, cancelHandoffText,
+                nativeSetup != null ? "Cancel collection" : preparingTransfer ? "Cancel preparation" : "Cancel handoff", compact);
+    }
+
+    private void selectionActionLabel(Button control, String full, String shortLabel, boolean compact) {
+        if (control == null) return;
+        String label = compact ? shortLabel : full;
+        if (!label.contentEquals(control.getText())) control.setText(label);
+        if (!full.equals(control.getContentDescription())) control.setContentDescription(full);
     }
 
     private void openAccount() {
@@ -761,14 +795,14 @@ public final class MainActivity extends Activity {
         reviewButton.setVisibility(active || nativeStopped || (contactsAvailable && (reviewed || bulkSelectionActive)) ? View.GONE : View.VISIBLE);
         styleButton(reviewButton, !reviewed);
         boolean bindingRetry = active && handoff.snapshot().state().equals("binding_pending");
-        handoffButton.setText(bindingRetry ? "Retry Continue" : active || nativeStopped ? "Open account in this phone's browser" :
-                nativeSetup == null ? "Approve browser handoff" : "Continue with selected contacts");
+        handoffActionText = bindingRetry ? "Retry Continue" : active || nativeStopped ? "Open account in this phone's browser" :
+                nativeSetup == null ? "Approve browser handoff" : "Continue with selected contacts";
         handoffButton.setVisibility(!bulkSelectionActive && (!contactsAvailable || active || nativeStopped || preparingTransfer || reviewed)
                 ? View.VISIBLE : View.GONE);
         handoffButton.setEnabled(nativeStopped || (active && (nativeSetup == null || !handoff.snapshot().state().equals("starting"))) || (canReview && reviewed && handoff != null &&
                 handoff.storageAvailable() && !PagedTransfer.cleanupRequired()));
         cancelHandoff.setVisibility(active || preparingTransfer || (nativeSetup != null && nativeStarted && !nativeStopped && !bulkSelectionActive) ? View.VISIBLE : View.GONE);
-        cancelHandoff.setText(nativeSetup != null ? "Cancel this collection" : preparingTransfer ? "Cancel preparation" : "Cancel browser handoff");
+        cancelHandoffText = nativeSetup != null ? "Cancel this collection" : preparingTransfer ? "Cancel preparation" : "Cancel browser handoff";
         String reason;
         if (active) reason = "Handoff active. Open this phone's browser, or Cancel here.";
         else if (store == null) reason = "Private storage unavailable. Reopen after freeing space.";
@@ -1118,7 +1152,7 @@ public final class MainActivity extends Activity {
         contactScroll.scrollTo(0, 0);
         if (!contactsAvailable || store == null) {
             choices.addView(text("Read contacts first. Search and select after Android grants access.", 13, MUTED));
-            if (pageIndicator != null) { pageIndicator.setText(""); pageIndicator.setContentDescription(null); }
+            if (pageIndicator != null) { selectionPageText = ""; pageIndicator.setText(""); pageIndicator.setContentDescription(null); }
             if (previousPage != null) previousPage.setEnabled(false);
             if (nextPage != null) nextPage.setEnabled(false);
             if (selectAllContacts != null) selectAllContacts.setEnabled(false);
@@ -1129,7 +1163,8 @@ public final class MainActivity extends Activity {
         clearSelectedContacts.setEnabled(!bulkSelectionActive && !selectedIds.isEmpty() && !nativeSelectionFrozen());
         String query = search.getText().toString().trim();
         int requestedOffset = pageOffset;
-        pageIndicator.setText("Loading contacts…");
+        selectionPageText = "Loading contacts…";
+        updateSelectionControls();
         pageIndicator.setContentDescription("Loading this contact page");
         previousPage.setEnabled(false);
         nextPage.setEnabled(false);
@@ -1189,9 +1224,9 @@ public final class MainActivity extends Activity {
                 " selected across all pages." : "Contacts " + (pageOffset + 1) + "–" +
                 Math.min(total, (long) pageOffset + 100) + " of " + total +
                 "; " + selectedIds.size() + " selected across all pages.");
-        pageIndicator.setText(total == 0 ? getString(R.string.selection_no_matches, selectedIds.size())
+        selectionPageText = total == 0 ? getString(R.string.selection_no_matches, selectedIds.size())
                 : getString(R.string.selection_page_count, pageOffset + 1,
-                        Math.min(total, (long) pageOffset + 100), total, selectedIds.size()));
+                        Math.min(total, (long) pageOffset + 100), total, selectedIds.size());
         refreshActions();
     }
 

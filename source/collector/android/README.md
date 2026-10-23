@@ -1,9 +1,10 @@
 # AMPLIFai Phone — Android
 
-`2026.10.21-rc11` (`26102111`) adds account-bound native approval, a separate
-Start action, contact selection and Review, and deliberate Continue. The
-selected transfer stays immutable across retry, and the app reports delivery
-separately from a matching saved-account receipt. See
+`2026.10.23-rc12` (`26102312`) exposes Select all contacts and Deselect all
+beside search and keeps selection usable with the keyboard visible. Bulk actions
+cover all contact pages, including search-hidden contacts. Native approval,
+Start, Review and deliberate Continue remain separate; selected transfers stay
+immutable across retry, and delivery remains separate from a saved-account receipt. See
 [Native setup contract implementation](#native-setup-contract-implementation).
 Website admission of this exact version is activated separately after package
 qualification and public byte readback.
@@ -18,10 +19,10 @@ The existing manual reviewed pairing path is retained.
 
 Support-code wire format is
 `A1|build|reference|stage|category|elapsedSeconds|receivedBytes|retainedBytes|deviceStatus`.
-This release uses exact version name `2026.10.21-rc11`; before pairing its bytes
+This release uses exact version name `2026.10.23-rc12`; before pairing its bytes
 are `0|0` and status is `-`. Website build admission is explicit.
 
-Install RC11 over RC10 without uninstalling or clearing app data. The application
+Install RC12 over RC11 without uninstalling or clearing app data. The application
 ID and publisher certificate are unchanged and the version code increases.
 Android will not install an older version over a newer one through a normal
 update. Physical-device permission, browser, normal installation and account-save
@@ -73,7 +74,7 @@ and [Google Play install-permission policy](https://support.google.com/googlepla
 Use the signed APK's normal Android download/install flow. No developer mode, USB debugging, root, default SMS/dialer takeover, or security bypass is part of this product. If the installer or a restricted permission blocks progress, report that limitation; do not disable device protections.
 
 1. Choose **Read contacts**, **Read call history**, and/or **Read SMS history** independently. Contacts are required for contact selection; calls and SMS are optional. Each source has its own Android consent request.
-2. Select contacts, then **Review selected metadata**. **Select all contacts across every page** verifies every stable local contact ID before changing the selection; **Clear all selected contacts** affects the local selection only. Search and visible 100-row pages do not limit an all-page selection. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
+2. Select contacts, then **Review selected metadata**. **Select all contacts** verifies every stable local contact ID across every page before changing the selection; **Deselect all** affects the local selection only. Search and visible 100-row pages do not limit an all-page selection. Only selected contacts and matching available interaction metadata are eligible. Message bodies, attachments, MMS, and RCS are not collected.
 3. Choose **Approve same-phone browser handoff**. Notification access is optional. The app still starts the required foreground service with a valid notification; if its shortcut is hidden, return from Recent apps to confirm the destination or use **Cancel browser handoff**. Android may stop the app after a permission change, requiring a fresh local review.
 4. Use **Open AMPLIFai account in browser** on this same phone. For a current signed-in account, choose **Connect reviewed Android app**, check the account and course displayed by the app from server proof, and approve that destination. The browser then receives the reviewed preview without typing a code. The app's **One-use pairing code** is a five-minute fallback if discovery is unavailable. Each progressing page fetch, valid keepalive and completion extends the active browser session, bounded by inactivity and the visible Cancel action. Review each available source and approve its account save separately.
 5. After delivery, browser-only users can **Cancel browser handoff**. Signed-in users separately save or decline each source, then use **Finalize reviewed sources**. The browser verifies durable account readback before the matching saved assertion; the companion only reports a confirmed save after the final bound receipt. Cancelling cannot retract already saved account data.
@@ -100,6 +101,11 @@ choices and the applicable action remain available above the keyboard. The
 navigation container retains its system inset, and the same secondary controls
 return when the keyboard is dismissed. Fonts, control sizes and keyboard state
 are unchanged.
+
+With the keyboard open, the count reads **All contacts · Selected: N** and
+the applicable action uses a short caption such as **Review** or **Continue**.
+Its full accessible label is retained. Dismissing the keyboard restores the
+page count and full action captions; both bulk-selection actions stay visible.
 
 API30+ uses `WindowInsets.isVisible(Type.ime())`. The candidate API26–29 path
 compares the original root window's system bottom inset with its stable bottom
@@ -129,8 +135,9 @@ boundary. Its runtime qualification must use the unchanged strict fixture;
 floating keyboards, pan mode and OEM behavior remain unqualified.
 
 **Sources & options** opens the full setup, optional source controls, progress,
-review details and privacy/help content. **Contact selection options** contains
-the existing all-page selection and Clear actions. **Return to contact
+review details and privacy/help content. **Select all contacts** and **Deselect all**
+stay visible beside search in contact selection. They affect all contacts across every page, including contacts hidden
+by search; the selected count states this scope. **Return to contact
 selection** restores the choices. Review and errors open their full text in the
 details view. Source consent, available-zero versus unavailable coverage,
 selection invalidation, bound saved receipts and temporary-store cleanup are
@@ -561,7 +568,7 @@ sign the update feed without a password in shell arguments:
 ```sh
 swift script/android_release_signing.swift sign-feed \
   /absolute/path/to/verified.apk \
-  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.21-rc11/AMPLIFai-Phone-Android-2026.10.21-rc11.apk \
+  https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/android-2026.10.23-rc12/AMPLIFai-Phone-Android-2026.10.23-rc12.apk \
   /absolute/path/to/android-update-v1.txt
 ```
 
@@ -584,3 +591,15 @@ The API 36 emulator instrumentation covers the retained v1 pair/ACK contract and
 - Confirm exact Host/Origin rejection, bad-code exhaustion, token replay rejection, ordered-page retry, one-use delivery, wrong and correct saved acknowledgements, and listener closure only after acknowledgement/cancel/expiry. JVM tests cover the local protocol; these do not establish browser/OEM interoperability.
 
 Record actual physical permission and account results separately from local checks. Never infer complete history from a readable provider or infer a saved account from page delivery.
+
+### API29 keyboard qualification
+
+The legacy selection fixture measures the installed IME and focused application through
+accessibility windows, then intersects the usable viewport with the actual visible frame.
+A full-width IME must meet that frame exactly and agree with the reported system inset.
+Its bottom must reach the screen edge or overlap an observed full-width, bottom-aligned
+system bar whose height equals the stable bottom inset. An uncovered gap is rejected.
+The fixture also rejects partial-width, floating, offscreen, multiple/split IME windows
+and missing, ambiguous or inconsistent bottom-bar evidence. Synthetic geometry checks
+exercise these rejection rules; acceptance still requires the actual installed keyboard,
+native fonts, 48 dp controls, a whole contact row and the existing selection/dismissal guards.

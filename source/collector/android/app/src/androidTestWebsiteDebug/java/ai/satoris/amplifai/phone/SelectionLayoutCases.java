@@ -36,6 +36,8 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -168,6 +170,7 @@ final class SelectionLayoutCases {
                     "Fixed controls extend outside the actual visible window");
             requireFullyVisible("reviewAction", review);
             requireFullyVisible("search", search);
+            requireBulkActions();
             requireFullyVisible("previousPage", get("previousPage", Button.class));
             requireFullyVisible("nextPage", get("nextPage", Button.class));
             require(navigation.getContentDescription().toString().contains("privacy help"), "Options lost its accessible help label");
@@ -226,13 +229,10 @@ final class SelectionLayoutCases {
             Set<Long> before = new HashSet<>(selected);
             cancel.performClick();
             require(before.equals(selected) && !get("bulkSelectionActive", Boolean.class), "Fixed bulk Cancel changed the prior selection");
-            navigation.performClick();
-            require(detailsScroll.isShown(), "Source/progress/help pane is inaccessible");
-            Button selectAll = get("selectAllContacts", Button.class);
-            LinearLayout options = (LinearLayout) selectAll.getParent();
-            LinearLayout body = (LinearLayout) options.getParent();
-            body.getChildAt(body.indexOfChild(options) - 1).performClick();
+            requireBulkActions();
+            search.setText("305");
         });
+        awaitLayout(() -> choices.getChildCount() == 1, "Filtered contact did not render before all-page selection");
         instrumentation.waitForIdleSync();
         focusWithKeyboard("selectAll", get("selectAllContacts", Button.class));
         main(() -> {
@@ -241,10 +241,12 @@ final class SelectionLayoutCases {
             selectAll.performClick();
         });
         awaitLayout(() -> !get("bulkSelectionActive", Boolean.class) && get("selectedIds", Set.class).size() == 305 &&
-                choices.getChildCount() == 100, "All-page action did not select every synthetic contact");
+                choices.getChildCount() == 1, "All-page action did not select every synthetic contact during search");
         main(() -> {
             require(contactScroll.isShown(), "All-page selection did not return to the contact choices");
-            navigation.performClick();
+            requireBulkActions();
+            require(get("pageIndicator", TextView.class).getText().toString().contains("Selected: 305 across all pages"),
+                    "Filtered view did not report the complete all-page selected count");
         });
         instrumentation.waitForIdleSync();
         focusWithKeyboard("clearSelection", get("clearSelectedContacts", Button.class));
@@ -253,10 +255,12 @@ final class SelectionLayoutCases {
             requireFullyVisible("clearSelection", clear);
             clear.performClick();
         });
-        awaitLayout(() -> get("selectedIds", Set.class).isEmpty() && choices.getChildCount() == 100,
+        awaitLayout(() -> get("selectedIds", Set.class).isEmpty() && choices.getChildCount() == 1,
                 "Clear action did not clear the all-page selection");
         main(() -> {
             require(!review.isEnabled() && !get("handoffButton", Button.class).isShown(), "Clear left a reviewed transfer action available");
+            require(get("pageIndicator", TextView.class).getText().toString().contains("Selected: 0 across all pages"),
+                    "Deselect all left a stale selected count");
             navigation.performClick();
             TextView status = get("status", TextView.class);
             status.setText("A selected record is too large for one transfer batch, or the source count exceeds the supported range. Review the source; no partial transfer started.");
@@ -271,6 +275,28 @@ final class SelectionLayoutCases {
         });
         capture("error-details");
         evidence.put("checks", "fixed controls; independent choices; actual bounds; native styles; paging; empty search; review/change; bulk Cancel; keyboard focus; all-page selection/clear; zero/unavailable; full review/error");
+    }
+
+    private void requireBulkActions() {
+        Button selectAll = get("selectAllContacts", Button.class);
+        Button deselectAll = get("clearSelectedContacts", Button.class);
+        require(selectAll.getParent() == deselectAll.getParent() &&
+                ((View) selectAll.getParent()).getParent() == header,
+                "Bulk actions are not in the visible selection header");
+        requireFullyVisible("selectAll", selectAll);
+        requireFullyVisible("deselectAll", deselectAll);
+        require(selectAll.getHeight() >= Math.round(48 * density) &&
+                deselectAll.getHeight() >= Math.round(48 * density), "Bulk action touch targets are below 48dp");
+        require("Select all contacts".contentEquals(selectAll.getText()) && "Deselect all".contentEquals(deselectAll.getText()),
+                "Bulk actions lost their visible labels");
+        require(selectAll.getContentDescription().toString().contains("including contacts hidden by search") &&
+                deselectAll.getContentDescription().toString().contains("including contacts hidden by search"),
+                "Bulk action accessibility scope does not include hidden search results");
+        String count = get("pageIndicator", TextView.class).getText().toString();
+        require(count.contains("across all pages") || count.startsWith("All contacts · Selected:"),
+                "Visible selected count lost its all-page scope");
+        require(selectAll.getTextSize() == new Button(activity).getTextSize() &&
+                deselectAll.getTextSize() == selectAll.getTextSize(), "Bulk actions changed native typography");
     }
 
     private void verifyFullReviewReachable() throws Exception {
@@ -312,7 +338,7 @@ final class SelectionLayoutCases {
         capture("ime-review");
         instrumentation.sendStringSync("305");
         awaitLayout(() -> "305".contentEquals(search.getText()) && choices.getChildCount() == 1 &&
-                get("pageIndicator", TextView.class).getText().toString().startsWith("1–1 of 1"),
+                get("pageIndicator", TextView.class).getContentDescription().toString().startsWith("Contacts 1–1 of 1"),
                 "Typed search did not filter the synthetic contacts");
         main(() -> {
             require(expected.equals(selected), "Typing changed the selected contacts");
@@ -371,7 +397,11 @@ final class SelectionLayoutCases {
         if (legacyIme) changeLegacyIme(true, () -> tap("searchBeforeIme", search));
         else {
             tap("searchBeforeIme", search);
-            awaitLayout(this::imeVisible, "The installed keyboard did not become visible; no IME dimensions were simulated");
+            awaitLayout(() -> {
+                WindowInsets insets = root.getRootWindowInsets();
+                return insets != null && insets.isVisible(WindowInsets.Type.ime()) &&
+                        insets.getInsets(WindowInsets.Type.ime()).bottom > 0;
+            }, "The installed docked keyboard did not expose bottom insets; no IME dimensions were simulated");
         }
         instrumentation.getUiAutomation().waitForIdle(300, 5_000);
         instrumentation.waitForIdleSync();
@@ -418,6 +448,12 @@ final class SelectionLayoutCases {
         requireFullyVisible("restoredNavigation", navigation);
         requireFullyVisible("restoredPrevious", get("previousPage", Button.class));
         requireFullyVisible("restoredNext", get("nextPage", Button.class));
+        require(get("pageIndicator", TextView.class).getText().toString().contains("across all pages"),
+                "Keyboard dismissal did not restore the page count");
+        for (Button action : new Button[]{review, get("handoffButton", Button.class),
+                get("cancelSelectAll", Button.class), get("cancelHandoff", Button.class)})
+            if (action.isShown()) require(action.getText().toString().contentEquals(action.getContentDescription()),
+                    "Keyboard dismissal did not restore the full action caption");
         require(contactScroll.getHeight() >= Math.max(Math.round(96 * density), choices.getChildAt(0).getHeight() * 2),
                 "The no-IME viewport lost its two-row/96dp minimum");
     }
@@ -457,6 +493,9 @@ final class SelectionLayoutCases {
         require(docked, "A docked installed keyboard is required to measure its actual occlusion");
         requireFullyVisible(identity + "Search", search);
         requireFullyVisible(identity + "Count", get("pageIndicator", TextView.class));
+        require(get("pageIndicator", TextView.class).getText().toString().startsWith("All contacts · Selected:"),
+                "Keyboard view lost the compact all-contact count");
+        requireBulkActions();
         requireFullyVisible(identity + "Action", action);
         require(search.isFocused() && action.isEnabled(), "IME input or applicable action is unavailable: " + identity);
         require(usable.contains(bounds(search)) && usable.contains(bounds(action)), "Search or action overlaps the actual IME/system bounds: " + identity);
@@ -504,6 +543,8 @@ final class SelectionLayoutCases {
     private static final class LegacyWindows {
         final Rect ime = new Rect();
         final Rect application = new Rect();
+        final List<Rect> system = new ArrayList<>();
+        int imeCount;
         final JSONArray windows = new JSONArray();
     }
 
@@ -517,11 +558,13 @@ final class SelectionLayoutCases {
                 result.windows.put(new JSONObject().put("id", window.getId()).put("type", window.getType())
                         .put("layer", window.getLayer()).put("focused", window.isFocused()).put("bounds", rect.toShortString()));
                 if (window.getType() == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
-                    require(result.ime.isEmpty(), "Multiple IME windows require separate qualification");
+                    require(++result.imeCount == 1, "Multiple IME windows require separate qualification");
                     result.ime.set(rect);
                 } else if (window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION && window.isFocused()) {
                     require(result.application.isEmpty(), "Multiple focused application windows in fixture");
                     result.application.set(rect);
+                } else if (window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM) {
+                    result.system.add(new Rect(rect));
                 }
             }
         } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
@@ -541,6 +584,13 @@ final class SelectionLayoutCases {
         Rect usable = new Rect(observed.application);
         if (!usable.intersect(screen) || !usable.intersect(window)) usable.setEmpty();
         usable.bottom = Math.min(usable.bottom, visibleIme.top);
+        WindowInsets insets = root.getRootWindowInsets();
+        int stableBottom = insets == null ? -1 : insets.getStableInsetBottom();
+        int systemBottom = insets == null ? -1 : insets.getSystemWindowInsetBottom();
+        Rect bottomBar = legacyBottomBar(observed.system, screen, stableBottom);
+        boolean docked = legacyImeDocked(observed.ime, observed.imeCount, screen, observed.application,
+                window, stableBottom, systemBottom, observed.system);
+        int dockingNegativeCases = verifyLegacyDockingRejections(observed, screen, window, stableBottom, systemBottom);
         JSONObject measurement;
         try {
             measurement = new JSONObject().put("imeVisible", !visibleIme.isEmpty())
@@ -549,12 +599,66 @@ final class SelectionLayoutCases {
                     .put("applicationWindow", observed.application.toShortString())
                     .put("screenBounds", screen.toShortString()).put("visibleWindow", window.toShortString())
                     .put("rootScreenX", origin[0]).put("rootScreenY", origin[1])
+                    .put("stableBottom", stableBottom).put("systemBottom", systemBottom)
+                    .put("bottomSystemWindow", bottomBar == null ? JSONObject.NULL : bottomBar.toShortString())
+                    .put("imeBottomCoverage", observed.ime.bottom == screen.bottom ? "screen-edge" : "observed-system-bar")
+                    .put("docked", docked).put("dockingNegativeCases", dockingNegativeCases)
                     .put("usable", usable.toShortString());
         } catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
-        boolean docked = !visibleIme.isEmpty() && !observed.application.isEmpty() &&
-                visibleIme.left == screen.left && visibleIme.right == screen.right &&
-                visibleIme.bottom == screen.bottom && visibleIme.bottom >= window.bottom;
         requireImeChoices(identity, action, usable, measurement, docked);
+    }
+
+    private static Rect legacyBottomBar(List<Rect> system, Rect screen, int stableBottom) {
+        if (stableBottom <= 0 || stableBottom >= screen.height()) return null;
+        Rect found = null;
+        for (Rect bounds : system) {
+            if (bounds.left == screen.left && bounds.right == screen.right && bounds.bottom == screen.bottom &&
+                    bounds.height() == stableBottom) {
+                if (found != null) return null;
+                found = bounds;
+            }
+        }
+        return found;
+    }
+
+    private static boolean legacyImeDocked(Rect ime, int imeCount, Rect screen, Rect application,
+                                            Rect visible, int stableBottom, int systemBottom, List<Rect> system) {
+        if (imeCount != 1 || ime.isEmpty() || !screen.contains(ime) || visible.isEmpty() ||
+                !application.contains(visible) || ime.left != screen.left || ime.right != screen.right ||
+                ime.top != visible.bottom || systemBottom != screen.bottom - ime.top) return false;
+        if (ime.bottom == screen.bottom) return true;
+        Rect bar = legacyBottomBar(system, screen, stableBottom);
+        // API29 may report the IME behind part of the navigation bar; their union must reach the screen edge.
+        return bar != null && ime.top < bar.top && ime.bottom >= bar.top;
+    }
+
+    private int verifyLegacyDockingRejections(LegacyWindows observed, Rect screen, Rect visible,
+                                               int stableBottom, int systemBottom) {
+        Rect ime = observed.ime;
+        require(!legacyImeDocked(ime, 2, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted multiple/split IME windows");
+        Rect partial = new Rect(ime); partial.left++;
+        require(!legacyImeDocked(partial, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted a partial-width keyboard");
+        Rect floating = new Rect(ime); floating.offset(0, -1);
+        require(!legacyImeDocked(floating, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted a floating keyboard separated from the visible application");
+        Rect outside = new Rect(ime); outside.bottom = screen.bottom + 1;
+        require(!legacyImeDocked(outside, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted an offscreen keyboard");
+        Rect bar = legacyBottomBar(observed.system, screen, stableBottom);
+        if (bar == null || ime.bottom == screen.bottom) return 4;
+        Rect gap = new Rect(ime); gap.bottom = bar.top - 1;
+        require(!legacyImeDocked(gap, 1, screen, observed.application, visible, stableBottom, systemBottom, observed.system),
+                "Docking accepted an uncovered gap above the navigation bar");
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom + 1, systemBottom, observed.system),
+                "Docking accepted system-bar bounds inconsistent with the stable inset");
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, Collections.emptyList()),
+                "Docking accepted an unobserved bottom system bar");
+        List<Rect> duplicate = new ArrayList<>(observed.system); duplicate.add(new Rect(bar));
+        require(!legacyImeDocked(ime, 1, screen, observed.application, visible, stableBottom, systemBottom, duplicate),
+                "Docking accepted ambiguous bottom system windows");
+        return 8;
     }
 
     private void recordLegacyWindowState(String identity) {
