@@ -34,7 +34,7 @@ def snapshot(workspace):
 class MacContactGroupsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.fixture = json.loads((Path(__file__).parent / "fixtures/mac-contact-groups.json").read_text())
+        cls.fixture = json.loads((Path(__file__).parent / "fixtures/mac-contact-groups.json").read_text(encoding="utf-8"))
 
     def workspace(self):
         rows = self.fixture["previews"]
