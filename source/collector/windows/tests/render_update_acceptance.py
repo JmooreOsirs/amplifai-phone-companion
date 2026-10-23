@@ -53,6 +53,7 @@ def main() -> None:
                 view.state._capture_received = True
             view.refresh(); root.update()
             view.show_workspace("details")
+            root.update()  # Settle the newly mapped pane's height before scrolling.
             enabled = str(view.install_update_button.cget("state")) == "normal"
             if enabled != (state == "available"):
                 raise RuntimeError("Update installer control did not respect idle/unsaved gate")
@@ -69,7 +70,12 @@ def main() -> None:
                 x, y = control.winfo_rootx(), control.winfo_rooty()
                 if (not control.winfo_ismapped() or x < left or y < top
                         or x + control.winfo_width() > right or y + control.winfo_height() > bottom):
-                    raise RuntimeError("Update message or action is clipped in its captured viewport")
+                    capture(root, args.output, f"{width}-update-{state}-clipped")
+                    raise RuntimeError("Update message or action is clipped: " + json.dumps({
+                        "state": state, "width": width, "control": str(control),
+                        "mapped": bool(control.winfo_ismapped()), "canvas": [left, top, right, bottom],
+                        "controlBounds": [x, y, x + control.winfo_width(), y + control.winfo_height()],
+                        "scrollRegion": canvas.cget("scrollregion"), "yview": canvas.yview()}))
             records.append(dict(capture(root, args.output, f"{width}-update-{state}"), updateControlsVisible=True))
             for control in (view.check_update_button, view.install_update_button):
                 if control.cget("style") not in {"", "TButton"} or str(control.cget("takefocus")) == "0":
