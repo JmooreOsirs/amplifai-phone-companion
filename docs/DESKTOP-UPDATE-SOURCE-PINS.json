@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.22-rc21",
-      "build": "26102221",
-      "installerVersion": "1.0.21"
+      "version": "2026.10.23-rc22",
+      "build": "26102322",
+      "installerVersion": "1.0.22"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
@@ -31,5 +31,5 @@
     "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
   },
   "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json",
-  "windowsReconciliation": "RC21 exact candidate source efffc39d0012ec49e8530cd8412435d87a977163, build run 39828244482; encrypted Messages one-page validation and Windows timestamp-domain repair. RC20 is the verified source/dependency and installed-upgrade baseline. Publication requires the successful exact candidate build, unchanged dependency/native custody, signed RC21 feed fixture, actual RC20-to-RC21 frozen-helper handoff and public-byte verification. Mac fields remain historical; protected Mac control governs the independently qualified RC35 source."
+  "windowsReconciliation": "RC22 exact package/source 3064b4df4d489f96a35b619a8fdd03802fe3cb5e, successful build 40012529314. Full source/frozen GUI run 40007976247 uses 8de7a46c5e18c9f55c745df0250ebb0d19db4513; only two package-render fixtures differ and all 27 GUI proof files are identical. RC20 remains the verified dependency/source baseline; public RC21 is the installed-upgrade baseline. The 173 native references include 164 unchanged original paths and 9 exact wrapper copies of existing helper modules. Publication requires signed RC22 feed, actual RC21-to-RC22 frozen-helper handoff and public-byte verification. Mac fields remain historical; protected Mac control governs independently qualified RC35."
 }

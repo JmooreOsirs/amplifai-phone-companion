@@ -387,30 +387,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Reuse the exact successful rc21 build and exact signed qualification bytes.
+          # Reuse the exact successful rc22 build and exact signed qualification bytes.
           # The normal frozen verifier independently validates the signed fixture.
           $repository = 'JmooreOsirs/amplifai-phone-companion'
-          $artifactId = 12447857716
+          $artifactId = 12526988676
           $artifact = gh api "repos/$repository/actions/artifacts/$artifactId" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $artifact.id -ne $artifactId -or $artifact.name -ne 'windows-rc21-qualification' -or $artifact.expired -ne $false -or $artifact.workflow_run.id -ne 39828244482 -or $artifact.size_in_bytes -ne 44854537 -or $artifact.digest -ne 'sha256:1aab0a3acc0335e4a0171102e0617f099e448f9b2e1d7dbb0b62cacdf46e9a46') { throw 'Fixed rc21 build artifact metadata differs' }
-          $build = gh api "repos/$repository/actions/runs/39828244482" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $build.head_sha -ne 'efffc39d0012ec49e8530cd8412435d87a977163' -or $build.status -ne 'completed' -or $build.conclusion -ne 'success') { throw 'Fixed rc21 build qualification differs' }
+          if ($LASTEXITCODE -ne 0 -or $artifact.id -ne $artifactId -or $artifact.name -ne 'windows-rc22-qualification' -or $artifact.expired -ne $false -or $artifact.workflow_run.id -ne 40012529314 -or $artifact.size_in_bytes -ne 46236791 -or $artifact.digest -ne 'sha256:2989dc68973881315709891ba19edd1eaaba448ee02177c4e60384307f6b943b') { throw 'Fixed rc22 build artifact metadata differs' }
+          $build = gh api "repos/$repository/actions/runs/40012529314" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $build.head_sha -ne '3064b4df4d489f96a35b619a8fdd03802fe3cb5e' -or $build.status -ne 'completed' -or $build.conclusion -ne 'success') { throw 'Fixed rc22 build qualification differs' }
           $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
           New-Item -ItemType Directory -Path $fixture | Out-Null
           $archive = Join-Path $fixture 'qualified-build.zip'
           @'
           import subprocess, sys
           with open(sys.argv[1], 'xb') as target:
-              subprocess.run(['gh', 'api', 'repos/JmooreOsirs/amplifai-phone-companion/actions/artifacts/12447857716/zip'], stdout=target, check=True, timeout=180)
+              subprocess.run(['gh', 'api', 'repos/JmooreOsirs/amplifai-phone-companion/actions/artifacts/12526988676/zip'], stdout=target, check=True, timeout=180)
           '@ | python - $archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ((Get-Item $archive).Length -ne 44854537 -or (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '1aab0a3acc0335e4a0171102e0617f099e448f9b2e1d7dbb0b62cacdf46e9a46') { throw 'Fixed rc21 artifact ZIP bytes differ' }
+          if ((Get-Item $archive).Length -ne 46236791 -or (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '2989dc68973881315709891ba19edd1eaaba448ee02177c4e60384307f6b943b') { throw 'Fixed rc22 artifact ZIP bytes differ' }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead($archive)
           try {
             $expected = @(
-              @{entry='AmplifaiPhoneInstaller/AmplifaiPhone-rc21-unsigned.msi'; name='AmplifaiPhone-rc21-unsigned.msi'; bytes=42289311; sha='cb252aa6149d29731b262809610bea79f7d39d349c84f48d02ec6f20fdf3d583'},
-              @{entry='AmplifaiPhoneCandidate/candidate-receipt.json'; name='candidate-receipt.json'; bytes=1666490; sha='8ef95d4654bd0290b73f9261f4389fb2f7dfcea24e26bf9b39e11ff35e14ea46'}
+              @{entry='AmplifaiPhoneInstaller/AmplifaiPhone-rc22-unsigned.msi'; name='AmplifaiPhone-rc22-unsigned.msi'; bytes=43764598; sha='f4dac86029dbf51b0ecfd9bd1269bebd0e4848e4ce75839ec5019042220c5394'},
+              @{entry='AmplifaiPhoneCandidate/candidate-receipt.json'; name='candidate-receipt.json'; bytes=1668371; sha='4f8fd9ef8d6871bb9ef439b09e95ab726797eba68a3682ad7cad5bc3452c51ce'}
             )
             foreach ($record in $expected) {
               $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $record.entry })
@@ -425,28 +425,28 @@ jobs:
             }
           } finally { $zip.Dispose() }
           Remove-Item -LiteralPath $archive
-          $signed = 'source/collector/windows/tests/fixtures/release-qualification/rc21'
+          $signed = 'source/collector/windows/tests/fixtures/release-qualification/rc22'
           $signedFiles = @(
-            @{name='update-v1.json'; bytes=581; sha='48053f418248d3463e07ea1533124957bac99c36f98d0ff132aa8a6a6e977897'},
-            @{name='update-v1.json.sig'; bytes=89; sha='097a21a7e90487048f2ab0b6210e685ae0ce335353cd404bd43fe030767f6a16'}
+            @{name='update-v1.json'; bytes=581; sha='cd5556963f39e19d7a8d4434ba829b90a8dab2ef93d4060d40809156ed901ba5'},
+            @{name='update-v1.json.sig'; bytes=89; sha='538e5df61db77cc623b2f4c748b5a05ad842a308db1e9840365e5449ce66ffbd'}
           )
           foreach ($record in $signedFiles) {
             $source = Join-Path $signed $record.name
             if ((Get-Item $source).Length -ne $record.bytes -or (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $record.sha) { throw 'Fixed signed qualification fixture differs' }
             Copy-Item -LiteralPath $source -Destination (Join-Path $fixture $record.name)
           }
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.21-rc20-unsigned-test/AmplifaiPhone-rc20-unsigned.msi' -OutFile (Join-Path $fixture 'AmplifaiPhone-rc20-unsigned.msi') -TimeoutSec 180
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.22-rc21-unsigned-test/AmplifaiPhone-rc21-unsigned.msi' -OutFile (Join-Path $fixture 'AmplifaiPhone-rc21-unsigned.msi') -TimeoutSec 180
       - name: Qualify copied frozen helper readiness and running-old-app replacement
         shell: pwsh
         run: |
           $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
-          python source/script/qualify_windows_update_handoff.py --msi (Join-Path $fixture 'AmplifaiPhone-rc21-unsigned.msi') --baseline (Join-Path $fixture 'AmplifaiPhone-rc20-unsigned.msi') --manifest (Join-Path $fixture 'update-v1.json') --signature (Join-Path $fixture 'update-v1.json.sig') --candidate-receipt (Join-Path $fixture 'candidate-receipt.json') --output (Join-Path $fixture 'handoff-receipt.json')
+          python source/script/qualify_windows_update_handoff.py --msi (Join-Path $fixture 'AmplifaiPhone-rc22-unsigned.msi') --baseline (Join-Path $fixture 'AmplifaiPhone-rc21-unsigned.msi') --manifest (Join-Path $fixture 'update-v1.json') --signature (Join-Path $fixture 'update-v1.json.sig') --candidate-receipt (Join-Path $fixture 'candidate-receipt.json') --output (Join-Path $fixture 'handoff-receipt.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain actual frozen handoff receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc21-handoff-qualification
+          name: windows-rc22-handoff-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |
