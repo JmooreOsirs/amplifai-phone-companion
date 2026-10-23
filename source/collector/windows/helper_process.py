@@ -38,9 +38,10 @@ def bundled_resources(executable: Path, *, frozen: bool) -> tuple[Path, Path]:
         runtime = bundle / "_internal"
         helper = bundle / "AmplifaiPhoneHelper.exe"
         logo = resources / "amplifai-by-nexus-original.png"
-        for directory in (resources, bundle, runtime):
+        fonts = resources / "fonts"
+        for directory in (resources, bundle, runtime, fonts):
             _resource_kind(directory, directory=True)
-        for resource in (helper, logo):
+        for resource in (helper, logo, fonts / "OpenSans.ttf"):
             _resource_kind(resource, directory=False)
             resource.resolve(strict=True).relative_to(base)
         # Do not accept a matching directory name whose DLLs/assets escape it.

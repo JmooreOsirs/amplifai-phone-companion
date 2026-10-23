@@ -1,8 +1,12 @@
 {
   "status": "private-unsigned-per-user-installer-candidate-not-supported-download",
-  "baseRelease": "Windows RC21 uses the exact-one-page encrypted Messages candidate and the published RC20 unsigned Test installer as its upgrade baseline. Its changed shared helper requires fresh runtime, frozen-worker and package qualification.",
+  "baseRelease": "Windows RC22 adds guided account-led parity and bounded progress scheduling over the published RC21 unsigned Test baseline. Fresh source/frozen UI, package, RC21 upgrade and signed handoff qualification are required.",
   "windowEntrypoint": "collector/windows/app.py",
   "pythonModules": [
+    "collector/windows/journey.py",
+    "collector/windows/guided_layout.py",
+    "collector/windows/brand_tokens.py",
+    "collector/windows/brand_widgets.py",
     "collector/windows/session.py",
     "collector/windows/helper_process.py",
     "collector/windows/native_setup.py",
@@ -30,6 +34,12 @@
       "transform": "none"
     },
     {
+      "source": "public/brand/fonts/OpenSans.ttf",
+      "destination": "resources/fonts/OpenSans.ttf",
+      "sha256": "36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878",
+      "transform": "none; Windows private process font registration, Arial fallback"
+    },
+    {
       "sourceOwner": "script/build_windows_candidate.py",
       "destination": "resources/phone-helper/",
       "contract": "entire matching frozen AmplifaiPhoneHelper onedir including AmplifaiPhoneHelper.exe and its matching _internal/; not an isolated copied executable or source/PATH fallback"
@@ -54,9 +64,9 @@
     "rendered accessibility and DPI qualification"
   ],
   "windowProtocol": "Account-bound native setup v2 claims the fixed HTTPS authority, displays the exact Windows disclosure and account/course, records explicit approval, then requires separate Start admission before collection. Selection is editable until deliberate Continue; the first immutable bind attempt freezes the exact selection/handoff/digest for identical retry or cancellation. Verified browser intent and Save/readback ACK remain required. Existing legacy handoff keeps its separate destination and Save decisions. Source coverage and bounded diagnostics remain distinct from received/transferred/saved state.",
-  "updateVersion": "2026.10.22-rc21",
-  "updateBuild": "26102221",
-  "installerVersion": "1.0.21",
+  "updateVersion": "2026.10.23-rc22",
+  "updateBuild": "26102322",
+  "installerVersion": "1.0.22",
   "updateDependency": "Existing hash-pinned cryptography==50.0.1; no new dependency or lock change",
   "updateProtocol": "Fixed HTTPS signed exact-byte manifest; bounded matching GitHub MSI bytes verified by length/SHA256/Ed25519. Explicit live-idle action copies matching frozen helper/runtime using build-time embedded hash inventory. Helper independently verifies persisted signed manifest/MSI, pins runtime/cache/MSI, signals ready, requires explicit commit/EOF and normal parent exit, then launches normal Windows Installer UI and holds guards through exit. No app-path locks during replacement, no shell/quiet runtime, unsigned TEST label retained.",
   "bootstrapInventory": "build_windows_candidate.py freezes helper first; exact helper onedir path/byte/SHA256 records are compiled into wrapper-only _windows_update_bootstrap Python module before wrapper freeze. No source/system Python fallback.",

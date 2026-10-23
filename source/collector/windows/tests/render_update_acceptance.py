@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import capture, create_root, place_viewport
+from render_candidate import capture, create_root, descendants, place_viewport
 from session import Session
 from updater import BUILD, VERSION
 
@@ -52,15 +52,36 @@ def main() -> None:
             if state == "deferred":
                 view.state._capture_received = True
             view.refresh(); root.update()
-            view.show_workspace("setup")
+            view.show_workspace("details")
+            root.update()  # Settle the newly mapped pane's height before scrolling.
             enabled = str(view.install_update_button.cget("state")) == "normal"
             if enabled != (state == "available"):
                 raise RuntimeError("Update installer control did not respect idle/unsaved gate")
-            records.append(capture(root, args.output, f"{width}-update-{state}", scroll=0.0))
+            # Update actions live at the end of Details & recovery. Capture the
+            # actual state instead of a viewport containing only its upper rows.
+            canvas = view.details_canvas
+            canvas.yview_moveto(1.0)
+            root.update()
+            message = next(widget for widget in descendants(root) if isinstance(widget, app.ttk.Label)
+                           and str(widget.cget("textvariable")) == str(view.update_message))
+            left, top = canvas.winfo_rootx(), canvas.winfo_rooty()
+            right, bottom = left + canvas.winfo_width(), top + canvas.winfo_height()
+            for control in (message, view.check_update_button, view.install_update_button):
+                x, y = control.winfo_rootx(), control.winfo_rooty()
+                if (not control.winfo_ismapped() or x < left or y < top
+                        or x + control.winfo_width() > right or y + control.winfo_height() > bottom):
+                    capture(root, args.output, f"{width}-update-{state}-clipped")
+                    raise RuntimeError("Update message or action is clipped: " + json.dumps({
+                        "state": state, "width": width, "control": str(control),
+                        "mapped": bool(control.winfo_ismapped()), "canvas": [left, top, right, bottom],
+                        "controlBounds": [x, y, x + control.winfo_width(), y + control.winfo_height()],
+                        "scrollRegion": canvas.cget("scrollregion"), "yview": canvas.yview()}))
+            records.append(dict(capture(root, args.output, f"{width}-update-{state}"), updateControlsVisible=True))
             for control in (view.check_update_button, view.install_update_button):
                 if control.cget("style") not in {"", "TButton"} or str(control.cget("takefocus")) == "0":
                     raise RuntimeError("Update controls diverged from native keyboard/button pattern")
     computed = {key: str(styles.lookup("TButton", key)) for key in ("font", "foreground", "background", "padding", "bordercolor")}
+    # The accepted rounded secondary control paints BORDER over the PANEL backdrop.
     if (computed["background"] != app.PANEL or computed["foreground"] != app.HEADING or computed["bordercolor"] != app.BORDER):
         raise RuntimeError("Update button styles diverged from existing source tokens")
     receipt = {"status": "actual-windows-tk-synthetic-update-states", "guiSourceSha256": gui_digest(args.source),

@@ -336,7 +336,10 @@ class StreamedDeviceLink(DeviceLink):
                     )
             elif code != CODE_SUCCESS or size:
                 raise UnsupportedSchema("Invalid backup transfer terminator")
-            self.publish_progress(final=True)
+            # File completion is ordinary telemetry. Forcing every file through
+            # the UI pipe can stall DeviceLink on backups with many small files.
+            # The context manager still publishes the exact final counters.
+            self.publish_progress()
         await self.status_response(0)
 
     async def get_free_disk_space(self, _message) -> None:

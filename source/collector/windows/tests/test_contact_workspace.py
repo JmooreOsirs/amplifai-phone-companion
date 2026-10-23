@@ -1,6 +1,7 @@
 """Headless workspace navigation and truthful summaries; no Tk geometry proof."""
 import unittest
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from test_gui_guards import source_window
 from test_session import BINDING, paired
@@ -11,9 +12,8 @@ class ContactWorkspaceTests(unittest.TestCase):
         view = source_window()
         for name in ("workspace_coverage", "workspace_status", "review_button", "pair_button", "contacts",
                      "details_pane", "contact_workspace", "native_pane", "details_canvas", "details_content",
-                     "account_details_label", "status_details_label"):
+                     "account_details_label", "status_details_label", "recovery_toggle"):
             setattr(view, name, Mock())
-        view.workspace_buttons = {name: Mock() for name in ("contacts", "setup", "details")}
         view.details_content.winfo_height.return_value = 1000
         view.status_details_label.winfo_y.return_value = 400
         view.account_details_label.winfo_y.return_value = 700
@@ -62,19 +62,21 @@ class ContactWorkspaceTests(unittest.TestCase):
                                   view.state.destination_intent_id, view.state.approval, view.state.saved_acknowledged))
         view.helper.write.assert_not_called()
         view.helper.start.assert_not_called()
-        view.details_pane.grid_remove.assert_called()
-        view.contact_workspace.grid.assert_called()
         view.show_workspace("details", account=True)
-        view.details_canvas.yview_moveto.assert_called_with(0.7)
+        view.details_canvas.yview_moveto.assert_called_with(0)
+        self.assertEqual(view._visible_workspace, "details")
 
     def test_refresh_enters_contacts_once_without_stealing_details_focus(self):
         view = self.window()
         view.state = paired()
-        type(view).refresh_workspace(view)
-        self.assertEqual(view._visible_workspace, "contacts")
-        view.contacts.focus_set.assert_called_once()
-        view.show_workspace("details")
-        type(view).refresh_workspace(view)
+        view.stage_panels = {}
+        renderer = Mock()
+        with patch.dict("sys.modules", guided_layout=SimpleNamespace(refresh=renderer)):
+            type(view).refresh_workspace(view)
+            self.assertEqual(renderer.call_args.args[1].stage, "save")
+            view.contacts.focus_set.assert_called_once()
+            view.show_workspace("details")
+            type(view).refresh_workspace(view)
         self.assertEqual(view._visible_workspace, "details")
         view.contacts.focus_set.assert_called_once()
         view.review_button.grid_remove.assert_called()
@@ -104,7 +106,7 @@ class ContactWorkspaceTests(unittest.TestCase):
         type(view).refresh_workspace(view)
         view.pair_button.focus_set.assert_called_once()
         view.show_workspace("details", account=True)
-        view.workspace_buttons["details"].focus_set.assert_called_once()
+        view.recovery_toggle.focus_set.assert_called_once()
 
 
 if __name__ == "__main__":

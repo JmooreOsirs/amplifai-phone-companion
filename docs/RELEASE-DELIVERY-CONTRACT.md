@@ -1,6 +1,45 @@
 # Native delivery and website promotion contracts
 
-## October 22 recovery correction — active work agreement
+## October 23 Windows RC22 qualification — active work agreement
+
+The canonical native executor uses `codex/windows-guided-parity-oct23` with the
+approved GPT-6 Astra / Max setting. Windows RC22 is `2026.10.23-rc22`, build
+`26102322`, MSI `1.0.22`, on the existing unsigned Windows x64 Test channel.
+Mac RC35 and Android release identities are unchanged by this qualification.
+
+Exact package/source commit: `3064b4df4d489f96a35b619a8fdd03802fe3cb5e`.
+Build `40012529314` passed 282 unit checks (six platform skips), full-size
+302,304-message encrypted extraction, the frozen helper, ten visible updater
+states, eight diagnostic captures, and the in-place RC21-to-RC22 MSI upgrade.
+The installed inventory contains 7,324 files / 132,907,334 bytes; session data
+and protocol registration/removal checks passed on the disposable runner.
+
+The complete 180-source/180-frozen GUI gate is run `40007976247` at
+`8de7a46c5e18c9f55c745df0250ebb0d19db4513`. The later source changes affect only
+two package-render fixtures: accepted PANEL backdrop expectations and measured,
+visible updater captures after pane layout settles. All 27 GUI proof files are
+byte-identical to the package source; the gate's actual commit remains explicit.
+
+The MSI is 43,764,598 bytes, SHA-256
+`f4dac86029dbf51b0ecfd9bd1269bebd0e4848e4ce75839ec5019042220c5394`.
+The corresponding-source ZIP is 404,391,003 bytes, SHA-256
+`0e62a1b2d30c8a7cabe5394a6b1a4df9a3ea353cb843d9fb7072b717b7d643bb`.
+All 634 ZIP members and 174 retained dependency source archives passed readback.
+Native custody accounts for 164 original paths plus nine wrapper copies of
+existing helper libraries (seven Pillow modules and two Python XML modules),
+with exact hashes and a complete native-file census. This is source coverage,
+not a new upstream binary-rebuild claim.
+
+The existing Keychain signer authenticated the exact MSI and the 581-byte RC22
+manifest. This qualification-only commit pins that artifact and signed fixture
+for the actual running-RC21 close, normal installer, preserved-session and
+RC22 relaunch test. Its source must remain distinct from the package commit.
+After that test, finalize the exact qualification assets, publish the unsigned
+Test release under existing deployment authority, and pass public byte receipts
+to the existing website owner for admission/feed/download promotion. Physical
+Windows PC, iPhone and customer-account acceptance remains a separate gate.
+
+## October 22 recovery correction — historical work agreement
 
 Reserved after live inventory and absent-tag checks: ARM `2026.10.22-rc35` /
 `26102235`, Intel Test `2026.10.22-rc35-intel1` / `261022351`, Windows unsigned Test
