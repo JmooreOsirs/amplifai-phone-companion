@@ -77,6 +77,8 @@ class FrozenResourceTests(unittest.TestCase):
         self.exe.write_bytes(b"synthetic-executable")
         self.resources = self.root / "resources"
         self.resources.mkdir()
+        (self.resources / "fonts").mkdir()
+        (self.resources / "fonts/OpenSans.ttf").write_bytes(b"synthetic-font-not-loaded")
         self.logo = self.resources / "amplifai-by-nexus-original.png"
         self.logo.write_bytes(b"synthetic-logo")
         self.bundle = self.resources / "phone-helper"
@@ -104,6 +106,17 @@ class FrozenResourceTests(unittest.TestCase):
             helper_process.bundled_resources(self.exe, frozen=True)
         self.assertNotIn(str(foreign), str(caught.exception))
         self.assertNotIn(str(self.root), str(caught.exception))
+
+    def test_font_is_required_and_cannot_escape_its_packaged_directory(self):
+        font = self.resources / "fonts/OpenSans.ttf"
+        font.unlink()
+        with self.assertRaises(ValueError):
+            helper_process.bundled_resources(self.exe, frozen=True)
+        foreign = self.root / "foreign.ttf"
+        foreign.write_bytes(b"synthetic-font-not-loaded")
+        font.symlink_to(foreign)
+        with self.assertRaises(ValueError):
+            helper_process.bundled_resources(self.exe, frozen=True)
 
     def test_unreadable_runtime_inventory_is_not_accepted_as_complete(self):
         def unreadable(_root, **options):

@@ -1,5 +1,6 @@
 """Headless native setup callbacks. Synthetic authority never reaches a network."""
 import queue
+import hashlib
 import unittest
 from unittest.mock import Mock, patch
 
@@ -8,7 +9,7 @@ from native_setup import DISCLOSURE
 from test_gui_guards import source_window
 from test_native_run import Clock, INTENT, accept, prepared, response, started
 from test_native_setup import CLIENT, LINK_TEXT
-from test_session import BINDING, inspected, reviewed
+from test_session import BINDING, captured, inspected, reviewed
 
 
 class SyntheticWorker:
@@ -61,11 +62,111 @@ def tick(view, outcome=None):
 
 
 class NativeAppTests(unittest.TestCase):
+    def pending_continue(self, *, refreshing=False):
+        view, _ = native_window()
+        view.native, _ = started()
+        view.state = source_window().state
+        captured(view.state)
+        if refreshing:
+            view.dispatch_native(view.native.refresh())
+        view.review(continue_to_account=True)
+        review_id = view._pending_continue.review_id
+        self.assertIsNotNone(review_id)
+        self.assertTrue(view.native_selection_locked)
+        packet = {"kind": "review", "reviewId": review_id,
+                  "selection_sha256": hashlib.sha256(b"1\n").hexdigest(),
+                  "selected_contacts": 1, "matched_calls": 2,
+                  "matched_messages": 3, "missing_sources": []}
+        view.events.put({"kind": "review-page", "reviewId": review_id, "nextCursor": 1})
+        return view, packet
+
+    def test_continue_survives_overlapping_refresh_in_either_completion_order(self):
+        for review_first in (True, False):
+            with self.subTest(review_first=review_first):
+                view, packet = self.pending_continue(refreshing=True)
+                if review_first:
+                    view.events.put(packet)
+                    view.pump()
+                    self.assertIsNotNone(view._pending_continue)
+                    self.assertTrue(view.native_selection_locked)
+                    self.assertFalse(any(op.action == "status_continue" for op in view.native_worker.operations))
+                    view.native_worker.respond(view.native)
+                else:
+                    view.native_worker.respond(view.native)
+                    view.pump()
+                    self.assertIsNotNone(view._pending_continue)
+                    view.events.put(packet)
+                view.pump()
+                self.assertEqual([op.action for op in view.native_worker.operations].count("status_continue"), 1)
+                self.assertEqual(view.native.continued_selection, (1,))
+                view.pump()
+                self.assertEqual([op.action for op in view.native_worker.operations].count("status_continue"), 1)
+
+    def test_waiting_continue_cannot_survive_cancel_expiry_or_wrong_review_id(self):
+        for fault in ("cancelled", "expired", "review_id", "selection"):
+            with self.subTest(fault=fault):
+                view, packet = self.pending_continue(refreshing=True)
+                if fault == "review_id":
+                    packet["reviewId"] = INTENT
+                view.events.put(packet)
+                view.pump()
+                if fault == "cancelled":
+                    view.native.cancel()
+                elif fault == "expired":
+                    view.native.run_deadline = -1
+                elif fault == "selection":
+                    view.state.selected_ids = {2}
+                view.native_worker.respond(view.native)
+                view.pump()
+                self.assertFalse(any(op.action == "status_continue" for op in view.native_worker.operations))
+                self.assertIsNone(view._pending_continue)
+                self.assertFalse(view.state.saved_acknowledged)
+
+    def test_declining_discard_keeps_pending_continue_and_its_selection(self):
+        view, packet = self.pending_continue(refreshing=True)
+        view.events.put(packet)
+        view.pump()
+        pending = view._pending_continue
+        with patch.object(view.cancel_native.__globals__["messagebox"], "askyesno", return_value=False):
+            view.cancel_native()
+        self.assertIs(view._pending_continue, pending)
+        self.assertTrue(view.native_selection_locked)
+        view.native_worker.respond(view.native)
+        view.pump()
+        self.assertEqual([op.action for op in view.native_worker.operations].count("status_continue"), 1)
+
+    def test_one_continue_waits_for_exact_helper_review_then_requests_authority(self):
+        view, packet = self.pending_continue()
+        view.native_worker.operations.clear()
+        view.events.put(packet)
+        view.pump()
+        self.assertEqual([operation.action for operation in view.native_worker.operations], ["status_continue"])
+        self.assertEqual(view.native.continued_selection, (1,))
+        self.assertIsNone(view._pending_continue)
+        self.assertTrue(view.native_selection_locked)
+        self.assertFalse(view.state.saved_acknowledged)
+
+    def test_continue_rejects_wrong_review_digest_or_lost_authority(self):
+        for fault in ("digest", "cancelled", "expired"):
+            with self.subTest(fault=fault):
+                view, packet = self.pending_continue()
+                if fault == "digest":
+                    packet["selection_sha256"] = "f" * 64
+                elif fault == "cancelled":
+                    view.native.cancel()
+                else:
+                    view.native.run_deadline = -1
+                view.events.put(packet)
+                view.pump()
+                self.assertFalse(any(operation.action == "status_continue" for operation in view.native_worker.operations))
+                self.assertIsNone(view.native.continued_selection)
+                self.assertFalse(view.state.saved_acknowledged)
+
     def test_native_disclosure_disabled_theme_drift_cannot_pass_style_gate(self):
         import app
         from render_contact_workspace import native_disclosure_states
         style = Mock()
-        colors = {"background": app.BACKGROUND, "foreground": app.MUTED}
+        colors = {"background": app.PANEL, "foreground": app.MUTED}
         style.map.side_effect = lambda _name, key: [("disabled", colors[key])]
         style.lookup.side_effect = lambda _name, key, **_kwargs: colors[key]
         result = native_disclosure_states(style)
@@ -139,12 +240,12 @@ class NativeAppTests(unittest.TestCase):
         self.assertEqual(view.state.selected_ids, {1})
         self.assertEqual(view.native_worker.operations, [])
 
-    def test_legacy_agree_cannot_bypass_active_native_setup(self):
+    def test_no_context_collection_cannot_use_legacy_local_approval(self):
         view, _ = native_window()
-        view.native, _ = prepared()
-        view.checked.get.return_value = True
-        view.agree()
-        self.assertIsNone(view.state.approval)
+        view.state.approve(True)
+        view.start("connect")
+        view.helper.start.assert_not_called()
+        self.assertIn("signed-in account", view.state.status)
         self.assertFalse(view.native.started)
 
     def test_start_response_loss_and_late_response_never_duplicate_helper(self):
@@ -329,7 +430,7 @@ class NativeAppTests(unittest.TestCase):
             setattr(view, name, Mock())
         view._workspace_capture = True
         type(view).refresh_workspace(view)
-        self.assertIn("Setup", view.workspace_status.set.call_args.args[0])
+        self.assertIn("Details & recovery", view.workspace_status.set.call_args.args[0])
         self.assertIn("readable", view.workspace_coverage.set.call_args.args[0])
         view.refresh_native()
         self.assertEqual(view.native_retry.configure.call_args.kwargs["state"], "normal")

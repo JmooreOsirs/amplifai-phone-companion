@@ -1,14 +1,18 @@
 # Windows companion source candidate
 
-This wrapper presents the local iPhone collector on Windows. The published **unsigned TEST release** is RC20, version `2026.10.21-rc20`, build `26102120`, MSI `1.0.20`, production source `4f4da80aacf14accf07590a344fb8f38da537401`. RC19 is its upgrade baseline. The dated candidate notes below retain the earlier source and qualification history; their pending gates describe those checkpoints. Physical-phone, normal customer-PC, and authenticated hosted-save acceptance remain separate. Some Windows security policies may block an unsigned installer; do not disable those protections. A runner-user install is narrower than a normal non-admin customer install.
+This wrapper presents the local iPhone collector on Windows. The published unsigned TEST baseline is RC21 (`2026.10.22-rc21`, build `26102221`, MSI `1.0.21`, native source `efffc39d0012ec49e8530cd8412435d87a977163`). A runner-user install, released artifact, physical PC/iPhone test and authenticated account Save remain distinct evidence.
 
-## RC21 candidate — October 22
+## RC22 candidate — October 23
 
-The source candidate is `2026.10.22-rc21`, build `26102221`, MSI `1.0.21`.
-Its shared helper adds exact one-page encrypted Messages compatibility with
-guarded snapshot extraction. Fresh Windows unit, full-size, frozen-worker,
-package, RC20 upgrade and signed-feed handoff evidence is required before this
-candidate replaces the published RC20 Test download.
+The source candidate is `2026.10.23-rc22`, build `26102322`, MSI `1.0.22`. It is not a released or admitted build until its exact qualification and publication receipts are recorded.
+
+Plain launch opens an account-led start screen. Connect phone in the authenticated account delivers the existing setup-v2 link, exact Windows disclosure and immutable account/course approval. A separate Start admits collection. The four visible steps are Approve, Collect, Choose and Save & report; only the current stage is presented, with Details & recovery available separately. Existing in-flight legacy review remains recoverable without a new backup.
+
+Contact cards retain the bounded 200-contact page and cross-page selection model. Deliberate Continue pins the run UUID and exact selection, waits for the helper's matching review UUID/count/digest, and survives an overlapping authority refresh before dispatch. Cancellation, expiry or changed selection cannot carry that intent into another review. The original account tab receives the bound selection; the fallback return URL includes the approved enrollment and current run UUID. Paused/refused/expired authority, preview received, pending receipt and matching saved acknowledgment have distinct states. No navigation or progress counter grants approval or establishes a saved report.
+
+Backup file telemetry now uses the existing 0.5-second throttle and exact final flush. The Windows helper drain runs every 50ms, while unchanged visual state and handoff polling keep a one-second heartbeat. This removes measured pipe backpressure; it does not reduce the device's full-backup wire payload or establish a customer's historical Save duration.
+
+Required candidate evidence: actual Windows source/frozen guided state renders and resolved styles, keyboard/text-scale checks, event-loop measurement, full-size shared helper/frozen worker, RC21 MSI replacement and signed update handoff. Physical phone/account acceptance stays separate. Windows remains unsigned TEST; the distribution signature does not add publisher trust.
 
 ## RC20 supplemental native/bridge boundary test
 
@@ -22,7 +26,7 @@ PYTHONPATH=source/collector:source/collector/windows:source/collector/windows/te
 
 The combined fixture passes locally on macOS/Python 3.12.12. This test-only supplement leaves RC20 production bytes unchanged; it does not rebuild or qualify a Windows package, activate server admission, or establish real-phone/account Save acceptance.
 
-## October 21 compatibility scope
+## October 21 compatibility history
 
 This source phase aligns the Windows presentation state with the existing shared bridge. A server-authenticated replacement of an unconsumed account intent retires the prior intent and requires a fresh native decision. Repeated identical pending intents preserve their decision; changed labels for the same intent remain invalid. Late pending/approval/denial responses cannot revive a retired intent, and a native dialog answer applies only to the handoff and intent it displayed. A rejected in-flight destination decision keeps the exact local review open for the next authenticated status poll. Received data and either Save receipt block destination replacement.
 
@@ -77,7 +81,7 @@ PYTHONPATH=source/collector:source/collector/tests python -m unittest test_bridg
 
 ## Local collection and review
 
-The unchecked collection agreement must be accepted after a clean temporary-data inspection. Connect consumes that approval. iPhone Trust and encrypted-backup password prompts remain user decisions; the password travels only over the private helper pipe and is cleared from the entry widget. No backup, password, message body, or attachment is sent to the browser.
+New collection requires the account-bound setup-v2 approval, a clean temporary-data inspection and current Start admission. The old local agreement cannot start another collection. iPhone Trust and encrypted-backup password prompts remain user decisions; the password travels only over the private helper pipe and is cleared from the entry widget. No backup, password, message body, or attachment is sent to the browser.
 
 The helper uses the shared disk-backed sanitized record store. The window keeps only the current 200-contact preview page plus selected contact IDs. Search, Next, and Previous preserve selection across pages. Review sends at most 1,000 IDs per command, with a new UUID and SHA-256 over the complete ordered ID set. The exact review ID, page cursor, selection count, and digest must return before pairing is offered. During a live handoff, contact edits are locked; Change selected contacts requests helper revocation and keeps the reviewed selection and handoff until revocation is accepted. The helper refuses replacement after a first or final account-save receipt, and late revocation cannot erase that receipt. A new pairing supersedes the old one only after helper acceptance; stale page, review, and handoff responses cannot grant a new one.
 
@@ -107,25 +111,31 @@ The wrapper owns status port `127.0.0.1:48752` through the shared bounded compan
 
 ### UI reference contract
 
-The accepted RC14 Windows renders (actual 920×749 and 680×680 content areas, plus the corrected 1.75 Tk scaling sample) and unchanged rc19 styles govern this candidate. Keep Tk `clam`, Arial body/checkbox/list 12, heading 22 bold, button 11 bold; button padding 16×12, outer padding 24 and existing 8/16 spacing. The existing background, panel, border, heading, body, muted, lime and selected-blue values and Listbox focus ring are unchanged. All preexisting style definitions match the compatibility commit; the native setup disclosure adds only the disabled color map documented above.
+The accepted Mac RC35 source at `dfc80751b8a4a5b16fb67833727130fb2ec3d44f` governs this candidate. The October 23 request supersedes the older Windows tab/Listbox composition. `brand_tokens.py` pins the Mac palette, 12/20/28 spacing, 10/12 card/panel radii and 220px minimum contact-card width.
 
-The October 21 layout composes existing `TFrame` and `TButton` controls into Contacts, Setup, and Details & recovery navigation. Contacts has fixed source context, search, all-page selection/cancel, paging, counts and applicable Review/Connect actions around the existing independently scrolling Listbox. Contact details is the existing focused-contact disclosure with a shorter button label. Account & recovery reveals the existing destination, temporary code, browser and cleanup actions. Review becomes Connect only after the exact local review is accepted; changing selection, receipts and Save authority still belong to `Session`.
+| Windows element | Mac source authority and derivation |
+| --- | --- |
+| Header and four-stage journey | `ContentView.swift` and `Brand.swift`; current-stage indicators with collapsed recovery |
+| Centered stage panels | `BrandWell` / `BrandControls.swift`; bounded native rounded content hosts |
+| Contact checkbox cards | `ContactReviewView.swift` / raised cards; responsive grid with native keyboard checkbuttons, search, selection and fixed action dock |
+| Collection measures | `CollectionStatusPanel.swift`; measured transport/processing counters and explicit incomplete account-save status |
+| Setup approval | `NativeSetupView.swift`; exact account/course/disclosure, separate approval and Start, Windows Apple Devices guide |
 
-Setup and Details share a bounded scrolling native pane. The original guide, collection disclosure, agreement actions, update controls, full measured progress/source diagnostics, password entry and recovery actions remain there. Tab focus reveals offscreen controls. The checkbox inherits the existing style with responsive text wrapping. Full errors stay in Details; a bounded workspace message points to them. Navigation cannot grant consent, select contacts, pair or Save. A newly captured page opens Contacts once; status refreshes do not pull the user out of Details.
+The preferred window is 1180×820 with the existing monitor work-area fit and 680×680 minimum. Outer 28, panel 20 and block 12 spacing are resolved through the same Tk DPI factor; native control insets 16/10/8 are scaled adaptations.
 
-Local headless checks cover the model/callback changes; no Tk window was launched on macOS. `test_contact_workspace` covers navigation preserving selection/handoff/approval, unavailable versus readable zero, receipt states, full-error preservation and focus behavior. The affected local suite passed 88 tests using the existing Python 3.12.12 environment. The initial layout source checks confirmed the then-unchanged style method and exact four disclosure strings. These are source results, not Windows layout acceptance.
+The shipped OpenSans font has fixed SHA-256 `36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878`. It is registered privately for the Windows process; Arial is the explicit fallback. Body 12pt and heading Arial 21pt resolve to Mac logical 16/28px at 96dpi. The native raised-card solid fill is the Mac gradient's 10% heading/panel edge. OS-native checkbox and focus behavior are retained.
 
-Run the current synthetic render gate on an actual Windows desktop, from the repository root with the existing pinned Windows dependencies:
+The current actual-Windows gate is:
 
 ```powershell
-$env:PYTHONPATH = 'source/collector;source/collector/windows;source/collector/windows/tests;source/script'
-python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $env:RUNNER_TEMP/contact-workspace
-python source/collector/windows/tests/render_ack_recovery.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output $env:RUNNER_TEMP/contact-ack
+$env:PYTHONPATH = 'source/collector;source/collector/tests;source/collector/windows;source/collector/windows/tests;source/script'
+python source/collector/windows/tests/render_guided_journey.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output "$env:RUNNER_TEMP/guided-source"
+python source/collector/windows/tests/frozen_guided_fixture.py --source source --output "$env:RUNNER_TEMP/guided-frozen"
 ```
 
-`render_contact_workspace.py` checks real 920×749 and 680×680 content geometry at approximately 1.33 Tk scaling, then 680×680 at 1.75. Its ten states are populated readable zero, empty, loading, partial unavailable, reviewed destination pending, all-page check, preview received, pending receipt, saved recovery and a long error. The 36 screenshots include each state's contact workspace, full-error Details and Setup at each viewport. The receipt records actual widget coordinates, computed fonts/colors/padding/state maps, keyboard traversal, list scrolling and fixed header/action bounds. It fails if the window manager changes the requested content size, an action clips, fewer than three list rows fit, or list scrolling moves controls or selection.
+The fixture covers 33 synthetic states at 1180×820, 920×749 and 680×680, plus the 680×680 text-scale case. It verifies stage/control isolation, resolved font/color/panel values, unclipped bounds, contact scrolling/action dock, keyboard traversal, full error access and timer cleanup. Source and the separate frozen harness must have identical production module code custody, geometry and styles. The harness is not shipped and adds no product test hooks. Real helper and account transport are replaced only at fixture boundaries; installed product, physical DPI and phone/account acceptance remain separate gates.
 
-Existing guide, source-diagnostic and update render fixtures use the new pane and actual 920×749/680×680 targets. The old `render_scaling_acceptance.py` remains explicitly pinned to retained RC14 bytes; it must not be relabeled as this candidate. New Windows screenshots, matched reference review, frozen helper/MSI execution and installed-update gates remain pending. Synthetic Tk scaling is not physical DPI, screen-reader or consumer-PC acceptance.
+The Windows workflow prepares an advertised disposable-runner desktop mode when necessary and restores it. Capture fails on clipped, offscreen, occluded or inconsistent client/native bounds. Idle/event-drain measurements use the production pump; the 20Hz full-render comparator is explicitly synthetic, not a historical customer performance measurement.
 
 ### Visible desktop qualification
 

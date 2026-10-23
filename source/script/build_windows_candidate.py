@@ -16,6 +16,10 @@ from pathlib import Path
 
 GUI_FILES = (
     "collector/windows/app.py",
+    "collector/windows/journey.py",
+    "collector/windows/guided_layout.py",
+    "collector/windows/brand_widgets.py",
+    "collector/windows/brand_tokens.py",
     "collector/windows/session.py",
     "collector/windows/helper_process.py",
     "collector/windows/native_setup.py",
@@ -29,6 +33,8 @@ GUI_FILES = (
     "collector/amplifai_phone/windows_storage.py",
 )
 LOGO = "public/brand/amplifai-by-nexus-original.png"
+FONT = "public/brand/fonts/OpenSans.ttf"
+EXPECTED_FONT_SHA256 = "36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878"
 LOCK = "collector/windows-requirements.lock"
 ENTRY = "collector/agent_entry.py"
 EXPECTED_LOGO_SHA256 = "07dabb73a6c03cb400079b05fc2ac7b26042529674f0fe56f261f2028e731dce"
@@ -185,6 +191,9 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
     _checked(python, directory=False)
     _checked(output.parent, directory=True)
     logo = _source_file(source, LOGO)
+    font = _source_file(source, FONT)
+    if _sha256(font) != EXPECTED_FONT_SHA256:
+        raise ValueError("Original Open Sans bytes differ from the fixed package input")
     lock = _source_file(source, LOCK)
     _source_file(source, ENTRY)
     source_digest = gui_digest(source)
@@ -219,6 +228,10 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
     resources.mkdir()
     shutil.copytree(helper, resources / "phone-helper")
     shutil.copy2(logo, resources / Path(LOGO).name)
+    (resources / "fonts").mkdir()
+    shutil.copy2(font, resources / "fonts/OpenSans.ttf")
+    if _sha256(resources / "fonts/OpenSans.ttf") != EXPECTED_FONT_SHA256:
+        raise ValueError("staged Open Sans bytes changed")
     legal_destination = resources / "legal"
     legal_destination.mkdir()
     for name in LEGAL_FILES:
@@ -247,12 +260,13 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
         "python_version": platform.python_version(), "python_build": platform.python_build(),
         "python_implementation": platform.python_implementation(),
         "gui_source_sha256": source_digest,
-        "version": "2026.10.22-rc21", "build": "26102221",
+        "version": "2026.10.23-rc22", "build": "26102322",
         "channel": "windows-x64-test", "installer_trust": "unsigned-test",
         "native_setup_protocol": "phone-native-setup-v2",
         "entry_sha256": _sha256(source / ENTRY),
         "lock_sha256": EXPECTED_LOCK_SHA256,
         "logo_sha256": EXPECTED_LOGO_SHA256,
+        "font_sha256": EXPECTED_FONT_SHA256,
         "legal_sha256": legal,
         "worker_modes_inspected": list(WORKER_MODES),
         "package_files": len(records),

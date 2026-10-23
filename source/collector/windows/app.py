@@ -6,25 +6,24 @@ import math
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from pathlib import Path
+from typing import NamedTuple
 from tkinter import messagebox, ttk
 
 from amplifai_phone.companion_status import CompanionIdentity, CompanionStatusServer
 from updater import BUNDLE_ID, BUILD, CHANNEL, VERSION, PreparedUpdate, UpdateError, check_update, cleanup_owned_updates
 
 from helper_process import HelperProcess, bundled_resources
+from journey import journey
+from brand_tokens import BACKGROUND, PANEL, BORDER, HEADING, BODY, MUTED, LIME, BLUE
 from native_run import AuthorityWorker, NativeRun, Operation, Outcome
 from native_setup import ClientIdentity, DISCLOSURE, SetupLink, SetupProtocolError
 from setup_delivery import DeliveryError, SetupDelivery, launch_uri
-from session import BACKUP_CHECK_MODE, DISCLOSURE_VERSION, WEBSITE_ORIGIN, ProtocolError, Session, contact_source_details
+from session import BACKUP_CHECK_MODE, WEBSITE_ORIGIN, ProtocolError, Session, contact_source_details
 
-# Exact values from collector/macos/Sources/Support/Brand.swift.
-BACKGROUND, PANEL, BORDER = "#0f1525", "#141d30", "#263146"
-HEADING, BODY, MUTED = "#edeff3", "#c8cfd9", "#a1a9b5"
-LIME, BLUE = "#a6e63d", "#5c87df"
-GUARANTEE = "Data & Privacy Guarantee: What We Collect, How It's Protected, and Why"
 WINDOW_TITLE = "AMPLIFai Phone · Windows unsigned TEST · " + VERSION
 SETUP_STEPS = (
     ("Connect your iPhone", "Use a data-capable USB cable and unlock the iPhone. Open Apple Devices on this PC and decide any normal Trust prompt yourself. The read-only check uses an existing trusted connection."),
@@ -129,12 +128,19 @@ def workspace_summary(state: Session) -> tuple[str, str]:
     elif state._pending_review is not None:
         status = "Preparing the selected metadata for local review."
     elif not state._capture_received:
-        status = "Local operation in progress. Open Details & recovery." if state.running else "Open Setup to review the collection agreement."
+        status = "Local operation in progress. Open Details & recovery." if state.running else "Open Phone in your account to start this collection."
     elif not state.contacts:
         status = "No contacts on this page. Review source coverage in Details."
     else:
         status = "Select contacts, then review the selected metadata."
     return coverage, status
+
+
+class PendingContinue(NamedTuple):
+    review_id: str
+    run_id: str
+    selection: tuple[int, ...]
+    acknowledged: bool = False
 
 
 class PhoneWindow:
@@ -146,10 +152,10 @@ class PhoneWindow:
         self.native_worker = AuthorityWorker()
         self.delivery = delivery
         self._native_authority_sent = None
+        self._pending_continue = None
         self.native_checked = tk.BooleanVar(value=False)
         self.native_scope = tk.StringVar(value="Waiting for the authenticated setup destination.")
         self.native_status = tk.StringVar()
-        self.checked = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value=self.state.status)
         self.transfer_status = tk.StringVar(value=self.state.transfer_status)
         self.coverage_status = tk.StringVar(value=self.state.coverage_status)
@@ -176,6 +182,9 @@ class PhoneWindow:
         self.handoff_preparing = False
         self.status_owned = True
         self._startup_update_pending = True
+        self._next_visual_refresh = 0.0
+        self._next_handoff_poll = 0.0
+        self._pump_after = None
         self._queued_update_check = False
         self._status_snapshot = {"busy": True, "updateState": "deferred", "availableVersion": None, "availableBuild": None}
         self.status_server = CompanionStatusServer(
@@ -184,14 +193,13 @@ class PhoneWindow:
             native_setup_v2=delivery is not None,
         )
         self.window.title(WINDOW_TITLE)
-        self.window.geometry("920x800")
+        self.window.geometry("1180x820")
         self.window.minsize(680, 680)
         self.window.configure(background=BACKGROUND)
         self.window.protocol("WM_DELETE_WINDOW", self.close)
-        self._style()
         self._layout(logo)
         fit_startup_window(self.window)
-        self.window.after(100, self.pump)
+        self._pump_after = self.window.after(100, self.pump)
         try:
             self.status_server.start()
         except OSError:
@@ -214,7 +222,8 @@ class PhoneWindow:
 
     @property
     def native_selection_locked(self):
-        return self.native_active and self.native.continued_selection is not None
+        return self.native_active and (self.native.continued_selection is not None
+                                       or getattr(self, "_pending_continue", None) is not None)
 
     @property
     def can_return_to_browser(self):
@@ -224,7 +233,7 @@ class PhoneWindow:
                 and not self.state.saved_acknowledged and not self.state._stopping)
 
     def open_account(self):
-        url = self.native.account_url if self.native_active else WEBSITE_ORIGIN + "/phone/account"
+        url = self.native.account_url if self.native_active else WEBSITE_ORIGIN + "/phone/account?week=phone"
         try:
             opened = webbrowser.open(url)
         except OSError:
@@ -244,6 +253,12 @@ class PhoneWindow:
             if opened else "The browser did not open. Return to your original account tab to finish saving. Keep this review open until the save receipt arrives.")
         self.refresh()
 
+    def reopen_account(self):
+        if self.can_return_to_browser:
+            self.continue_in_browser()
+        else:
+            self.open_account()
+
     def receive_setup(self, uri):
         if uri is None:
             self.window.deiconify()
@@ -261,7 +276,6 @@ class PhoneWindow:
                 return "busy"
             self.native = NativeRun(ClientIdentity(VERSION, BUILD))
             self.state.approve(False)
-            self.checked.set(False)
             self.native_checked.set(False)
             self._native_authority_sent = None
             self.dispatch_native(self.native.claim_link(uri))
@@ -303,6 +317,7 @@ class PhoneWindow:
         if self.state.running and self.state.mode == "connect":
             self.stop()
             return
+        self._pending_continue = None
         self.native.cancel()
         self.native_checked.set(False)
         self.sync_native_authority()
@@ -366,6 +381,7 @@ class PhoneWindow:
             operation, outcome = self.native_worker.results.get_nowait()
             self.handle_native_result(self.native.complete(operation, outcome))
         self.native.timeout()
+        self.drain_pending_continue()
         if (self.native.current and self.native.phase in ("collecting", "bound")
                 and self.native.authority == "current" and self.native.pending is None
                 and self.native_worker.idle and self.native.monotonic() >= self.native.next_refresh):
@@ -381,18 +397,19 @@ class PhoneWindow:
                 self.helper.close_input()
 
     def _layout_native_setup(self, host):
-        pane = self.native_pane = ttk.Frame(host)
+        pane = self.native_pane = ttk.Frame(host, style="Panel.TFrame")
         pane.grid(row=0, column=0, sticky="nsew")
         pane.columnconfigure(0, weight=1)
         pane.rowconfigure(2, weight=1)
-        ttk.Label(pane, text="Phone collection", style="Heading.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 8))
-        scope = ttk.Label(pane, textvariable=self.native_scope, justify="left")
-        scope.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        text_host = ttk.Frame(pane)
-        text_host.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        self.native_heading = ttk.Label(pane, text="Approve this phone collection", style="Panel.Heading.TLabel")
+        self.native_heading.grid(row=0, column=0, sticky="w", pady=(0, self.space(20)))
+        scope = ttk.Label(pane, textvariable=self.native_scope, style="Panel.TLabel", justify="left")
+        scope.grid(row=1, column=0, sticky="ew", pady=(0, self.space(12)))
+        text_host = self.native_text_host = ttk.Frame(pane, style="Panel.TFrame")
+        text_host.grid(row=2, column=0, sticky="nsew", pady=(0, self.space(12)))
         text_host.columnconfigure(0, weight=1)
         text_host.rowconfigure(0, weight=1)
-        self.native_disclosure = self.readable_text(text_host, height=4)
+        self.native_disclosure = self.readable_text(text_host, height=8)
         self.native_disclosure.pack_forget()
         self.native_disclosure.grid(row=0, column=0, sticky="nsew")
         scrollbar = ttk.Scrollbar(text_host, command=self.native_disclosure.yview)
@@ -409,30 +426,44 @@ class PhoneWindow:
         self.native_agreement = ttk.Checkbutton(pane, text=DISCLOSURE["agreement"],
             variable=self.native_checked, command=self.toggle_native_agreement,
             style="Native.Disclosure.TCheckbutton")
-        self.native_agreement.grid(row=3, column=0, sticky="ew", pady=(0, 8))
-        status = ttk.Label(pane, textvariable=self.native_status, justify="left")
-        status.grid(row=4, column=0, sticky="ew", pady=(0, 8))
-        primary = ttk.Frame(pane)
-        primary.grid(row=5, column=0, sticky="ew", pady=(0, 8))
-        self.native_approve = ttk.Button(primary, text="Agree", style="Primary.TButton", command=self.approve_native)
-        self.native_start = ttk.Button(primary, text="Start", style="Primary.TButton", command=self.start_native)
+        self.native_agreement.grid(row=3, column=0, sticky="ew", pady=(0, self.space(12)))
+        status = ttk.Label(pane, textvariable=self.native_status, style="Panel.TLabel", justify="left")
+        status.grid(row=4, column=0, sticky="ew", pady=(0, self.space(12)))
+        primary = ttk.Frame(pane, style="Panel.TFrame")
+        primary.grid(row=5, column=0, sticky="ew", pady=(0, self.space(12)))
+        self.native_approve = ttk.Button(primary, text="Approve collection", style="Primary.TButton", command=self.approve_native)
+        self.native_start = ttk.Button(primary, text="Start collection", style="Primary.TButton", command=self.start_native)
         self.native_retry = ttk.Button(primary, text="Retry confirmation", command=lambda: self.native_action(self.native.retry))
         for button in (self.native_approve, self.native_start, self.native_retry):
-            button.pack(side="left", padx=(0, 8))
-        secondary = ttk.Frame(pane)
-        secondary.grid(row=6, column=0, sticky="ew", pady=(0, 8))
+            button.pack(side="left", padx=(0, self.space(12)))
+        secondary = ttk.Frame(pane, style="Panel.TFrame")
+        secondary.grid(row=6, column=0, sticky="ew", pady=(0, self.space(12)))
         self.native_cancel = ttk.Button(secondary, text="Cancel setup", command=self.cancel_native)
-        self.native_cancel.pack(side="left", padx=(0, 8))
+        self.native_cancel.pack(side="left", padx=(0, self.space(12)))
         self.native_account_button = ttk.Button(secondary, text="Open account", command=self.open_account)
         self.native_account_button.pack(side="left")
-        links = ttk.Frame(pane)
+        links = self.native_links = ttk.Frame(pane, style="Panel.TFrame")
         links.grid(row=7, column=0, sticky="ew")
         for title, href in (("Account privacy", DISCLOSURE["privacyHref"]), ("Windows privacy", DISCLOSURE["supplementHref"])):
-            ttk.Button(links, text=title, command=lambda path=href: webbrowser.open(WEBSITE_ORIGIN + path)).pack(side="left", padx=(0, 8))
+            ttk.Button(links, text=title, command=lambda path=href: webbrowser.open(WEBSITE_ORIGIN + path)).pack(side="left", padx=(0, self.space(12)))
+        self.setup_guide = ttk.Frame(pane, style="Panel.TFrame")
+        self.setup_guide.grid(row=8, column=0, sticky="ew", pady=(self.space(20), 0))
+        ttk.Label(self.setup_guide, textvariable=self.guide_heading, style="Panel.Heading.TLabel", wraplength=780).pack(fill="x", pady=(0, self.space(12)))
+        self.guide_text = self.readable_text(self.setup_guide, height=5)
+        guide_actions = ttk.Frame(self.setup_guide, style="Panel.TFrame")
+        guide_actions.pack(fill="x", pady=(self.space(12), self.space(12)))
+        self.guide_back = ttk.Button(guide_actions, text="Back", command=lambda: self.move_guide(-1))
+        self.guide_back.pack(side="left", padx=(0, self.space(12)))
+        self.guide_next = ttk.Button(guide_actions, text="Next", command=lambda: self.move_guide(1))
+        self.guide_next.pack(side="left", padx=(0, self.space(12)))
+        self.backup_check = ttk.Button(guide_actions, text="Check iPhone setting", command=lambda: self.start(BACKUP_CHECK_MODE))
+        self.backup_check.pack(side="left")
+        ttk.Label(self.setup_guide, textvariable=self.backup_setting, style="Panel.TLabel", wraplength=780).pack(fill="x")
+        self.render_guide()
         def resize(event):
             for label in (scope, status):
                 label.configure(wraplength=event.width)
-            ttk.Style(self.window).configure("Native.Disclosure.TCheckbutton", wraplength=max(240, event.width - 32))
+            ttk.Style(self.window).configure("Native.Disclosure.TCheckbutton", wraplength=max(self.space(240), event.width - self.space(32)))
         pane.bind("<Configure>", resize)
         pane.grid_remove()
 
@@ -443,7 +474,7 @@ class PhoneWindow:
         scope = run.run.scope if run.run else run.claim.scope if run.claim else None
         self.native_scope.set("Account save confirmed. Open results returns to this report." if run.completion
             else "Confirm the account, course and sources below." if scope else "Waiting for the authenticated setup destination.")
-        labels = {"claiming": "Confirming your account setup…", "pending_approval": "Check the agreement, then choose Agree. Agree does not collect.",
+        labels = {"claiming": "Confirming your account setup…", "pending_approval": "Check the agreement, then approve this collection. Approval does not start collection.",
             "approving": "Confirming your agreement…", "prepared": "Approved. Choose Start when your iPhone is ready.",
             "starting": "Confirming permission to start this collection…", "collecting": "Collection started. Review your contacts before Continue.",
             "awaiting_pair": "Preparing your selected metadata…", "binding": "Confirming the reviewed selection…",
@@ -473,248 +504,94 @@ class PhoneWindow:
                          else "Account controls" if run.run else "Open account")
         self.native_account_button.configure(text=account_label)
         self.open_account_button.configure(text=account_label)
-        self.account_details_label.configure(text="Continue saves only the reviewed selection to the account and course approved in Setup. Keep this window open for the matching account-save receipt. Return to the original account tab to stop the server setup or recover a completed report.")
+        if hasattr(self, "native_heading"):
+            preparing = run.phase in ("prepared", "starting", "start_uncertain")
+            self.native_heading.configure(text="Connect and check your iPhone" if preparing else "Approve this phone collection")
+            self.setup_guide.grid() if preparing else self.setup_guide.grid_remove()
+            self.native_text_host.grid_remove() if preparing else self.native_text_host.grid()
+            self.native_agreement.grid_remove() if preparing else self.native_agreement.grid()
+            self.native_start.pack(side="left", padx=(0, self.space(12))) if preparing else self.native_start.pack_forget()
+            self.native_approve.pack_forget() if preparing else self.native_approve.pack(side="left", padx=(0, self.space(12)))
+            self.native_retry.pack(side="left", padx=(0, self.space(12))) if recoverable else self.native_retry.pack_forget()
 
-    def _style(self) -> None:
-        style = ttk.Style(self.window)
-        style.theme_use("clam")
-        style.configure("TFrame", background=BACKGROUND)
-        style.configure("TLabel", background=BACKGROUND, foreground=BODY, font=("Arial", 12))
-        style.configure("Heading.TLabel", foreground=HEADING, font=("Arial", 22, "bold"))
-        style.configure("TButton", background=PANEL, foreground=HEADING, bordercolor=BORDER, padding=(16, 12), font=("Arial", 11, "bold"))
-        style.map("TButton", background=[("active", BORDER)], foreground=[("disabled", MUTED)])
-        style.configure("Primary.TButton", background=LIME, foreground=BACKGROUND)
-        style.map("Primary.TButton", background=[("disabled", BORDER), ("active", LIME)], foreground=[("disabled", MUTED)])
-        style.configure("TCheckbutton", background=BACKGROUND, foreground=BODY, font=("Arial", 12))
-        style.map("Native.Disclosure.TCheckbutton", background=[("disabled", BACKGROUND)],
-                  foreground=[("disabled", MUTED)])
-        style.configure("TEntry", fieldbackground=PANEL, foreground=HEADING, padding=8)
-        style.configure("Horizontal.TProgressbar", background=LIME, troughcolor=BORDER)
+    def space(self, value):
+        return round(value * getattr(self, "layout_scale", 1.0))
 
     def label(self, parent, text: str, heading=False):
         item = ttk.Label(parent, text=text, wraplength=820, justify="left", style="Heading.TLabel" if heading else "TLabel")
-        item.pack(fill="x", pady=(0, 12))
+        item.pack(fill="x", pady=(0, self.space(12)))
         return item
 
     def _layout(self, logo: Path) -> None:
-        shell = ttk.Frame(self.window, padding=24)
-        shell.pack(fill="both", expand=True)
-        shell.columnconfigure(0, weight=1)
-        shell.rowconfigure(1, weight=1)
-        self.navigation = ttk.Frame(shell)
-        self.navigation.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        self.workspace_buttons = {}
-        for name, text in (("contacts", "Contacts"), ("setup", "Setup"), ("details", "Details & recovery")):
-            button = ttk.Button(self.navigation, text=text, command=lambda target=name: self.show_workspace(target))
-            button.pack(side="left", padx=(0, 8))
-            self.workspace_buttons[name] = button
-        host = ttk.Frame(shell)
-        host.grid(row=1, column=0, sticky="nsew")
-        host.columnconfigure(0, weight=1)
-        host.rowconfigure(0, weight=1)
-        self.details_pane = ttk.Frame(host)
-        self.details_pane.grid(row=0, column=0, sticky="nsew")
-        self.contact_workspace = ttk.Frame(host)
-        self.contact_workspace.grid(row=0, column=0, sticky="nsew")
-        self.contact_workspace.grid_remove()
-        self._layout_native_setup(host)
-        self._visible_workspace = "setup"
-        self._workspace_capture = False
-        canvas = self.details_canvas = tk.Canvas(self.details_pane, background=BACKGROUND, highlightthickness=0)
-        scroll = ttk.Scrollbar(self.details_pane, command=canvas.yview)
-        canvas.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-        outer = self.details_content = ttk.Frame(canvas)
-        content = canvas.create_window((0, 0), window=outer, anchor="nw")
-        outer.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        def resize(event):
-            canvas.itemconfigure(content, width=event.width)
-            pending = [outer]
-            while pending:
-                widget = pending.pop()
-                pending.extend(widget.winfo_children())
-                if isinstance(widget, ttk.Label):
-                    widget.configure(wraplength=max(240, event.width))
-            ttk.Style(self.window).configure("Disclosure.TCheckbutton", wraplength=max(240, event.width - 32))
-        canvas.bind("<Configure>", resize)
-        header = ttk.Frame(outer)
-        header.pack(fill="x")
-        self.logo = tk.PhotoImage(file=str(logo))
-        self.logo = self.logo.subsample(max(1, math.ceil(self.logo.width() / 210)))
-        ttk.Label(header, image=self.logo).pack(anchor="w", pady=(0, 12))
-        self.label(outer, "Connect. Review. Decide.", heading=True)
-        ttk.Label(outer, textvariable=self.update_message, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
-        update_actions = ttk.Frame(outer)
-        update_actions.pack(fill="x", pady=(0, 16))
-        self.check_update_button = ttk.Button(update_actions, text="Check for updates", command=self.request_update_check)
-        self.check_update_button.pack(anchor="w")
-        self.install_update_button = ttk.Button(update_actions, text="Open verified update installer", command=self.install_update)
-        self.install_update_button.pack(anchor="w", pady=(8, 0))
-        self.setup_toggle = ttk.Button(outer, text="Hide iPhone setup guide", command=self.toggle_setup_guide)
-        self.setup_toggle.pack(anchor="w", pady=(0, 8))
-        self.setup_guide = ttk.Frame(outer)
-        self.setup_guide.pack(fill="x", pady=(0, 16))
-        ttk.Label(self.setup_guide, textvariable=self.guide_heading, style="Heading.TLabel").pack(anchor="w", pady=(0, 8))
-        self.guide_text = self.readable_text(self.setup_guide, height=5)
-        guide_actions = ttk.Frame(self.setup_guide)
-        guide_actions.pack(fill="x", pady=(8, 8))
-        self.guide_back = ttk.Button(guide_actions, text="Back", command=lambda: self.move_guide(-1))
-        self.guide_back.pack(side="left", padx=(0, 8))
-        self.guide_next = ttk.Button(guide_actions, text="Next", command=lambda: self.move_guide(1))
-        self.guide_next.pack(side="left", padx=(0, 8))
-        self.backup_check = ttk.Button(guide_actions, text="Check iPhone setting", command=lambda: self.start(BACKUP_CHECK_MODE))
-        self.backup_check.pack(side="left")
-        ttk.Label(self.setup_guide, textvariable=self.backup_setting, wraplength=820, justify="left").pack(fill="x")
-        self.render_guide()
-        consent = self.legacy_consent = ttk.Frame(outer)
-        consent.pack(fill="x")
-        self.label(consent, GUARANTEE)
-        self.label(consent, "Selected contact names and numbers, call counterpart/time/direction/duration, and message counterpart/time/direction/channel provide relationship context. Message text, attachments, passwords and backups are never handed to the website.")
-        self.label(consent, "An iPhone backup can contain private content locally. Cleanup can leave files after interruption. Trust and device permissions are your decision. Agreement permits collection, not marketing or account saving.")
-        self.agreement = ttk.Checkbutton(consent, text="I agree to this selected phone metadata collection disclosure.", variable=self.checked, command=self.toggle_agreement, style="Disclosure.TCheckbutton")
-        self.agreement.pack(fill="x", pady=(0, 8))
-        self.label(consent, "You must check the box and select Agree to continue. Agree alone does not collect. Version: " + DISCLOSURE_VERSION)
-        actions = ttk.Frame(consent)
-        actions.pack(fill="x", pady=(0, 16))
-        primary_actions = ttk.Frame(actions)
-        primary_actions.pack(fill="x", pady=(0, 8))
-        secondary_actions = ttk.Frame(actions)
-        secondary_actions.pack(fill="x")
-        self.approve = ttk.Button(primary_actions, text="Agree", command=self.agree, style="Primary.TButton")
-        self.approve.pack(side="left", padx=(0, 8))
-        self.connect = ttk.Button(primary_actions, text="Connect iPhone", command=lambda: self.start("connect"), style="Primary.TButton")
-        self.connect.pack(side="left", padx=(0, 8))
-        self.decline_button = ttk.Button(secondary_actions, text="Not now", command=self.decline)
-        self.decline_button.pack(side="left", padx=(0, 8))
-        self.privacy_button = ttk.Button(secondary_actions, text="Full privacy guarantee", command=lambda: webbrowser.open(WEBSITE_ORIGIN + "/experience/data-privacy-guarantee"))
-        self.privacy_button.pack(side="left")
-        self.status_details_label = ttk.Label(outer, textvariable=self.status, wraplength=820, justify="left")
-        self.status_details_label.pack(fill="x", pady=(0, 8))
-        self.activity = ttk.Frame(outer)
-        self.activity.pack(fill="x", pady=(0, 12))
-        ttk.Label(self.activity, textvariable=self.activity_stage, wraplength=820, style="Heading.TLabel").pack(fill="x", pady=(0, 8))
-        self.progress = ttk.Progressbar(self.activity, maximum=100)
-        self.progress.pack(fill="x", pady=(0, 12))
-        self.progress_label = ttk.Label(self.activity, textvariable=self.progress_caption, wraplength=820, justify="left")
-        self.progress_label.pack(fill="x", pady=(0, 8))
-        ttk.Label(self.activity, textvariable=self.transfer_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
-        ttk.Label(self.activity, textvariable=self.activity_measurement, wraplength=820, justify="left").pack(fill="x")
-        password_row = ttk.Frame(outer)
-        password_row.pack(fill="x", pady=(0, 12))
-        self.password = ttk.Entry(password_row, show="•", width=30)
-        self.password.pack(fill="x", pady=(0, 8))
-        self.password_button = ttk.Button(password_row, text="Send backup password privately", command=self.send_password)
-        self.password_button.pack(anchor="w")
-        self.label(outer, "Select contacts in Contacts. Nothing is selected by default; unavailable history is not zero activity.")
-        ttk.Label(outer, textvariable=self.coverage_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
-        self.diagnostic_details_button = ttk.Button(outer, text="Source diagnostic details", command=self.show_source_diagnostics)
-        self.diagnostic_details_button.pack(anchor="w", pady=(0, 8))
-        self.account_details_label = self.label(outer, "After reviewing the exact selection, connect from your signed-in website account. Confirm the account and course here before preview transfer. Connect does not save; each source needs separate Save approval in the account.")
-        ttk.Label(outer, textvariable=self.destination_status, wraplength=820, justify="left").pack(fill="x", pady=(0, 8))
-        ttk.Label(outer, textvariable=self.pair_code, font=("Arial", 18, "bold"), foreground=LIME).pack(anchor="w")
-        self.copy_code_button = ttk.Button(outer, text="Copy temporary code for manual recovery", command=self.copy_pair_code)
-        self.copy_code_button.pack(anchor="w", pady=(8, 8))
-        self.open_account_button = ttk.Button(outer, text="Open approved account browser", command=self.open_account)
-        self.open_account_button.pack(anchor="w", pady=(0, 8))
-        recovery = ttk.Frame(outer)
-        recovery.pack(fill="x")
-        self.inspect = ttk.Button(recovery, text="Check temporary data", command=lambda: self.start("inspect"))
-        self.inspect.pack(anchor="w", pady=(0, 8))
-        self.clear = ttk.Button(recovery, text="Remove marked abandoned data", command=self.clear_residue)
-        self.clear.pack(anchor="w", pady=(0, 8))
-        self.stop_button = ttk.Button(recovery, text="Request stop", command=self.stop)
-        self.stop_button.pack(anchor="w", pady=(0, 8))
-        self.force_button = ttk.Button(recovery, text="Force stop", command=self.force)
-        self.force_button.pack(anchor="w")
-        pending = [outer]
-        while pending:
-            widget = pending.pop()
-            pending.extend(widget.winfo_children())
-            widget.bind("<FocusIn>", lambda event: self.reveal_detail_focus(event.widget), add="+")
-        self._layout_contacts()
-        self.show_workspace("setup")
-        self.refresh()
+        from guided_layout import build
+        build(self, logo)
 
     def _layout_contacts(self) -> None:
+        from brand_widgets import ContactCards
         workspace = self.contact_workspace
         workspace.columnconfigure(0, weight=1)
         workspace.rowconfigure(4, weight=1)
-        self.workspace_context = ttk.Label(workspace, textvariable=self.workspace_coverage, justify="left")
-        self.workspace_context.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        search = ttk.Frame(workspace)
-        search.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        self.workspace_context = ttk.Label(workspace, textvariable=self.workspace_coverage, justify="left", style="Panel.TLabel")
+        self.workspace_context.grid(row=0, column=0, sticky="ew", pady=(0, self.space(12)))
+        search = ttk.Frame(workspace, style="Panel.TFrame")
+        search.grid(row=1, column=0, sticky="ew", pady=(0, self.space(12)))
         self.search_entry = ttk.Entry(search, textvariable=self.contact_query, width=20)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, self.space(12)))
         self.search_entry.bind("<Return>", lambda _event: self.search_contacts())
         self.search_button = ttk.Button(search, text="Search names", command=self.search_contacts)
         self.search_button.pack(side="left")
-        selection = ttk.Frame(workspace)
-        selection.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        selection = ttk.Frame(workspace, style="Panel.TFrame")
+        selection.grid(row=2, column=0, sticky="ew", pady=(0, self.space(12)))
         self.select_all_button = ttk.Button(selection, text="Select all contacts", command=self.select_all_contacts)
-        self.select_all_button.pack(side="left", padx=(0, 8))
+        self.select_all_button.pack(side="left", padx=(0, self.space(12)))
         self.cancel_select_all_button = ttk.Button(selection, text="Stop check", command=self.cancel_select_all)
-        self.cancel_select_all_button.pack(side="left", padx=(0, 8))
+        self.cancel_select_all_button.pack(side="left", padx=(0, self.space(12)))
         self.clear_all_button = ttk.Button(selection, text="Clear all", command=self.clear_all_contacts)
         self.clear_all_button.pack(side="left")
-        paging = ttk.Frame(workspace)
-        paging.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        paging = ttk.Frame(workspace, style="Panel.TFrame")
+        paging.grid(row=3, column=0, sticky="ew", pady=(0, self.space(12)))
         self.previous_button = ttk.Button(paging, text="Previous", command=self.previous_contacts)
-        self.previous_button.pack(side="left", padx=(0, 8))
+        self.previous_button.pack(side="left", padx=(0, self.space(12)))
         self.next_button = ttk.Button(paging, text="Next", command=self.next_contacts)
-        self.next_button.pack(side="left", padx=(0, 8))
-        self.page_label = ttk.Label(paging, textvariable=self.contact_page, justify="left")
+        self.next_button.pack(side="left", padx=(0, self.space(12)))
+        self.page_label = ttk.Label(paging, textvariable=self.contact_page, justify="left", style="Panel.TLabel")
         self.page_label.pack(side="left", fill="x", expand=True)
         self.page_label.bind("<Configure>", lambda event: self.page_label.configure(wraplength=event.width))
-        contact_frame = ttk.Frame(workspace)
+        contact_frame = ttk.Frame(workspace, style="Panel.TFrame")
         contact_frame.grid(row=4, column=0, sticky="nsew")
-        self.contacts = tk.Listbox(contact_frame, selectmode=tk.EXTENDED, exportselection=False, height=6, background=PANEL, foreground=HEADING, selectbackground=BLUE, selectforeground=BACKGROUND, highlightbackground=BORDER, highlightcolor=LIME, font=("Arial", 12), activestyle="underline")
+        self.contacts = ContactCards(contact_frame, font=(self.body_font, 12))
         scrollbar = ttk.Scrollbar(contact_frame, command=self.contacts.yview)
         self.contacts.configure(yscrollcommand=scrollbar.set)
         self.contacts.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         self.contacts.bind("<<ListboxSelect>>", self.selection_changed)
-        self.workspace_status_label = ttk.Label(workspace, textvariable=self.workspace_status, justify="left")
-        self.workspace_status_label.grid(row=5, column=0, sticky="ew", pady=(8, 8))
-        self.contact_actions = ttk.Frame(workspace)
+        self.workspace_status_label = ttk.Label(workspace, textvariable=self.workspace_status, justify="left", style="Panel.TLabel")
+        self.workspace_status_label.grid(row=5, column=0, sticky="ew", pady=(self.space(12), self.space(12)))
+        self.contact_actions = ttk.Frame(workspace, style="Panel.TFrame")
         self.contact_actions.grid(row=6, column=0, sticky="ew")
-        self.review_button = ttk.Button(self.contact_actions, text="Review selected metadata", command=self.review)
-        self.review_button.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
-        self.pair_button = ttk.Button(self.contact_actions, text="Connect signed-in account", command=self.pair)
-        self.pair_button.grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.review_button = ttk.Button(self.contact_actions, text="Continue", style="Primary.TButton",
+            command=lambda: self.review(continue_to_account=self.native_active))
+        self.review_button.grid(row=0, column=0, sticky="w", padx=(0, self.space(12)), pady=(0, self.space(12)))
+        self.pair_button = ttk.Button(self.contact_actions, text="Connect signed-in account", style="Primary.TButton", command=self.pair)
+        self.pair_button.grid(row=0, column=0, sticky="w", padx=(0, self.space(12)), pady=(0, self.space(12)))
         self.details_button = ttk.Button(self.contact_actions, text="Contact details", command=self.show_source_details)
-        self.details_button.grid(row=0, column=1, sticky="w", pady=(0, 8))
+        self.details_button.grid(row=0, column=1, sticky="w", pady=(0, self.space(12)))
         self.change_selection_button = ttk.Button(self.contact_actions, text="Change selected contacts", command=self.change_selection)
-        self.change_selection_button.grid(row=1, column=0, sticky="w", padx=(0, 8))
-        self.account_recovery_button = ttk.Button(self.contact_actions, text="Account & recovery", command=lambda: self.show_workspace("details", account=True))
-        self.account_recovery_button.grid(row=1, column=1, sticky="w")
+        self.change_selection_button.grid(row=1, column=0, sticky="w", padx=(0, self.space(12)))
         def resize(event):
             for label in (self.workspace_context, self.workspace_status_label):
                 label.configure(wraplength=event.width)
         workspace.bind("<Configure>", resize)
 
     def show_workspace(self, name: str, *, account: bool = False) -> None:
-        if name not in self.workspace_buttons:
+        if name not in ("setup", "contacts", "details"):
             raise ValueError("Unknown native workspace")
-        self._visible_workspace = name
-        for target, button in self.workspace_buttons.items():
-            button.configure(style="Primary.TButton" if target == name else "TButton")
-        self.workspace_buttons[name].focus_set()
-        self.native_pane.grid_remove()
-        if name == "contacts":
-            self.details_pane.grid_remove()
-            self.contact_workspace.grid()
-        elif name == "setup" and self.native_active:
-            self.contact_workspace.grid_remove()
-            self.details_pane.grid_remove()
-            self.native_pane.grid()
-        else:
-            self.contact_workspace.grid_remove()
-            self.details_pane.grid()
-            self.window.update_idletasks()
-            anchor = self.account_details_label if account else self.status_details_label
-            offset = 0 if name == "setup" else anchor.winfo_y()
-            self.details_canvas.yview_moveto(offset / max(1, self.details_content.winfo_height()))
+        self._visible_workspace = "details" if name == "details" else "setup"
+        self.refresh_workspace()
+        if hasattr(self, "recovery_toggle"):
+            self.recovery_toggle.focus_set()
+        if name == "details":
+            self.details_canvas.yview_moveto(0)
 
     def reveal_detail_focus(self, widget) -> None:
         """Tab traversal reveals controls inside the bounded details pane."""
@@ -732,22 +609,35 @@ class PhoneWindow:
     def refresh_workspace(self) -> None:
         coverage, status = workspace_summary(self.state)
         if self.native_active and self.state.reviewed and not self.state.handoff_id:
-            status = "Review available metadata. Continue saves this selection to the account approved in Setup."
+            status = "Review available metadata. Continue sends this selection to the approved account and course."
             if self.native.phase == "handoff_expired":
-                status = "Handoff expired. Open Setup for account recovery or cancellation."
+                status = "Handoff expired. Open Details & recovery to check your account or cancel locally."
         elif self.native_active and self.state._browser_received and not self.state.save_receipt_pending and not self.state.saved_acknowledged:
             status = "Preview received. Waiting for the account-save receipt."
         if self.native_active and not self.state.save_receipt_pending and not self.state.saved_acknowledged:
             if self.native.phase.endswith("_uncertain"):
-                status = "Confirmation unavailable. Open Setup to retry; the continued selection stays fixed."
+                status = "Confirmation unavailable. Open Details & recovery to retry; the continued selection stays fixed."
             elif self.native.phase == "binding":
                 status = "Confirming the reviewed selection. Keep this app open."
             elif self.native.phase == "bound" and self.native.authority == "paused":
-                status = "Confirmation paused. Return to the approved account tab or open Setup for recovery."
+                status = "Confirmation paused. Return to the approved account tab or open Details & recovery."
             elif self.native.phase == "bound" and not self.state._browser_received:
                 status = "Return to your original account tab. If it is missing, choose Continue in browser. Keep this review open."
         self.workspace_coverage.set(coverage)
         self.workspace_status.set(status)
+        if hasattr(self, "contact_actions"):
+            if self.state.can_change_selection and not self.native_selection_locked:
+                self.change_selection_button.grid()
+            else:
+                self.change_selection_button.grid_remove()
+        if hasattr(self, "save_selection"):
+            if self.state.review_counts is not None:
+                selected, calls, messages = self.state.review_counts
+                call_text = "Calls unavailable" if "calls" in self.state.missing else f"{calls:,} matching calls"
+                message_text = "Messages unavailable" if "messages" in self.state.missing else f"{messages:,} matching messages"
+                self.save_selection.configure(text=f"{selected:,} selected contacts · {call_text} · {message_text}")
+            else:
+                self.save_selection.configure(text="")
         if self.state.reviewed:
             self.review_button.grid_remove()
             self.pair_button.grid()
@@ -758,14 +648,17 @@ class PhoneWindow:
             self.review_button.grid()
             if self.window.focus_get() == self.pair_button:
                 self.review_button.focus_set()
-        if self.state._capture_received and not self._workspace_capture:
-            self.show_workspace("contacts")
-            self.contacts.focus_set()
+        new_capture = self.state._capture_received and not self._workspace_capture
         self._workspace_capture = self.state._capture_received
+        if hasattr(self, "stage_panels"):
+            from guided_layout import refresh
+            refresh(self, journey(self.state, getattr(self, "native", None)))
+            if new_capture and self.contact_workspace.winfo_ismapped():
+                self.contacts.focus_set()
 
     def readable_text(self, parent, *, height: int):
         value = tk.Text(parent, height=height, wrap="word", background=PANEL, foreground=HEADING,
-                        font=("Arial", 12), relief="flat", padx=10, pady=10, takefocus=True)
+                        font=(getattr(self, "body_font", "Arial"), 12), relief="flat", padx=self.space(10), pady=self.space(10), takefocus=True)
         value.pack(fill="x")
         value.configure(state="disabled")
         return value
@@ -784,14 +677,6 @@ class PhoneWindow:
         self.guide_step = max(0, min(len(SETUP_STEPS) - 1, self.guide_step + direction))
         self.render_guide()
         self.guide_text.focus_set()
-
-    def toggle_setup_guide(self) -> None:
-        if self.setup_guide.winfo_manager():
-            self.setup_guide.pack_forget()
-            self.setup_toggle.configure(text="Show iPhone setup guide")
-        else:
-            self.setup_guide.pack(fill="x", pady=(0, 16), after=self.setup_toggle)
-            self.setup_toggle.configure(text="Hide iPhone setup guide")
 
     def show_source_details(self) -> None:
         if not self.state.contacts or self.state.selecting_all or self.state.pending_contact is not None:
@@ -841,24 +726,13 @@ class PhoneWindow:
             self.source_details_window.destroy()
             self.source_details_window = None
 
-    def agree(self) -> None:
-        if self.native_active:
-            return
-        self.state.approve(self.checked.get())
-        self.refresh()
-
-    def toggle_agreement(self) -> None:
-        self.state.approve(False)
-        self.refresh()
-
-    def decline(self) -> None:
-        self.checked.set(False)
-        self.state.approve(False)
-        self.refresh()
-
     def start(self, mode: str, *, native_admitted=False) -> None:
-        if mode == "connect" and self.native_active and not native_admitted:
-            self.start_native()
+        if mode == "connect" and not native_admitted:
+            if self.native_active:
+                self.start_native()
+            else:
+                self.state.status = "Open Phone in your signed-in account, then choose Connect phone to approve this collection."
+                self.refresh()
             return
         if native_admitted and (not self.native.current or not self.native.started or self.native.phase != "collecting"):
             return
@@ -872,7 +746,6 @@ class PhoneWindow:
             self.state.status = "Finish the current operation and inspect temporary data before starting another."
             self.refresh()
             return
-        self.checked.set(False)
         if mode == "connect":
             self.close_source_details()
             self.contact_query.set("")
@@ -899,6 +772,7 @@ class PhoneWindow:
         self.password.configure(state="disabled")
 
     def cooperative_failure(self, *, clear_password: bool = True) -> None:
+        self._pending_continue = None
         if self.native_active:
             self.native.cancel()
         self.state.cooperative_failure()
@@ -1000,14 +874,44 @@ class PhoneWindow:
             self.window.clipboard_clear()
             self.window.clipboard_append(self.state.pair_code)
 
-    def review(self) -> None:
+    def review(self, *, continue_to_account=False) -> None:
         if self.native_selection_locked:
             return
+        if continue_to_account and (not self.native_active or not self.native.current or self.native.phase != "collecting"):
+            return
         try:
-            self.send(self.state.review(sorted(self.state.selected_ids)))
+            command = self.state.review(sorted(self.state.selected_ids))
+            self._pending_continue = (PendingContinue(command["reviewId"], self.native.run.run_id, self.state.selection)
+                                      if continue_to_account else None)
+            self.send(command)
         except ProtocolError:
             self.state.status = "Select contacts and wait for any pending response before reviewing again."
         self.refresh()
+
+    def drain_pending_continue(self) -> None:
+        pending = getattr(self, "_pending_continue", None)
+        if pending is None:
+            return
+        if (not self.native_active or not self.native.current or self.native.phase != "collecting"
+                or self.native.run.run_id != pending.run_id or not self.state.running
+                or self.state._stopping or self.state.phase in ("error", "cancelling")
+                or self.state._pending_review_id != pending.review_id
+                or self.state.selection != pending.selection
+                or tuple(sorted(self.state.selected_ids)) != pending.selection):
+            self._pending_continue = None
+            return
+        if (not pending.acknowledged or not self.state.can_pair or self.native.authority != "current"
+                or self.native.pending is not None or not self.native_worker.idle):
+            return
+        try:
+            operation = self.native.continue_review(pending.selection)
+            self.dispatch_native(operation)
+            # NativeRun now owns the same immutable selection, including any
+            # uncertain submission/reply and its explicit identical retry.
+            self._pending_continue = None
+        except SetupProtocolError as error:
+            self.native.message = str(error)
+            self._pending_continue = None
 
     def change_selection(self) -> None:
         if not self.state.can_change_selection or self.native_selection_locked:
@@ -1044,6 +948,7 @@ class PhoneWindow:
         if self.state._capture_received and not self.state.saved_acknowledged:
             if not messagebox.askyesno("Discard local phone review?", "Request stop discards the local reviewed import after the helper exits. Account parts may already be saved, while their final browser receipt may still be pending. Keep this window open and finish in the browser if you want to complete that save. Stop anyway?"):
                 return
+        self._pending_continue = None
         if self.native_active:
             self.native.cancel()
             self.sync_native_authority()
@@ -1096,10 +1001,6 @@ class PhoneWindow:
         self.progress_caption.set(state.progress_caption)
         self.activity_measurement.set(state.activity_measurement)
         self.details_button.configure(state="normal" if state.contacts and not state.selecting_all and state.pending_contact is None else "disabled")
-        self.approve.configure(state="normal" if self.checked.get() and state.inspected and not state.residue and not state.running else "disabled")
-        self.connect.configure(state="normal" if state.can_connect and getattr(self, "status_owned", True) and getattr(self, "update_state", "") != "installing" else "disabled")
-        self.agreement.configure(state="disabled" if state.running else "normal")
-        self.decline_button.configure(state="disabled" if state.running else "normal")
         self.contacts.configure(state="normal" if state.can_select and not state.selecting_all else "disabled")
         self.review_button.configure(state="normal" if state.can_review and state.selected_ids else "disabled")
         self.change_selection_button.configure(state="normal" if state.can_change_selection else "disabled")
@@ -1128,7 +1029,7 @@ class PhoneWindow:
                                  state.transfer_stage != "processing" and state.phase != "processing" and state.progress is not None)
         if known_backup_progress:
             self.progress.configure(value=state.progress)
-            self.progress.pack(fill="x", pady=(0, 12), before=self.progress_label)
+            self.progress.pack(fill="x", pady=(0, self.space(12)), before=self.progress_label)
         else:
             self.progress.pack_forget()
         self.pair_code.set("Temporary recovery code: " + state.pair_code if state.pair_code else "No browser pairing has been created.")
@@ -1136,9 +1037,6 @@ class PhoneWindow:
         self.destination_status.set(("Server-confirmed destination: " + state.destination_email + " · " + state.destination_course)
                                     if state.destination_intent_id else "Connect from your signed-in account after reviewing contacts.")
         if self.native_active:
-            self.legacy_consent.pack_forget()
-            for button in (self.approve, self.connect, self.agreement, self.decline_button):
-                button.configure(state="disabled")
             can_continue = (state.can_pair and self.native.current and self.native.phase in ("collecting", "continue_uncertain"))
             return_to_browser = self.can_return_to_browser
             ready = self.native.pending is None and self.native_worker.idle
@@ -1273,6 +1171,9 @@ class PhoneWindow:
                     self.update_events.put_nowait({"kind": "handoff_failed"})
 
     def shutdown(self) -> None:
+        if getattr(self, "_pump_after", None) is not None:
+            self.window.after_cancel(self._pump_after)
+            self._pump_after = None
         if hasattr(self, "native_worker"):
             self.native.cancel()
             self.native_worker.close()
@@ -1293,6 +1194,12 @@ class PhoneWindow:
         self.window.destroy()
 
     def pump(self) -> None:
+        if getattr(self, "_pump_after", None) is not None:
+            self.window.after_cancel(self._pump_after)
+            self._pump_after = None
+        received_events = not self.events.empty()
+        native = getattr(self, "native", None)
+        before_native = (native.phase, native.authority, native.message) if native else None
         if hasattr(self, "update_events"):
             try:
                 if self.pump_updates():
@@ -1302,6 +1209,7 @@ class PhoneWindow:
                 self.update_message.set("Update preparation or verified download cleanup failed. Current collection and review remain open; check again later.")
         try:
             while not self.events.empty():
+                received_events = True
                 event = self.events.get_nowait()
                 if not isinstance(event, dict):
                     raise ProtocolError("Invalid helper event")
@@ -1341,6 +1249,9 @@ class PhoneWindow:
                         self.state.status = (f"{selected} selected contacts · {calls_summary} · {messages_summary}. "
                             + ("Check source coverage before Continue saves to your approved account and course." if self.native_active
                                else "Check source coverage below before account Save."))
+                        pending = getattr(self, "_pending_continue", None)
+                        if pending is not None and pending.review_id == event.get("reviewId"):
+                            self._pending_continue = pending._replace(acknowledged=True)
                     if event.get("kind") == "handoff" and event.get("state") == "expired" and self.native_active:
                         self.native.handoff_expired()
                         self.state.status = self.native.message
@@ -1352,12 +1263,21 @@ class PhoneWindow:
                             self.send(self.state.finish())
                     if event.get("kind") == "error" and self.state.phase == "error":
                         self.cooperative_failure()
-            self.send(self.state.poll())
+            now = time.monotonic()
+            if now >= getattr(self, "_next_handoff_poll", 0.0):
+                self.send(self.state.poll())
+                self._next_handoff_poll = now + 1.0
             self.pump_native()
         except (OSError, RuntimeError, ValueError):
             self.cooperative_failure()
-        self.refresh()
-        self.window.after(1000, self.pump)
+            received_events = True
+        native = getattr(self, "native", None)
+        after_native = (native.phase, native.authority, native.message) if native else None
+        now = time.monotonic()
+        if received_events or before_native != after_native or now >= getattr(self, "_next_visual_refresh", 0.0):
+            self.refresh()
+            self._next_visual_refresh = now + 1.0
+        self._pump_after = self.window.after(50, self.pump)
 
 
 def main() -> int:
