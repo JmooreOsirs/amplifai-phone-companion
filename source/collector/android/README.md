@@ -101,6 +101,11 @@ navigation container retains its system inset, and the same secondary controls
 return when the keyboard is dismissed. Fonts, control sizes and keyboard state
 are unchanged.
 
+With the keyboard open, the count reads **All contacts · Selected: N** and
+the applicable action uses a short caption such as **Review** or **Continue**.
+Its full accessible label is retained. Dismissing the keyboard restores the
+page count and full action captions; both bulk-selection actions stay visible.
+
 API30+ uses `WindowInsets.isVisible(Type.ime())`. The candidate API26–29 path
 compares the original root window's system bottom inset with its stable bottom
 inset from a decor-view listener before content ancestors consume it. The

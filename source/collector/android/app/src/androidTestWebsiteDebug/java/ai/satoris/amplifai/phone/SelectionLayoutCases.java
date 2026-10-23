@@ -290,7 +290,8 @@ final class SelectionLayoutCases {
         require(selectAll.getContentDescription().toString().contains("including contacts hidden by search") &&
                 deselectAll.getContentDescription().toString().contains("including contacts hidden by search"),
                 "Bulk action accessibility scope does not include hidden search results");
-        require(get("pageIndicator", TextView.class).getText().toString().contains("across all pages"),
+        String count = get("pageIndicator", TextView.class).getText().toString();
+        require(count.contains("across all pages") || count.startsWith("All contacts · Selected:"),
                 "Visible selected count lost its all-page scope");
         require(selectAll.getTextSize() == new Button(activity).getTextSize() &&
                 deselectAll.getTextSize() == selectAll.getTextSize(), "Bulk actions changed native typography");
@@ -445,6 +446,12 @@ final class SelectionLayoutCases {
         requireFullyVisible("restoredNavigation", navigation);
         requireFullyVisible("restoredPrevious", get("previousPage", Button.class));
         requireFullyVisible("restoredNext", get("nextPage", Button.class));
+        require(get("pageIndicator", TextView.class).getText().toString().contains("across all pages"),
+                "Keyboard dismissal did not restore the page count");
+        for (Button action : new Button[]{review, get("handoffButton", Button.class),
+                get("cancelSelectAll", Button.class), get("cancelHandoff", Button.class)})
+            if (action.isShown()) require(action.getText().toString().contentEquals(action.getContentDescription()),
+                    "Keyboard dismissal did not restore the full action caption");
         require(contactScroll.getHeight() >= Math.max(Math.round(96 * density), choices.getChildAt(0).getHeight() * 2),
                 "The no-IME viewport lost its two-row/96dp minimum");
     }
@@ -484,6 +491,8 @@ final class SelectionLayoutCases {
         require(docked, "A docked installed keyboard is required to measure its actual occlusion");
         requireFullyVisible(identity + "Search", search);
         requireFullyVisible(identity + "Count", get("pageIndicator", TextView.class));
+        require(get("pageIndicator", TextView.class).getText().toString().startsWith("All contacts · Selected:"),
+                "Keyboard view lost the compact all-contact count");
         requireBulkActions();
         requireFullyVisible(identity + "Action", action);
         require(search.isFocused() && action.isEnabled(), "IME input or applicable action is unavailable: " + identity);
