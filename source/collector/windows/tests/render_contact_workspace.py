@@ -1,25 +1,27 @@
-"""Actual Windows contact-workspace geometry; synthetic data, no helper/network."""
+"""Stage-aware Windows geometry and native style checks; no product test hooks."""
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import platform
+import os
 import sys
 from pathlib import Path
 from tkinter import font, ttk
-from unittest.mock import patch
 
 import app
+from brand_widgets import ContactCards, RoundPanel
 from build_windows_candidate import gui_digest
-from render_candidate import HANDOFF_ID, ImageGrab, capture, create_root, place_viewport, selected_review, visible_snapshot
+from render_candidate import capture, create_root, visible_snapshot
 from session import Session
 
 
 def captured(*, empty=False, partial=False) -> Session:
     state = Session()
-    state.begin("inspect"); state.handle({"kind": "residue", "sessions": []}); state.exited(0)
-    state.approve(True); state.begin("connect")
+    state.begin("inspect")
+    state.handle({"kind": "residue", "sessions": []})
+    state.exited(0)
+    state.approve(True)
+    state.begin("connect")
     state.handle({"kind": "capture", "contacts": [] if empty else [
         {"id": index, "name": f"Synthetic contact {index}", "phoneCount": 1, "phoneEnds": ["0000"]}
         for index in range(1, 201)], "query": "", "cursor": 0,
@@ -31,68 +33,47 @@ def captured(*, empty=False, partial=False) -> Session:
     return state
 
 
-def scenarios() -> dict[str, Session]:
-    loading = Session()
-    loading.begin("inspect"); loading.handle({"kind": "residue", "sessions": []}); loading.exited(0)
-    loading.approve(True); loading.begin("connect")
-    states = {"populated-readable-zero": captured(), "empty": captured(empty=True), "loading": loading,
-              "partial-unavailable": captured(partial=True), "review": selected_review()}
-    selecting = captured()
-    selecting.select_all_contacts()
-    states["all-page-check"] = selecting
-    for name, acknowledgment in (("preview-received", "received"),
-                                  ("pending-receipt", "saved_pending_browser_receipt"),
-                                  ("saved-recovery", "saved")):
-        state = selected_review()
-        state.poll()
-        state.handle({"kind": "handoff", "state": acknowledgment, "handoffId": HANDOFF_ID})
-        if name == "saved-recovery":
-            state.finish(); state.handle({"kind": "state", "state": "completed"}); state.exited(0)
-            state.begin("inspect")
-            state.handle({"kind": "residue", "sessions": [{"name": "session-" + "a" * 32, "bytes": 4096}]})
-            state.exited(0)
-        states[name] = state
-    error = captured(partial=True)
-    error.phase = "error"
-    error.status = ("Synthetic local read failed. The selected source is unavailable; it is not zero activity. "
-                    "Keep the current review open and inspect temporary data after the helper stops. ") * 16
-    states["long-error"] = error
-    return states
-
-
 def bounds(root, widget) -> list[int]:
     return [widget.winfo_rootx() - root.winfo_rootx(), widget.winfo_rooty() - root.winfo_rooty(),
             widget.winfo_width(), widget.winfo_height()]
 
 
+def require_bounds(root, widget, name):
+    box = bounds(root, widget)
+    x, y, width, height = box
+    if (not widget.winfo_ismapped() or min(x, y) < 0 or min(width, height) <= 1
+            or x + width > root.winfo_width() or y + height > root.winfo_height()):
+        raise RuntimeError(f"Current-stage control clipped or hidden: {name}: {box}")
+    if isinstance(widget, ttk.Button) and width < widget.winfo_reqwidth():
+        raise RuntimeError(f"Current-stage button text clipped: {name}")
+    return box
+
+
 def workspace_geometry(root, view) -> dict:
-    controls = {**{f"navigation-{name}": widget for name, widget in view.workspace_buttons.items()},
-                **{name: getattr(view, name) for name in (
-                    "workspace_context", "search_entry", "search_button", "select_all_button",
-                    "cancel_select_all_button", "clear_all_button", "previous_button", "next_button",
-                    "page_label", "contacts", "workspace_status_label", "review_button", "pair_button",
-                    "details_button", "change_selection_button", "account_recovery_button")}}
-    records = {name: bounds(root, widget) for name, widget in controls.items() if widget.winfo_ismapped()}
-    for name, (x, y, width, height) in records.items():
-        if min(x, y) < 0 or width <= 1 or height <= 1 or x + width > root.winfo_width() or y + height > root.winfo_height():
-            raise RuntimeError(f"Contact workspace control clipped: {name}: {records[name]}")
-        if isinstance(controls[name], ttk.Button) and width < controls[name].winfo_reqwidth():
-            raise RuntimeError(f"Contact workspace button text clipped: {name}")
+    if not isinstance(view.contacts, ContactCards):
+        raise RuntimeError("Contact workspace did not use the production contact-card component")
+    names = ("workspace_context", "search_entry", "search_button", "select_all_button",
+             "cancel_select_all_button", "clear_all_button", "previous_button", "next_button",
+             "page_label", "contacts", "workspace_status_label", "contact_actions", "review_button",
+             "pair_button", "details_button", "change_selection_button")
+    records = {name: require_bounds(root, getattr(view, name), name) for name in names
+               if getattr(view, name).winfo_ismapped()}
+    if "contacts" not in records or "contact_actions" not in records:
+        raise RuntimeError("Contact grid or action dock is missing")
     line = font.Font(root=root, font=view.contacts.cget("font")).metrics("linespace")
     if records["contacts"][3] < 3 * line:
-        raise RuntimeError("Contact workspace leaves fewer than three readable list rows")
-    list_bottom = records["contacts"][1] + records["contacts"][3]
-    if list_bottom > records["workspace_status_label"][1]:
-        raise RuntimeError("List overlaps fixed status/actions")
+        raise RuntimeError("Contact workspace leaves no readable contact card viewport")
+    if records["contacts"][1] + records["contacts"][3] > records["workspace_status_label"][1]:
+        raise RuntimeError("Contact grid overlaps the fixed status/action dock")
     if view.details_pane.winfo_ismapped():
-        raise RuntimeError("Scrollable details pane leaked into contact workspace")
+        raise RuntimeError("Setup or recovery pane leaked into the contact workspace")
     return records
 
 
 def native_disclosure_states(style) -> dict:
     name = "Native.Disclosure.TCheckbutton"
     result = {"map": {}, "resolved": {}}
-    for key, expected in (("background", app.BACKGROUND), ("foreground", app.MUTED)):
+    for key, expected in (("background", app.PANEL), ("foreground", app.MUTED)):
         mapping = [list(map(str, item)) for item in style.map(name, key)]
         if mapping != [["disabled", expected]]:
             raise RuntimeError(f"Native disclosure disabled map changed: {key}: {mapping}")
@@ -107,53 +88,67 @@ def native_disclosure_states(style) -> dict:
 
 def computed_styles(root, view) -> dict:
     style = ttk.Style(root)
-    expected = {
-        "TFrame": {"background": app.BACKGROUND},
-        "TLabel": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
-        "Heading.TLabel": {"foreground": app.HEADING, "font": ("Arial", "22", "bold")},
-        "Primary.TButton": {"background": app.LIME, "foreground": app.BACKGROUND},
-        "TButton": {"background": app.PANEL, "foreground": app.HEADING, "bordercolor": app.BORDER,
-                    "padding": ("16", "12"), "font": ("Arial", "11", "bold")},
-        "TCheckbutton": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
-        "Disclosure.TCheckbutton": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
-        "Native.Disclosure.TCheckbutton": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Arial", "12")},
-        "TEntry": {"fieldbackground": app.PANEL, "foreground": app.HEADING, "padding": ("8",)},
-    }
+    scale = float(root.tk.call("tk", "scaling")) / (96 / 72)
+    spacing = lambda value: str(round(value * scale))
     if style.theme_use() != "clam":
         raise RuntimeError("Native theme changed")
+    if view.body_font != "Open Sans":
+        raise RuntimeError("The bundled Open Sans font was not registered on Windows")
+    expected = {
+        "TFrame": {"background": app.BACKGROUND},
+        "Panel.TFrame": {"background": app.PANEL},
+        "TLabel": {"background": app.BACKGROUND, "foreground": app.BODY, "font": ("Open Sans", "12")},
+        "Heading.TLabel": {"foreground": app.HEADING, "font": ("Arial", "21", "bold")},
+        "Panel.Heading.TLabel": {"background": app.PANEL, "foreground": app.HEADING,
+                                 "font": ("Arial", "21", "bold")},
+        "Primary.TButton": {"background": app.LIME, "foreground": app.BACKGROUND},
+        "TButton": {"background": app.BORDER, "foreground": app.HEADING, "bordercolor": app.BORDER,
+                    "padding": (spacing(16), spacing(10)), "font": ("Arial", "11", "bold")},
+        "TEntry": {"fieldbackground": app.BACKGROUND, "foreground": app.HEADING, "padding": (spacing(8),)},
+    }
     result = {}
     for name, properties in expected.items():
         result[name] = {}
-        for key, value in properties.items():
+        for key, expected_value in properties.items():
             actual = style.lookup(name, key)
             result[name][key] = str(actual)
-            actual = tuple(map(str, root.tk.splitlist(actual))) if isinstance(value, tuple) else str(actual)
-            if actual != value:
-                raise RuntimeError(f"Accepted native style changed: {name}.{key}: {actual}")
-    list_style = {key: str(view.contacts.cget(key)) for key in (
-        "background", "foreground", "selectbackground", "selectforeground", "highlightbackground",
-        "highlightcolor", "highlightthickness", "font", "activestyle", "exportselection")}
-    for key, expected_value in {"background": app.PANEL, "foreground": app.HEADING,
-                                "selectbackground": app.BLUE, "selectforeground": app.BACKGROUND,
-                                "highlightbackground": app.BORDER, "highlightcolor": app.LIME,
-                                "activestyle": "underline", "exportselection": "0"}.items():
-        if list_style[key] != expected_value:
-            raise RuntimeError(f"Accepted list/focus style changed: {key}")
-    if tuple(root.tk.splitlist(list_style["font"])) != ("Arial", "12"):
-        raise RuntimeError("Accepted list font changed")
-    result["Listbox"] = list_style
-    result["buttonStateMap"] = {key: [list(map(str, item)) for item in style.map("TButton", key)]
-                                for key in ("background", "foreground")}
+            value = tuple(map(str, root.tk.splitlist(actual))) if isinstance(expected_value, tuple) else str(actual)
+            if value != expected_value:
+                raise RuntimeError(f"Mac-derived native style drift: {name}.{key}: {value}")
+    for name in ("TLabel", "Heading.TLabel"):
+        resolved = font.Font(root=root, font=style.lookup(name, "font"))
+        result[name]["resolvedFont"] = {**resolved.actual(), "linePixels": resolved.metrics("linespace")}
+    result["primaryStates"] = {" ".join(state) or "normal": {
+        key: str(style.lookup("Primary.TButton", key, state=state)) for key in ("background", "foreground")}
+        for state in ((), ("disabled",), ("active",), ("focus",))}
+    if result["primaryStates"]["disabled"] != {"background": app.BORDER, "foreground": app.MUTED}:
+        raise RuntimeError("Disabled primary action lost its native semantic state")
     result["nativeDisclosureStates"] = native_disclosure_states(style)
+    result["panels"] = {}
+    for name, panel in view.stage_panels.items():
+        if not isinstance(panel, RoundPanel):
+            raise RuntimeError("Guided panel did not derive from the accepted rounded panel")
+        result["panels"][name] = {"radiusPixels": panel.radius, "paddingPixels": panel.padding,
+                                   "scale": panel.scale, "fill": panel._fill, "border": panel._border}
+        if panel.radius != round(12 * panel.scale) or panel.padding != round(20 * panel.scale):
+            raise RuntimeError("Guided panel radius or spacing drifted from the Mac reference")
+    result["layoutSpacing"] = {"scale": scale, "shellPaddingPixels": [int(str(value)) for value in root.tk.splitlist(view.shell.cget("padding"))],
+                              "navigationGapPixels": [int(str(value)) for value in root.tk.splitlist(view.navigation.grid_info()["pady"])],
+                              "logicalRhythm": [12, 20, 28]}
+    if (result["layoutSpacing"]["shellPaddingPixels"] != [round(28 * scale)]
+            or result["layoutSpacing"]["navigationGapPixels"] != [0, round(20 * scale)]):
+        raise RuntimeError("Outer spacing diverged from the DPI-scaled Mac rhythm")
+    result["contactCards"] = {"type": type(view.contacts).__name__, "font": list(view.contacts.cget("font")),
+                               "columns": view.contacts._columns, "scale": view.contacts.scale}
     return result
 
 
-def check_keyboard(root, view) -> list[str]:
+def keyboard_traversal(root, required, *, start):
     root.focus_force()
-    view.workspace_buttons["contacts"].focus_set()
+    start.focus_set()
     root.update()
     seen = []
-    for _ in range(40):
+    for _ in range(260):
         focused = root.focus_get()
         if focused is None:
             raise RuntimeError("Native keyboard focus was lost")
@@ -161,18 +156,29 @@ def check_keyboard(root, view) -> list[str]:
         if name in seen:
             break
         seen.append(name)
+        require_bounds(root, focused, "keyboard focus")
         focused.event_generate("<KeyPress-Tab>")
         focused.event_generate("<KeyRelease-Tab>")
         root.update()
-    for widget in (view.search_entry, view.contacts, view.review_button, view.account_recovery_button):
+    else:
+        raise RuntimeError("Native keyboard traversal did not complete a bounded cycle")
+    for widget in required:
         if str(widget) not in seen:
-            raise RuntimeError(f"Keyboard cannot reach contact control: {widget}")
+            raise RuntimeError(f"Keyboard cannot reach a current-stage action: {widget}")
     return seen
 
 
-def main() -> None:
-    if sys.platform != "win32":
-        raise SystemExit("Actual Windows desktop required; do not launch Tk on another platform")
+def check_keyboard(root, view):
+    required = [view.search_entry, view.review_button if view.review_button.winfo_ismapped() else view.pair_button,
+                view.recovery_toggle]
+    if view.contacts._cards:
+        required.extend((view.contacts._cards[0].button, view.contacts._cards[-1].button))
+    return keyboard_traversal(root, required, start=view.search_entry)
+
+
+def main():
+    if sys.platform != "win32" or os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows":
+        raise SystemExit("This fixture requires the disposable actual Windows CI desktop")
     parser = argparse.ArgumentParser()
     for name in ("source", "logo", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
@@ -180,99 +186,27 @@ def main() -> None:
     mode.add_argument("--normal-open-only", action="store_true")
     mode.add_argument("--native-setup", action="store_true")
     args = parser.parse_args()
+    if not args.normal_open_only:
+        from render_guided_journey import render
+        render(args, contacts_only=not args.native_setup)
+        return
+    from render_guided_journey import synthetic_view
     args.output.mkdir(parents=True, exist_ok=False)
     root = create_root()
-    if args.native_setup:
-        from native_setup_fixture import render
-        render(args, root)
-        return
-    if args.normal_open_only:
-        with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"), patch.object(root, "geometry", wraps=root.geometry) as geometry:
-            view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
-        root.update()
-        receipt = {"status": "normal-opening-measurement", "guiSourceSha256": gui_digest(args.source),
-                   "geometryRequests": [call.args[0] for call in geometry.call_args_list if call.args],
-                   "desktop": root.capture_desktop.snapshot(root), "fixtureResizedWindow": False,
-                   "fixtureChangedDesktop": False, "physicalDpiAcceptance": False}
-        # Preserve negative evidence without presenting it as a visibility-qualified capture.
-        diagnostic_path = args.output / "windows-normal-open-unqualified.png"
-        pixels = ImageGrab.grab(bbox=tuple(receipt["desktop"]["clientBounds"]), all_screens=True)
-        pixels.save(diagnostic_path)
-        receipt["diagnosticScreenshot"] = {"path": diagnostic_path.name, "size": list(pixels.size),
-                                            "sha256": hashlib.sha256(diagnostic_path.read_bytes()).hexdigest(),
-                                            "visibilityQualified": False}
-        try:
-            visible_snapshot(root)
-            view.state = captured()
-            view.render_contacts(); view.refresh(); root.update()
-            receipt["contactGeometry"] = workspace_geometry(root, view)
-            receipt["screenshot"] = capture(root, args.output, "normal-open-contacts")
-            receipt["visible"] = True
-        except RuntimeError as error:
-            receipt.update({"visible": False, "failure": str(error)})
-        (args.output / "normal-open-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    try:
+        with synthetic_view(root, args.logo) as view:
+            from test_session import inspected
+            view.state = inspected()
+            view.refresh()
+            root.update()
+            desktop = visible_snapshot(root)
+            receipt = {"status": "normal-opening-visible-account-entry", "guiSourceSha256": gui_digest(args.source),
+                       "desktop": desktop, "fixtureResizedWindow": False, "fixtureChangedDesktop": False,
+                       "physicalDpiAcceptance": False, "geometry": require_bounds(root, view.account_start_button, "account entry"),
+                       "screenshot": capture(root, args.output, "normal-open-account")}
+            (args.output / "normal-open-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    finally:
         root.destroy()
-        if not receipt["visible"]:
-            raise SystemExit(receipt["failure"])
-        return
-    records = []
-    style_records = []
-    for width, height, scaling in ((920, 749, 4 / 3), (680, 680, 4 / 3), (680, 680, 1.75)):
-        root.tk.call("tk", "scaling", scaling)
-        with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app.PhoneWindow, "pump"):
-            view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
-        place_viewport(root, width, height)
-        styles = computed_styles(root, view)
-        style_records.append({"viewport": [width, height], "tkScaling": root.tk.call("tk", "scaling"), "styles": styles})
-        for name, state in scenarios().items():
-            view.state = state
-            view.render_contacts(); view.refresh(); view.show_workspace("contacts"); root.update()
-            before = workspace_geometry(root, view)
-            selected = set(state.selected_ids)
-            view.contacts.yview_moveto(1.0); root.update()
-            after = workspace_geometry(root, view)
-            if before != after or state.selected_ids != selected:
-                raise RuntimeError("List scrolling moved fixed controls or changed selection")
-            if len(state.contacts) > 20 and view.contacts.yview()[0] <= 0:
-                raise RuntimeError("Contact list did not scroll independently")
-            scrolled = view.contacts.yview()
-            if state.saved_acknowledged or state.save_receipt_pending:
-                for control in (view.pair_button, view.change_selection_button):
-                    if str(control.cget("state")) != "disabled":
-                        raise RuntimeError("Receipt state exposed a replacement action")
-            focus = check_keyboard(root, view) if name == "populated-readable-zero" else []
-            view.contacts.yview_moveto(0); root.update()
-            record = capture(root, args.output, f"{width}x{height}-scale-{scaling:.2f}-{name}")
-            record.update({"scenario": name, "tkScaling": root.tk.call("tk", "scaling"),
-                           "geometry": before, "listViewAfterScroll": scrolled,
-                           "fixedDuringListScroll": True, "keyboardTraversal": focus,
-                           "coverage": view.workspace_coverage.get(), "status": view.workspace_status.get()})
-            records.append(record)
-            if name == "long-error":
-                view.show_workspace("details"); root.update()
-                if view.status.get() != state.status:
-                    raise RuntimeError("Full error disappeared from Details")
-                records.append(capture(root, args.output, f"{width}x{height}-scale-{scaling:.2f}-error-details"))
-                view.stop_button.focus_set(); root.update()
-                x, y, w, h = bounds(root, view.stop_button)
-                if min(x, y) < 0 or y + h > height or x + w > width:
-                    raise RuntimeError("Tab/focus cannot reveal the details recovery action")
-        view.show_workspace("setup"); root.update()
-        for control in (view.approve, view.connect, view.decline_button, view.privacy_button, view.agreement):
-            x, _y, w, _h = bounds(root, control)
-            if x < 0 or x + w > width or w < control.winfo_reqwidth():
-                raise RuntimeError(f"Setup disclosure/action is horizontally clipped: {control}")
-        records.append(capture(root, args.output, f"{width}x{height}-scale-{scaling:.2f}-setup"))
-        for child in root.winfo_children():
-            child.destroy()
-    receipt = {"status": "actual-windows-tk-synthetic-contact-workspace", "guiSourceSha256": gui_digest(args.source),
-               "screenshots": records, "computedStylesByViewport": style_records, "pythonVersion": platform.python_version(),
-               "tclVersion": root.tk.call("info", "patchlevel"), "tkVersion": root.tk.call("package", "provide", "Tk"),
-               "windowingSystem": root.tk.call("tk", "windowingsystem"),
-               "physicalDpiScreenReaderPhoneAccountOrInstallerProved": False}
-    (args.output / "render-contact-workspace-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-    root.destroy()
-    print(json.dumps({"status": receipt["status"], "screenshots": len(records), "guiSourceSha256": receipt["guiSourceSha256"]}))
 
 
 if __name__ == "__main__":

@@ -1,17 +1,12 @@
-"""Explicit synthetic Windows renderer; unreachable from the production app entrypoint."""
-import json
-import platform
+"""Synthetic authority scenarios and real button exercises for the isolated renderer."""
 from dataclasses import replace
-from pathlib import Path
-from tkinter import font, ttk
 from unittest.mock import patch
 
 import app
-from build_windows_candidate import gui_digest
 from native_run import NativeRun, Outcome
-from native_setup import DISCLOSURE
-from render_candidate import HANDOFF_ID, capture, descendants, place_viewport, selected_review
-from render_contact_workspace import bounds, computed_styles, workspace_geometry
+from render_candidate import HANDOFF_ID, selected_review
+from render_contact_workspace import captured
+from session import BACKUP_CHECK_MODE
 from test_native_app import SyntheticWorker, tick
 from test_native_run import Clock, accept, prepared, started
 from test_native_setup import CLIENT, LINK_TEXT
@@ -32,54 +27,119 @@ def review_state():
     return state
 
 
+def collecting():
+    state = inspected()
+    state.approve(True)
+    state.begin("connect")
+    state.handle({"kind": "state", "state": "connecting"})
+    return state
+
+
 def scenarios():
-    yield "approval", pending(), inspected(), "setup"
+    yield "account-idle", NativeRun(CLIENT), inspected()
+    yield "approval-unchecked", pending(), inspected()
+    run = pending()
+    run.agree(True)
+    yield "approval-checked", run, inspected()
     run = pending()
     run.agree(True)
     run.complete(run.approve(), Outcome("uncertain"))
-    yield "approval-uncertain", run, inspected(), "setup"
+    yield "approval-uncertain", run, inspected()
     run, _ = prepared()
-    yield "prepared", run, inspected(), "setup"
+    yield "prepared", run, inspected()
+    for encrypted in (True, False):
+        run, _ = prepared()
+        state = inspected()
+        state.begin(BACKUP_CHECK_MODE)
+        state.handle({"kind": BACKUP_CHECK_MODE, "backupEncrypted": encrypted})
+        state.exited(0)
+        state.begin("inspect")
+        state.handle({"kind": "residue", "sessions": []})
+        state.exited(0)
+        yield "backup-encrypted" if encrypted else "backup-unencrypted", run, state
     run, _ = prepared()
     run.complete(run.start(), Outcome("uncertain"))
-    yield "start-uncertain", run, inspected(), "setup"
+    yield "start-uncertain", run, inspected()
+    for name in ("connecting", "collecting", "password", "processing"):
+        run, _ = started()
+        state = collecting()
+        if name != "connecting":
+            state.handle({"kind": "transfer", "stage": "backup", "receivedBytes": 72_208_910_467,
+                          "retainedBytes": 1_210_988_643, "discardedBytes": 70_997_921_824,
+                          "filesReceived": 81_371, "elapsedSeconds": 11_803.0, "bytesPerSecond": 6_117_860.0})
+            state.handle({"kind": "progress", "value": 100})
+        if name == "password":
+            state.handle({"kind": "state", "state": "password_required"})
+        if name == "processing":
+            state.handle({"kind": "state", "state": "processing"})
+            state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 812_441_600})
+        yield name, run, state
+    for name in ("contacts", "contacts-empty", "contacts-partial", "contacts-select-all"):
+        run, _ = started()
+        state = captured(empty=name == "contacts-empty", partial=name == "contacts-partial")
+        if name == "contacts-select-all":
+            state.select_all_contacts()
+        yield name, run, state
     run, _ = started()
-    yield "contact-review", run, review_state(), "contacts"
+    yield "reviewed-contacts", run, review_state()
     run, _ = started()
     state = review_state()
     run.complete(run.continue_review(tuple(sorted(state.selected_ids))), Outcome("uncertain"))
-    yield "continue-uncertain", run, state, "contacts"
-    for name in ("bind-uncertain", "browser-return", "pending-receipt", "saved-recovery"):
+    yield "continue-uncertain", run, state
+    for name in ("bind-uncertain", "bound", "preview-received", "pending-receipt", "saved"):
         run, _ = started()
         state = selected_review()
         accept(run, run.continue_review(tuple(sorted(state.selected_ids))))
         operation = accept(run, run.pair_received(HANDOFF_ID, "a" * 64))
         if name == "bind-uncertain":
             run.complete(operation, Outcome("uncertain"))
-            pane = "setup"
         else:
             accept(run, operation)
-            if name != "browser-return":
+            acknowledgment = {"preview-received": "received", "pending-receipt": "saved_pending_browser_receipt", "saved": "saved"}.get(name)
+            if acknowledgment:
                 state.poll()
-                state.handle({"kind": "handoff", "state": "saved" if name == "saved-recovery" else "saved_pending_browser_receipt",
-                              "handoffId": HANDOFF_ID})
-            if name == "saved-recovery":
+                state.handle({"kind": "handoff", "state": acknowledgment, "handoffId": HANDOFF_ID})
+            if name == "saved":
                 run.record_saved(HANDOFF_ID)
                 state.finish()
                 state.handle({"kind": "state", "state": "completed"})
                 state.exited(0)
-            pane = "contacts"
-        yield name, run, state, pane
+        yield name, run, state
+    run, _ = started()
+    yield "recovery", run, captured(partial=True)
+    run, _ = started()
+    run.authority = "paused"
+    yield "authority-paused", run, captured()
+    run, _ = started()
+    run.complete(run.refresh(), Outcome("refused"))
+    yield "authority-refused", run, captured()
+    run, _ = started()
+    run.cancel()
+    yield "authority-cancelled", run, captured()
+    run, clock = started()
+    clock.advance((run.run.expires_at - clock.time).total_seconds() + 1)
+    yield "authority-expired", run, captured()
+    run, _ = started()
+    run.handoff_expired()
+    yield "handoff-expired", run, captured()
+    state = selected_review()
+    state._clear_destination()
+    yield "legacy-awaiting-destination", NativeRun(CLIENT), state
+    yield "legacy-pending-destination", NativeRun(CLIENT), selected_review()
+    run, _ = started()
+    state = collecting()
+    state.phase = "error"
+    state.status = "Synthetic local source is unavailable. Keep this review open and check Details & recovery. " * 12
+    yield "collection-error", run, state
     run = pending()
     scope = replace(run.claim.scope, email="synthetic." + "x" * 180 + "@example.test", course="Synthetic course " * 9)
     run.claim = replace(run.claim, scope=scope)
     run.message = ("Synthetic confirmation is unavailable. Keep the original account tab open for recovery. " * 30).rstrip()
-    yield "long-scope-error", run, inspected(), "setup"
+    yield "long-scope-error", run, inspected()
 
 
 def text_scroll_evidence(root, widget):
-    # Tk 8.6 caches wrapped-line heights asynchronously; update() alone need not
-    # finish that calculation. Force the documented count update before yview.
+    # Force Tk's lazy wrapped-line metrics before judging the scroll range.
     cached_pixels = int(widget.count("1.0", "end", "ypixels")[0])
     content_pixels = int(widget.count("1.0", "end", "update", "ypixels"))
     widget.yview_moveto(0)
@@ -106,52 +166,12 @@ def require_full_text_scroll(evidence):
         raise RuntimeError("The final scope/error line is not fully reachable")
 
 
-def native_geometry(root, view):
-    controls = {str(widget): widget for widget in descendants(view.native_pane)
-                if isinstance(widget, ttk.Button) or widget in (view.native_disclosure, view.native_agreement)}
-    records = {}
-    for name, widget in controls.items():
-        x, y, width, height = records[name] = bounds(root, widget)
-        if (min(x, y) < 0 or width <= 1 or height <= 1 or x + width > root.winfo_width()
-                or y + height > root.winfo_height()):
-            raise RuntimeError("Native setup control is clipped: " + name)
-        if isinstance(widget, ttk.Button) and width < widget.winfo_reqwidth():
-            raise RuntimeError("Native setup button text is clipped: " + name)
-    line = font.Font(root=root, font=view.native_disclosure.cget("font")).metrics("linespace")
-    if view.native_disclosure.winfo_height() < 2 * line + 20:
-        raise RuntimeError("Native setup leaves fewer than two readable disclosure rows")
-    if view.native_agreement.cget("text") != DISCLOSURE["agreement"]:
-        raise RuntimeError("Native agreement copy changed")
-    if DISCLOSURE["sentences"][0] not in view.native_disclosure.get("1.0", "end-1c"):
-        raise RuntimeError("Pinned disclosure is missing")
-    if view.legacy_consent.winfo_ismapped():
-        raise RuntimeError("Legacy disclosure leaked into native setup")
-    return records
-
-
-def keyboard(root, view):
-    root.focus_force()
-    view.workspace_buttons["setup"].focus_set()
-    root.update()
-    seen = []
-    for _ in range(35):
-        widget = root.focus_get()
-        if widget is None or str(widget) in seen:
-            break
-        seen.append(str(widget))
-        widget.event_generate("<KeyPress-Tab>")
-        widget.event_generate("<KeyRelease-Tab>")
-        root.update()
-    for widget in (view.native_disclosure, view.native_agreement, view.native_approve, view.native_cancel):
-        if str(widget) not in seen:
-            raise RuntimeError("Keyboard cannot reach native setup control: " + str(widget))
-    return seen
-
-
 def exercise_controls(view):
-    """Invoke actual Tk buttons against explicit fixture transport and helper mocks."""
+    """Invoke production Tk callbacks with explicit synthetic transport/helper boundaries."""
     clock = Clock()
     view.state = inspected()
+    view.native = NativeRun(CLIENT)
+    view.native_worker = SyntheticWorker()
     view._startup_update_pending = False
     view.helper.start.reset_mock()
     factory = lambda _identity: NativeRun(CLIENT, now=lambda: clock.time, monotonic=lambda: clock.seconds)
@@ -188,7 +208,6 @@ def exercise_controls(view):
     view.state = review_state()
     view.render_contacts()
     view.refresh()
-    view.show_workspace("contacts")
     view.pair_button.invoke()
     selected = set(view.state.selected_ids)
     tick(view, Outcome("uncertain"))
@@ -196,8 +215,7 @@ def exercise_controls(view):
     view.clear_all_button.invoke()
     if view.state.selected_ids != selected:
         raise RuntimeError("Continue uncertainty released the frozen selection")
-    view.show_workspace("setup")
-    view.native_retry.invoke()
+    view.recovery_retry_button.invoke()
     tick(view)
     if not view.state._pairing:
         raise RuntimeError("Confirmed Continue did not request a handoff")
@@ -206,66 +224,4 @@ def exercise_controls(view):
     if view.native.phase != "cancelled" or not view.state._stopping:
         raise RuntimeError("Native cancellation did not stop locally")
     return ["fresh-delivery", "unchecked-approval-denied", "exact-approval-retry", "duplicate-delivery",
-            "separate-start", "exact-start-retry", "continue-uncertainty-setup-retry", "frozen-selection", "local-cancel"]
-
-
-def render(args, root):
-    records, styles, interactions = [], [], []
-    for width, height, scaling in ((920, 749, 4 / 3), (680, 680, 4 / 3), (680, 680, 1.75)):
-        root.tk.call("tk", "scaling", scaling)
-        with patch.object(app, "HelperProcess"), patch.object(app, "CompanionStatusServer"), patch.object(app, "cleanup_owned_updates"), patch.object(app, "AuthorityWorker", return_value=SyntheticWorker()), patch.object(app.PhoneWindow, "pump"):
-            view = app.PhoneWindow(root, Path("synthetic-helper-not-launched"), args.logo)
-        place_viewport(root, width, height)
-        interactions.append({"viewport": [width, height], "scenarios": exercise_controls(view)})
-        view.native_worker = SyntheticWorker()
-        styles.append({"viewport": [width, height], "tkScaling": scaling, "styles": computed_styles(root, view)})
-        for name, run, state, pane in scenarios():
-            view.native, view.state = run, state
-            view.native_checked.set(name == "approval")
-            run.agree(name == "approval")
-            view.render_contacts()
-            view.refresh()
-            view.show_workspace(pane)
-            root.update()
-            geometry = native_geometry(root, view) if pane == "setup" else workspace_geometry(root, view)
-            scrolling = view.native_disclosure if pane == "setup" else view.contacts
-            scroll_evidence = text_scroll_evidence(root, scrolling) if pane == "setup" else None
-            if pane != "setup":
-                scrolling.yview_moveto(1)
-                root.update()
-            after = native_geometry(root, view) if pane == "setup" else workspace_geometry(root, view)
-            if geometry != after:
-                raise RuntimeError("Scrolling moved fixed native controls")
-            if name == "long-scope-error":
-                content = scrolling.get("1.0", "end-1c")
-                scroll_evidence["containsFullScopeAndError"] = all(value in content for value in
-                    (run.claim.scope.email, run.claim.scope.course, run.message))
-                try:
-                    require_full_text_scroll(scroll_evidence)
-                except RuntimeError as error:
-                    diagnostic = capture(root, args.output, f"native-{width}x{height}-scale-{scaling:.2f}-{name}-failure")
-                    diagnostic.update(scenario=name, failure=str(error), geometry=geometry, scrollEvidence=scroll_evidence)
-                    (args.output / "native-scroll-failure.json").write_text(json.dumps(diagnostic, indent=2) + "\n", encoding="utf-8")
-                    raise
-            scrolling.yview_moveto(0)
-            focus = keyboard(root, view) if name == "approval" else []
-            if state.save_receipt_pending:
-                if str(view.pair_button.cget("state")) != "disabled":
-                    raise RuntimeError("Receipt-pending state permitted another Continue")
-            if state.saved_acknowledged:
-                if view.pair_button.cget("text") != "Open results" or str(view.pair_button.cget("state")) != "normal":
-                    raise RuntimeError("Saved state did not expose bound report recovery")
-            record = capture(root, args.output, f"native-{width}x{height}-scale-{scaling:.2f}-{name}")
-            record.update(scenario=name, geometry=geometry, keyboardTraversal=focus, fixedDuringScroll=True,
-                          scrollEvidence=scroll_evidence)
-            records.append(record)
-        for widget in root.winfo_children():
-            widget.destroy()
-    receipt = {"schema": 1, "status": "actual-windows-synthetic-native-setup", "guiSourceSha256": gui_digest(args.source),
-               "screenshots": records, "computedStylesByViewport": styles, "python": platform.python_version(),
-               "buttonInteractions": interactions,
-               "authorityTransportCreated": False, "collectorCreated": False,
-               "physicalDpiPhoneAccountOrInstallerProved": False}
-    (args.output / "render-native-setup-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
-    root.destroy()
-    print(json.dumps({"status": receipt["status"], "screenshots": len(records), "guiSourceSha256": receipt["guiSourceSha256"]}))
+            "separate-start", "exact-start-retry", "continue-uncertainty-visible-retry", "frozen-selection", "local-cancel"]

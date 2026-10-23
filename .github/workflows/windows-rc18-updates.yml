@@ -8,7 +8,7 @@ on:
         required: true
         default: build
         type: choice
-        options: [build, handoff, parity-ui, parity-normal-open, native-delivery, native-setup]
+        options: [build, handoff, parity-ui, parity-normal-open, native-delivery, native-setup, guided-ui]
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   parity_ui:
-    if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open' || inputs.phase == 'native-delivery' || inputs.phase == 'native-setup'
+    if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open' || inputs.phase == 'native-delivery' || inputs.phase == 'native-setup' || inputs.phase == 'guided-ui'
     runs-on: windows-2025
     timeout-minutes: 20
     env:
@@ -71,44 +71,61 @@ jobs:
         if: inputs.phase == 'parity-ui'
         shell: pwsh
         run: |
-          python -m unittest test_startup_geometry test_visible_desktop test_contact_workspace test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
+          python -m unittest test_startup_geometry test_visible_desktop test_brand_widgets test_journey test_pump_cadence test_contact_workspace test_session test_gui_guards test_engine_wire test_destination_bridge test_windows_source_diagnostics test_video_parity test_updater test_update_handoff -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiParityTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify native setup, run, app and discovery state boundaries
-        if: inputs.phase == 'native-setup'
+        if: inputs.phase == 'native-setup' || inputs.phase == 'guided-ui'
         shell: pwsh
         run: |
-          python -m unittest test_native_setup test_native_run test_native_app test_companion_status test_contact_workspace -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetupTests.log')
+          python -m unittest test_native_setup test_native_run test_native_app test_companion_status test_contact_workspace test_brand_widgets test_journey test_pump_cadence test_startup_geometry test_visible_desktop -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetupTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Render changed native setup and Continue states
-        if: inputs.phase == 'native-setup'
+      - name: Render and freeze the complete guided journey on the actual Windows desktop
+        if: inputs.phase == 'parity-ui' || inputs.phase == 'native-setup' || inputs.phase == 'guided-ui'
         shell: pwsh
         run: |
-          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetup'
+          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiGuidedQualification'
           $desktopMode = Join-Path $output 'desktop-mode.json'
           try {
             python source/collector/windows/tests/visible_desktop.py --prepare $desktopMode
             if ($LASTEXITCODE -ne 0) { throw 'Visible desktop preparation failed' }
-            python source/collector/windows/tests/render_contact_workspace.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output 'render') --native-setup
-            if ($LASTEXITCODE -ne 0) { throw 'Native setup UI qualification failed' }
-          } finally {
-            if (Test-Path $desktopMode) {
-              python source/collector/windows/tests/visible_desktop.py --restore $desktopMode
-              if ($LASTEXITCODE -ne 0) { throw 'Original desktop mode restoration failed' }
-            }
-          }
-      - name: Render synthetic native workspace and recovery states
-        if: inputs.phase == 'parity-ui'
-        shell: pwsh
-        run: |
-          $output = Join-Path $env:RUNNER_TEMP 'AmplifaiParityRender'
-          $desktopMode = Join-Path $output 'desktop-mode.json'
-          try {
-            python source/collector/windows/tests/visible_desktop.py --prepare $desktopMode
-            if ($LASTEXITCODE -ne 0) { throw 'Visible desktop preparation failed' }
-            foreach ($fixture in @('contact_workspace', 'ack_recovery', 'source_diagnostic_acceptance', 'update_acceptance', 'video_parity')) {
-              python "source/collector/windows/tests/render_$fixture.py" --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output $fixture)
-              if ($LASTEXITCODE -ne 0) { throw "Visible Windows fixture failed: $fixture" }
-            }
+            # Keep the existing original-mode receipt and session-only restoration.
+            # 1180x820 plus the native window frame needs the larger advertised mode.
+            @'
+          import json, sys
+          from pathlib import Path
+          from visible_desktop import Desktop, choose_mode, mode_record
+          path = Path(sys.argv[1])
+          record = json.loads(path.read_text(encoding="utf-8"))
+          desktop = Desktop()
+          desktop.physical_coordinates()
+          work = desktop.primary_work_area()
+          if work[2] - work[0] < 1220 or work[3] - work[1] < 900:
+              desktop.apply_mode(choose_mode(desktop.modes(), desktop.mode()))
+          record.update(preparedMode=mode_record(desktop.mode()), preparedWorkArea=desktop.primary_work_area(), guidedClientViewport=[1180, 820])
+          path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+          '@ | python - $desktopMode
+            if ($LASTEXITCODE -ne 0) { throw 'Guided viewport desktop preparation failed' }
+            python source/collector/windows/tests/render_guided_journey.py --source source --logo source/public/brand/amplifai-by-nexus-original.png --output (Join-Path $output 'source-render')
+            if ($LASTEXITCODE -ne 0) { throw 'Guided source UI qualification failed' }
+            python source/collector/windows/tests/frozen_guided_fixture.py --source source --output (Join-Path $output 'frozen')
+            if ($LASTEXITCODE -ne 0) { throw 'Isolated frozen guided UI qualification failed' }
+            @'
+          import json, sys
+          from pathlib import Path
+          output = Path(sys.argv[1])
+          source = json.loads((output / 'source-render/render-guided-receipt.json').read_text(encoding='utf-8'))
+          frozen = json.loads((output / 'frozen/render/render-guided-receipt.json').read_text(encoding='utf-8'))
+          for key in ('guiSourceSha256', 'productionIdentity', 'computedStylesByViewport', 'windowLifecycle'):
+              if source[key] != frozen[key]:
+                  raise RuntimeError('Source/frozen guided evidence differs: ' + key)
+          fields = ('scenario', 'stage', 'panel', 'width', 'height', 'tkScaling', 'geometry')
+          expected = [{key: item[key] for key in fields} for item in source['screenshots']]
+          actual = [{key: item[key] for key in fields} for item in frozen['screenshots']]
+          if expected != actual:
+              raise RuntimeError('Source/frozen visible stage geometry differs')
+          (output / 'source-frozen-comparison.json').write_text(json.dumps({'status': 'matched-source-and-frozen-guided-stages', 'screenshotsCompared': len(expected), 'guiSourceSha256': source['guiSourceSha256'], 'geometryAndResolvedStylesMatch': True}, indent=2) + '\n', encoding='utf-8')
+          '@ | python - $output
+            if ($LASTEXITCODE -ne 0) { throw 'Guided source/frozen evidence differs' }
           } finally {
             if (Test-Path $desktopMode) {
               python source/collector/windows/tests/visible_desktop.py --restore $desktopMode
@@ -129,8 +146,15 @@ jobs:
             ${{ runner.temp }}/AmplifaiNativeDelivery/*.json
             ${{ runner.temp }}/AmplifaiNativeDelivery/*.log
             ${{ runner.temp }}/AmplifaiNativeSetupTests.log
-            ${{ runner.temp }}/AmplifaiNativeSetup/**/*.png
-            ${{ runner.temp }}/AmplifaiNativeSetup/**/*.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/desktop-mode.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/source-frozen-comparison.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/source-render/*.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/source-render/*.png
+            ${{ runner.temp }}/AmplifaiGuidedQualification/frozen/qualification-manifest.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/frozen/frozen-fixture-receipt.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/frozen/*.log
+            ${{ runner.temp }}/AmplifaiGuidedQualification/frozen/render/*.json
+            ${{ runner.temp }}/AmplifaiGuidedQualification/frozen/render/*.png
 
   windows:
     if: inputs.phase == 'build'
@@ -169,7 +193,7 @@ jobs:
       - name: Qualify diagnostics retention, Windows DACLs, session gates and update verifier
         shell: pwsh
         run: |
-          python -m unittest test_sqlite_encrypted_size_compat test_sqlite_messages_size_compat test_windows_source_diagnostics test_source_diagnostics test_source_diagnostic_flow test_updater test_update_handoff test_session test_gui_guards test_video_parity test_companion_status test_windows_candidate test_windows_msi -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiUnitTests.log')
+          python -m unittest test_sqlite_encrypted_size_compat test_sqlite_messages_size_compat test_windows_source_diagnostics test_source_diagnostics test_source_diagnostic_flow test_updater test_update_handoff test_session test_gui_guards test_video_parity test_companion_status test_windows_candidate test_windows_msi test_backup_stream test_journey test_pump_cadence -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiUnitTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Qualify full-size one-page encrypted Messages extraction
         shell: pwsh
@@ -220,7 +244,7 @@ jobs:
           $helper = Join-Path $candidate 'wrapper-dist\AmplifaiPhone\resources\phone-helper\AmplifaiPhoneHelper.exe'
           python source/collector/windows/tests/qualify_frozen_encrypted_worker.py --helper $helper 2>&1 | Tee-Object -FilePath (Join-Path $candidate 'frozen-encrypted-worker-receipt.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build rc21 per-user MSI with unchanged UpgradeCode
+      - name: Build rc22 per-user MSI with unchanged UpgradeCode
         shell: pwsh
         run: |
           $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
@@ -232,16 +256,16 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
           python source/script/build_windows_msi.py --package (Join-Path $candidate 'wrapper-dist\AmplifaiPhone') --receipt (Join-Path $candidate 'candidate-receipt.json') --output $installer --candle $candle --light $light
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify in-place released rc20 to rc21 upgrade under runner user
+      - name: Qualify in-place released rc21 to rc22 upgrade under runner user
         shell: pwsh
         run: |
           # These unattended commands qualify MSI replacement on the disposable runner only.
           # The app invokes only normal msiexec /i UI after explicit local approval.
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $baseline = Join-Path $installer 'AmplifaiPhone-rc20-unsigned.msi'
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.21-rc20-unsigned-test/AmplifaiPhone-rc20-unsigned.msi' -OutFile $baseline -TimeoutSec 180
-          if ((Get-Item $baseline).Length -ne 42285215 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6c138c0c4b935908b8632f365e6f80178e1abb7e170aa59fbbab16a42b97dd0c') { throw 'Released rc20 MSI bytes differ from fixed baseline' }
-          $msi = Join-Path $installer 'AmplifaiPhone-rc21-unsigned.msi'
+          $baseline = Join-Path $installer 'AmplifaiPhone-rc21-unsigned.msi'
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.22-rc21-unsigned-test/AmplifaiPhone-rc21-unsigned.msi' -OutFile $baseline -TimeoutSec 180
+          if ((Get-Item $baseline).Length -ne 42289311 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'cb252aa6149d29731b262809610bea79f7d39d349c84f48d02ec6f20fdf3d583') { throw 'Released rc21 MSI bytes differ from fixed baseline' }
+          $msi = Join-Path $installer 'AmplifaiPhone-rc22-unsigned.msi'
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           $dataRoot = Join-Path $env:LOCALAPPDATA 'AMPLIFai Phone Candidate'
@@ -260,7 +284,7 @@ jobs:
             }
             python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json')
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $receipt = [ordered]@{status='runner-user-rc20-to-rc21-in-place-upgrade'; oldInstallerSha256='6c138c0c4b935908b8632f365e6f80178e1abb7e170aa59fbbab16a42b97dd0c'; version='1.0.21'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
+            $receipt = [ordered]@{status='runner-user-rc21-to-rc22-in-place-upgrade'; oldInstallerSha256='cb252aa6149d29731b262809610bea79f7d39d349c84f48d02ec6f20fdf3d583'; version='1.0.22'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
             $receipt | ConvertTo-Json | Set-Content (Join-Path $installer 'upgrade-receipt.json') -Encoding utf8
             Get-Content (Join-Path $installer 'upgrade-receipt.json')
           } finally {
@@ -285,7 +309,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc21-qualification
+          name: windows-rc22-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |
@@ -298,7 +322,7 @@ jobs:
             ${{ runner.temp }}/AmplifaiUpdateRender/render-update-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/candidate-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/frozen-encrypted-worker-receipt.json
-            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc21-unsigned.msi
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc22-unsigned.msi
             ${{ runner.temp }}/AmplifaiPhoneInstaller/msi-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/upgrade-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log
