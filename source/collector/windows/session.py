@@ -6,6 +6,7 @@ import hashlib
 import math
 import re
 import uuid
+from dataclasses import dataclass
 from typing import TextIO
 
 from amplifai_phone.source_diagnostics import (
@@ -16,6 +17,10 @@ DISCLOSURE_VERSION = "native-local-collection-v1"
 CONTACT_PAGE_SIZE = 200
 REVIEW_PAGE_SIZE = 1_000
 MAX_CONTACT_QUERY_LENGTH = 120
+MAX_CONTACT_WORKSPACE_BYTES = 64 * 1024 * 1024
+MAX_CONTACT_WORKSPACE_PREVIEWS = 100_000
+MAX_CONTACT_WORKSPACE_MEMORY_BYTES = 256 * 1024 * 1024
+CONTACT_WORKSPACE_MEMORY_RESERVE = 8 * 1024 * 1024
 BACKUP_CHECK_MODE = "backup-encryption-status"
 WEBSITE_ORIGIN = "https://amplifai.satoris.ai"
 BRIDGE_PORT = 48751
@@ -30,6 +35,24 @@ UNAVAILABLE_REASONS = frozenset({
 
 class ProtocolError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class GroupMove:
+    ids: frozenset[int]
+    source: str
+    destination: str
+    generation: str
+    query: str | None = None
+
+
+@dataclass(frozen=True)
+class GroupUndo:
+    ids: frozenset[int]
+    source: str
+    destination: str
+    generation: str
+    selected_before: frozenset[int]
 
 
 def count(value: object) -> int:
@@ -153,6 +176,18 @@ class Session:
         self._select_all_cursor = 0
         self._select_all_scan_id = ""
         self._select_all_cancel = False
+        self._scan_for_workspace = False
+        self._workspace_previews: list[dict] = []
+        self._workspace_preview_bytes = 0
+        self._workspace_preview_memory_bytes = CONTACT_WORKSPACE_MEMORY_RESERVE
+        self.contact_workspace = None
+        self.contact_generation = str(uuid.uuid4())
+        self._fresh_workspace_capture = False
+        self._workspace_default_applied = False
+        self._workspace_selection_edited = False
+        self.marked_group_ids: set[int] = set()
+        self.pending_group_move: GroupMove | None = None
+        self.group_undo: GroupUndo | None = None
         self.destination_intent_id = ""
         self.destination_email = ""
         self.destination_course = ""
@@ -313,6 +348,13 @@ class Session:
             self.pending_contact = None
             self.selected_ids.clear()
             self._clear_select_all()
+            self.contact_workspace = None
+            self.contact_generation = str(uuid.uuid4())
+            self._fresh_workspace_capture = False
+            self._workspace_default_applied = False
+            self._workspace_selection_edited = False
+            self.marked_group_ids.clear()
+            self.pending_group_move = self.group_undo = None
             self.selection = ()
             self.reviewed = self.saved_acknowledged = self.save_receipt_pending = False
             self.missing = []
@@ -382,6 +424,7 @@ class Session:
                 or any(type(item) is not int for item in ids) or len(set(ids)) != len(ids)
                 or not set(ids) <= visible):
             raise ProtocolError("Invalid contact-page selection")
+        self._workspace_selection_edited = True
         updated = self.selected_ids - visible | set(ids)
         if updated == self.selected_ids:
             return None
@@ -396,25 +439,45 @@ class Session:
         self.pending_contact = (query, cursor)
         return {"action": "contacts", "query": query, "cursor": cursor}
 
-    def search_contacts(self, query: str) -> dict:
+    def search_contacts(self, query: str) -> dict | None:
+        if self.contact_workspace is not None:
+            self._require_workspace_edit()
+            if not isinstance(query, str) or len(query) > MAX_CONTACT_QUERY_LENGTH:
+                raise ProtocolError("Invalid contact search")
+            self.pending_group_move = None
+            self.contact_workspace.search(query)
+            self._sync_workspace_page()
+            return None
         command = self.request_contacts(query, 0)
         if query != self.contact_query:
             self.previous_contact_cursors = []
         return command
 
-    def next_contacts(self) -> dict:
+    def next_contacts(self) -> dict | None:
+        if self.contact_workspace is not None:
+            self._require_workspace_edit()
+            self.contact_workspace.next_page()
+            self._sync_workspace_page()
+            return None
         if self.pending_contact is not None or self.next_contact_cursor is None:
             raise ProtocolError("No next contact page")
         self.previous_contact_cursors.append(self.contact_cursor)
         return self.request_contacts(self.contact_query, self.next_contact_cursor)
 
-    def previous_contacts(self) -> dict:
+    def previous_contacts(self) -> dict | None:
+        if self.contact_workspace is not None:
+            self._require_workspace_edit()
+            self.contact_workspace.previous_page()
+            self._sync_workspace_page()
+            return None
         if self.pending_contact is not None or not self.previous_contact_cursors:
             raise ProtocolError("No previous contact page")
         cursor = self.previous_contact_cursors.pop()
         return self.request_contacts(self.contact_query, cursor)
 
-    def select_all_contacts(self) -> dict:
+    def select_all_contacts(self) -> dict | None:
+        if self.contact_workspace is not None:
+            return self.select_workspace_contacts(True, scoped=False)
         if not self.can_select_all:
             raise ProtocolError("Wait for the current review before selecting all contacts")
         self.invalidate_selection(clear_selected=False)
@@ -444,21 +507,47 @@ class Session:
         self._select_all_cursor = 0
         self._select_all_scan_id = ""
         self._select_all_cancel = False
+        self._scan_for_workspace = False
+        self._workspace_previews = []
+        self._workspace_preview_bytes = 0
+        self._workspace_preview_memory_bytes = CONTACT_WORKSPACE_MEMORY_RESERVE
+
+    def _workspace_unavailable(self) -> None:
+        self.pending_contact = None
+        self._clear_select_all()
+        self.status = "Grouping is unavailable for this collection. Your selection is unchanged; continue with the paged All contacts review."
 
     def clear_all_contacts(self) -> dict | None:
         if not self.can_select or self.selecting_all or self.pending_contact is not None or self._pending_review is not None:
             raise ProtocolError("Wait for the current contact operation before clearing selection")
+        self._workspace_selection_edited = True
         if not self.selected_ids:
             return None
         return self.invalidate_selection()
 
     def _accept_select_all_page(self, event: dict) -> dict | None:
+        try:
+            return self._read_select_all_page(event)
+        except MemoryError:
+            if not self._scan_for_workspace:
+                raise
+            self._workspace_unavailable()
+            return None
+        except ProtocolError:
+            if self._scan_for_workspace:
+                self.pending_contact = None
+                self._clear_select_all()
+            raise
+
+    def _read_select_all_page(self, event: dict) -> dict | None:
         if event.get("scanId") != self._select_all_scan_id or event.get("cursor") != self._select_all_cursor:
             raise ProtocolError("Contact scan does not match this review")
         if self._select_all_cancel:
+            workspace_scan = self._scan_for_workspace
             self.pending_contact = None
             self._clear_select_all()
-            self.status = "All-contact check stopped. The previous selection is unchanged; review it again before connecting."
+            self.status = ("Contact grouping check stopped. Your previous selection and review are unchanged."
+                           if workspace_scan else "All-contact check stopped. The previous selection is unchanged; review it again before connecting.")
             return None
         old_page = (self.contacts, self.total_contacts, self.contact_query, self.contact_cursor,
                     self.next_contact_cursor, self.pending_contact)
@@ -479,6 +568,15 @@ class Session:
              self.next_contact_cursor, self.pending_contact) = old_page
         self._select_all_ids.update(page_ids)
         self.select_all_visited += len(page)
+        if self._scan_for_workspace:
+            from contact_workspace import preview_peak_bytes
+            self._workspace_preview_bytes += len(json.dumps(page, ensure_ascii=False).encode("utf-8"))
+            self._workspace_preview_memory_bytes += sum(preview_peak_bytes(item) for item in page)
+            if (self._workspace_preview_bytes > MAX_CONTACT_WORKSPACE_BYTES
+                    or self._workspace_preview_memory_bytes > MAX_CONTACT_WORKSPACE_MEMORY_BYTES):
+                self._workspace_unavailable()
+                return None
+            self._workspace_previews.extend(page)
         if next_cursor is not None:
             self._select_all_cursor = next_cursor
             self.pending_contact = ("", next_cursor)
@@ -486,12 +584,192 @@ class Session:
             return self._next_select_all_page()
         if self.select_all_visited != self.total_contacts or len(self._select_all_ids) != self.total_contacts:
             raise ProtocolError("All-contact coverage is incomplete")
+        if self._scan_for_workspace:
+            previews = self._workspace_previews
+            self.pending_contact = None
+            self._clear_select_all()
+            self._publish_contact_workspace(previews)
+            return None
         self.selected_ids = self._select_all_ids
         selected = len(self.selected_ids)
         self.pending_contact = None
         self._clear_select_all()
         self.status = f"All {selected} contacts selected across the complete review. Review before connecting."
         return None
+
+    def prepare_contact_workspace(self) -> dict | None:
+        """Verify a complete local snapshot before showing groups or defaults."""
+        if self.contact_workspace is not None:
+            return None
+        if (not self.can_review or not self._capture_received or self.reviewed
+                or self.selection or self.handoff_id):
+            return None
+        if self.total_contacts > MAX_CONTACT_WORKSPACE_PREVIEWS:
+            self._workspace_unavailable()
+            return None
+        if self.total_contacts == len(self.contacts) and not self.contact_query and self.contact_cursor == 0:
+            self._publish_contact_workspace(self.contacts)
+            return None
+        if not self.can_select_all:
+            return None
+        self.selecting_all = True
+        self.select_all_visited = 0
+        self._select_all_ids = set()
+        self._select_all_cursor = 0
+        self._select_all_scan_id = str(uuid.uuid4())
+        self._select_all_cancel = False
+        self._scan_for_workspace = True
+        self._workspace_previews = []
+        self._workspace_preview_bytes = 0
+        self._workspace_preview_memory_bytes = CONTACT_WORKSPACE_MEMORY_RESERVE
+        self.pending_contact = ("", 0)
+        self.status = f"Checking all {self.total_contacts:,} contacts for Main and Review…"
+        return self._next_select_all_page()
+
+    def _publish_contact_workspace(self, previews: list[dict]) -> None:
+        from contact_workspace import ContactWorkspace, preview_peak_bytes
+        try:
+            peak = CONTACT_WORKSPACE_MEMORY_RESERVE + sum(preview_peak_bytes(item) for item in previews)
+            if (peak > MAX_CONTACT_WORKSPACE_MEMORY_BYTES
+                    or len(previews) <= CONTACT_PAGE_SIZE
+                    and len(json.dumps(previews, ensure_ascii=False).encode("utf-8")) > MAX_CONTACT_WORKSPACE_BYTES):
+                self._workspace_unavailable()
+                return
+            workspace = ContactWorkspace(previews, self.total_contacts)
+        except MemoryError:
+            self._workspace_unavailable()
+            return
+        apply_default = (self._fresh_workspace_capture and not self._workspace_default_applied
+                and not self._workspace_selection_edited and not self.selected_ids
+                and not self.reviewed and not self.selection and not self.handoff_id
+                and self.phase == "selecting")
+        if apply_default:
+            self.selected_ids = set(workspace.main_ids)
+        self._workspace_default_applied = True
+        self.contact_workspace = workspace
+        self._sync_workspace_page()
+        self.status = ("Main contacts start selected; Review contacts wait for you. Review your selection before continuing."
+                       if apply_default else "Main and Review are ready. Your existing selection is unchanged.")
+
+    def _sync_workspace_page(self) -> None:
+        workspace = self.contact_workspace
+        self.contacts = list(workspace.visible)
+        self.contact_query = workspace.query
+        self.contact_cursor = workspace.page_start
+        self.next_contact_cursor = workspace.page_start + len(self.contacts) if workspace.has_next_page else None
+        self.previous_contact_cursors = [max(0, workspace.page_start - CONTACT_PAGE_SIZE)] if workspace.has_previous_page else []
+        self.pending_contact = None
+
+    @property
+    def can_edit_workspace(self) -> bool:
+        return self.contact_workspace is not None and self.can_review
+
+    def _require_workspace_edit(self) -> None:
+        if not self.can_edit_workspace:
+            raise ProtocolError("Finish the current review or account operation before organizing contacts")
+
+    def show_contact_group(self, group: str) -> None:
+        self._require_workspace_edit()
+        if group not in ("All", "Main", "Review"):
+            raise ProtocolError("Unknown contact group")
+        self.pending_group_move = None
+        if self.contact_workspace.group != group:
+            self.marked_group_ids.clear()
+        self.contact_workspace.show(group)
+        self._sync_workspace_page()
+
+    def select_workspace_contacts(self, selected: bool, *, scoped=True) -> dict | None:
+        self._require_workspace_edit()
+        if type(selected) is not bool:
+            raise ProtocolError("Invalid contact selection")
+        self._workspace_selection_edited = True
+        ids = self.contact_workspace.filtered_ids if scoped else self.contact_workspace.known_ids
+        self.selected_ids = self.selected_ids | set(ids) if selected else self.selected_ids - set(ids)
+        self.group_undo = None
+        return self.invalidate_selection(clear_selected=False)
+
+    def mark_contact_for_move(self, contact_id: int) -> None:
+        self._require_workspace_edit()
+        workspace = self.contact_workspace
+        if workspace.group == "All" or contact_id not in {item["id"] for item in workspace.visible}:
+            raise ProtocolError("Choose a visible contact in Main or Review to mark")
+        self.pending_group_move = None
+        self.marked_group_ids.symmetric_difference_update({contact_id})
+
+    def mark_all_for_move(self) -> None:
+        self._require_workspace_edit()
+        if self.contact_workspace.group == "All":
+            raise ProtocolError("Choose Main or Review to mark contacts")
+        self.pending_group_move = None
+        self.marked_group_ids.update(self.contact_workspace.filtered_ids)
+
+    def clear_move_marks(self) -> None:
+        self._require_workspace_edit()
+        self.pending_group_move = None
+        self.marked_group_ids.clear()
+
+    def begin_group_move(self, *, marked=False) -> GroupMove:
+        self._require_workspace_edit()
+        workspace = self.contact_workspace
+        if workspace.group == "All":
+            raise ProtocolError("Choose Main or Review to move contacts")
+        ids = frozenset(self.marked_group_ids if marked else workspace.filtered_ids)
+        source_ids = workspace.main_ids if workspace.group == "Main" else workspace.review_ids
+        if not ids or not ids <= source_ids:
+            raise ProtocolError("Group move does not match the current contacts")
+        move = GroupMove(ids, workspace.group, "Review" if workspace.group == "Main" else "Main",
+                         self.contact_generation, None if marked else workspace.query)
+        self.pending_group_move = move
+        return move
+
+    def cancel_group_move(self) -> None:
+        self.pending_group_move = None
+
+    def confirm_group_move(self, expected: GroupMove) -> dict | None:
+        self._require_workspace_edit()
+        move, self.pending_group_move = self.pending_group_move, None
+        workspace = self.contact_workspace
+        if (move is None or move != expected or move.generation != self.contact_generation
+                or workspace.group != move.source
+                or (move.query is None and self.marked_group_ids != move.ids)
+                or (move.query is not None and (workspace.query != move.query or workspace.filtered_ids != move.ids))):
+            raise ProtocolError("The contacts changed while the group move was awaiting confirmation")
+        return self._apply_group_move(move)
+
+    def move_contact(self, contact_id: int, destination: str) -> dict | None:
+        self._require_workspace_edit()
+        workspace = self.contact_workspace
+        if not workspace.contains(contact_id):
+            raise ProtocolError("Contact is not in this review")
+        source = "Review" if workspace.is_in_review(contact_id) else "Main"
+        if destination not in ("Main", "Review") or source == destination:
+            raise ProtocolError("Invalid contact group move")
+        return self._apply_group_move(GroupMove(frozenset({contact_id}), source, destination, self.contact_generation))
+
+    def _apply_group_move(self, move: GroupMove) -> dict | None:
+        selected_before = frozenset(self.selected_ids & move.ids)
+        if not self.contact_workspace.move(move.ids, move.source, move.destination):
+            raise ProtocolError("Contact group move no longer matches the review")
+        command = self.invalidate_selection(clear_selected=False)
+        if move.destination == "Review":
+            self.selected_ids.difference_update(move.ids)
+        self.marked_group_ids.difference_update(move.ids)
+        self.group_undo = GroupUndo(move.ids, move.source, move.destination, move.generation, selected_before)
+        self._sync_workspace_page()
+        return command
+
+    def undo_group_move(self) -> dict | None:
+        self._require_workspace_edit()
+        undo = self.group_undo
+        if (undo is None or undo.generation != self.contact_generation
+                or not self.contact_workspace.move(undo.ids, undo.destination, undo.source)):
+            raise ProtocolError("No current group move can be undone")
+        command = self.invalidate_selection(clear_selected=False)
+        self.selected_ids.difference_update(undo.ids)
+        self.selected_ids.update(undo.selected_before)
+        self.group_undo = None
+        self._sync_workspace_page()
+        return command
 
     def _clear_destination(self) -> None:
         self.destination_intent_id = ""
@@ -521,6 +799,9 @@ class Session:
     def invalidate_selection(self, *, clear_selected: bool = True) -> dict | None:
         if not self.can_select:
             return None
+        self._workspace_selection_edited = True
+        self.group_undo = None
+        self.pending_group_move = None
         revoke = bool(self.handoff_id) or (self._pairing and not self._pairing_invalidated)
         if self._polling:
             self._retired_handoff_id = self.handoff_id
@@ -588,6 +869,8 @@ class Session:
         self.handoff_id = self.pair_code = ""
         self._clear_destination()
         self._clear_select_all()
+        self.pending_contact = None
+        self.pending_group_move = None
         self.inspected = False
         self.needs_inspection = True
         self.phase = "cancelling"
@@ -780,6 +1063,7 @@ class Session:
             self.source_diagnostics = facts
             self.backup_encrypted = backup_encrypted
             self._capture_received = True
+            self._fresh_workspace_capture = True
             self.phase = "selecting"
             self.status = "Select contacts, then review matching call and message context. No account data has been saved."
         elif kind == "contacts":
@@ -983,6 +1267,9 @@ class Session:
             raise ProtocolError("Invalid helper exit result")
         self.running = False
         self.approval = None
+        self._clear_select_all()
+        self.pending_contact = None
+        self.pending_group_move = None
         if self.mode == BACKUP_CHECK_MODE:
             valid = code == 0 and self._backup_check_received and not self._failed and not self._stopping
             self.checked_backup_setting = self._pending_backup_setting if valid else None

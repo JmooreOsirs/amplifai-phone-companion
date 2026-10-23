@@ -80,7 +80,7 @@ class NativeRunTests(unittest.TestCase):
     def test_account_returns_have_exact_non_secret_bindings(self):
         run, _ = bound()
         enrollment, run_id = run.run.scope.enrollment_id, run.run.run_id
-        expected = {"continue": ["reviewed"], "enrollmentId": [enrollment], "week": ["phone"]}
+        expected = {"continue": ["reviewed"], "enrollmentId": [enrollment], "week": ["phone"], "phoneRunId": [run_id]}
         self.assertEqual(parse_qs(urlsplit(run.continue_url).query), expected)
         self.assertEqual(parse_qs(urlsplit(run.account_url).query),
             {"phoneRunControl": [run_id], "enrollmentId": [enrollment], "week": ["phone"]})
@@ -89,14 +89,16 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual(parse_qs(urlsplit(run.account_url).query),
             {"enrollmentId": [enrollment], "week": ["phone"], "completedHandoffId": [HANDOFF],
              "completedPayloadSha256": ["d" * 64]})
-        for url in (account_continue_url(enrollment), account_control_url(run_id, enrollment), run.account_url):
+        for url in (account_continue_url(enrollment, run_id), account_control_url(run_id, enrollment), run.account_url):
             self.assertEqual(urlsplit(url)._replace(query="").geturl(), "https://amplifai.satoris.ai/phone/account")
             self.assertNotIn(run.run.capability, url)
 
     def test_account_return_builders_reject_unvalidated_identifiers_and_digests(self):
         for value in ("", "https://example.test", HANDOFF + "&continue=reviewed", INTENT.upper(), None):
             with self.assertRaises(SetupProtocolError):
-                account_continue_url(value)
+                account_continue_url(value, HANDOFF)
+            with self.assertRaises(SetupProtocolError):
+                account_continue_url(HANDOFF, value)
             with self.assertRaises(SetupProtocolError):
                 account_control_url(value, HANDOFF)
             with self.assertRaises(SetupProtocolError):

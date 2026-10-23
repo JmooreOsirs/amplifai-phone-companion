@@ -31,8 +31,9 @@ CLOCK_SKEW_SECONDS = 60
 ACCOUNT_URL = ORIGIN + "/phone/account"
 
 
-def account_continue_url(enrollment_id):
-    return ACCOUNT_URL + "?" + urlencode({"continue": "reviewed", "enrollmentId": identifier(enrollment_id), "week": "phone"})
+def account_continue_url(enrollment_id, run_id):
+    return ACCOUNT_URL + "?" + urlencode({"continue": "reviewed", "enrollmentId": identifier(enrollment_id),
+                                            "week": "phone", "phoneRunId": identifier(run_id)})
 
 
 def account_control_url(run_id, enrollment_id):
@@ -259,7 +260,7 @@ class NativeRun:
     @property
     def continue_url(self):
         if self.current and self.phase == "bound" and self.handoff_id:
-            return account_continue_url(self.run.scope.enrollment_id)
+            return account_continue_url(self.run.scope.enrollment_id, self.run.run_id)
         return None
 
     def record_saved(self, handoff_id):
