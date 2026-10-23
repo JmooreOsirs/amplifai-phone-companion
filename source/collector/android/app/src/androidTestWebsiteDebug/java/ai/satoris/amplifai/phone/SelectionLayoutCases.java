@@ -394,7 +394,11 @@ final class SelectionLayoutCases {
         if (legacyIme) changeLegacyIme(true, () -> tap("searchBeforeIme", search));
         else {
             tap("searchBeforeIme", search);
-            awaitLayout(this::imeVisible, "The installed keyboard did not become visible; no IME dimensions were simulated");
+            awaitLayout(() -> {
+                WindowInsets insets = root.getRootWindowInsets();
+                return insets != null && insets.isVisible(WindowInsets.Type.ime()) &&
+                        insets.getInsets(WindowInsets.Type.ime()).bottom > 0;
+            }, "The installed docked keyboard did not expose bottom insets; no IME dimensions were simulated");
         }
         instrumentation.getUiAutomation().waitForIdle(300, 5_000);
         instrumentation.waitForIdleSync();
