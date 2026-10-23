@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import app
 from build_windows_candidate import gui_digest
-from render_candidate import capture, create_root, place_viewport
+from render_candidate import capture, create_root, descendants, place_viewport
 from session import Session
 from updater import BUILD, VERSION
 
@@ -56,7 +56,21 @@ def main() -> None:
             enabled = str(view.install_update_button.cget("state")) == "normal"
             if enabled != (state == "available"):
                 raise RuntimeError("Update installer control did not respect idle/unsaved gate")
-            records.append(capture(root, args.output, f"{width}-update-{state}", scroll=0.0))
+            # Update actions live at the end of Details & recovery. Capture the
+            # actual state instead of a viewport containing only its upper rows.
+            canvas = view.details_canvas
+            canvas.yview_moveto(1.0)
+            root.update()
+            message = next(widget for widget in descendants(root) if isinstance(widget, app.ttk.Label)
+                           and str(widget.cget("textvariable")) == str(view.update_message))
+            left, top = canvas.winfo_rootx(), canvas.winfo_rooty()
+            right, bottom = left + canvas.winfo_width(), top + canvas.winfo_height()
+            for control in (message, view.check_update_button, view.install_update_button):
+                x, y = control.winfo_rootx(), control.winfo_rooty()
+                if (not control.winfo_ismapped() or x < left or y < top
+                        or x + control.winfo_width() > right or y + control.winfo_height() > bottom):
+                    raise RuntimeError("Update message or action is clipped in its captured viewport")
+            records.append(dict(capture(root, args.output, f"{width}-update-{state}"), updateControlsVisible=True))
             for control in (view.check_update_button, view.install_update_button):
                 if control.cget("style") not in {"", "TButton"} or str(control.cget("takefocus")) == "0":
                     raise RuntimeError("Update controls diverged from native keyboard/button pattern")
