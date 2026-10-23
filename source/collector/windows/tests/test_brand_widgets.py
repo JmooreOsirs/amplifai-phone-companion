@@ -181,6 +181,8 @@ class ContactCardsTkTests(unittest.TestCase):
         apply_style(self.root)
         self.root.geometry("420x260")
         self.root.deiconify()
+        after_grid = widgets.ttk.Button(self.root, text="After contacts")
+        after_grid.pack(side="bottom")
         self.cards.delete(0, tk.END)
         for index in range(200):
             self.cards.insert(tk.END, "Synthetic long contact name with several additional words to exercise scrolling beyond the native window coordinate boundary · phone ending 0123")
@@ -200,6 +202,29 @@ class ContactCardsTkTests(unittest.TestCase):
             top = last.mark_button.winfo_rooty() - canvas.winfo_rooty()
             self.assertGreaterEqual(top, 1)
             self.assertLessEqual(top + last.mark_button.winfo_height(), canvas.winfo_height() - 1)
+        self.cards._cards[0].button.focus_set()
+        self.root.update()
+        for _ in range(600):
+            current = self.root.focus_get()
+            if current is last.mark_button:
+                break
+            following = self.root.nametowidget(self.root.tk.call("tk_focusNext", str(current)))
+            following.focus_set()
+            self.root.update()
+            top = following.winfo_rooty() - canvas.winfo_rooty()
+            self.assertGreaterEqual(top, 1)
+            self.assertLessEqual(top + following.winfo_height(), canvas.winfo_height() - 1)
+        self.assertIs(self.root.focus_get(), last.mark_button)
+        self.assertEqual(self.root.tk.call("tk_focusNext", str(last.mark_button)), str(after_grid))
+        after_grid.focus_set()
+        self.root.update()
+        self.assertEqual(self.root.tk.call("tk_focusPrev", str(after_grid)), str(last.mark_button))
+        first = self.cards._cards[0].button
+        first.focus_set()
+        self.root.update()
+        self.assertEqual(self.root.tk.call("tk_focusPrev", str(first)), str(after_grid))
+        self.cards.configure(state="disabled")
+        self.assertEqual(self.root.tk.call("tk_focusNext", str(after_grid)), str(after_grid))
         self.assertEqual(self.cards.curselection(), ())
 
     def test_panel_measures_wrapped_content_and_releases_pending_measurement(self):

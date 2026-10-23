@@ -117,7 +117,7 @@ class RoundPanel(tk.Canvas):
         super().__init__(master, background=background, highlightthickness=0, borderwidth=0,
                          takefocus=False, **kwargs)
         self.content = tk.Frame(self, background=fill, borderwidth=0)
-        self._content_window = self.create_window(self.padding, self.padding, anchor="nw", window=self.content)
+        self.content.place(x=self.padding, y=self.padding)
         self.content.bind("<Configure>", self._queue_measure)
         self.bind("<Configure>", self._resize)
         self.bind("<Map>", self._queue_measure)
@@ -131,10 +131,9 @@ class RoundPanel(tk.Canvas):
     def set_padding(self, padding: int) -> None:
         if self.padding != padding:
             self.padding = padding
-            self.coords(self._content_window, padding, padding)
-            self.itemconfigure(self._content_window, width=max(1, self.winfo_width() - 2 * padding))
+            self.content.place_configure(x=padding, y=padding, width=max(1, self.winfo_width() - 2 * padding))
             if self._fill_content:
-                self.itemconfigure(self._content_window, height=max(1, self.winfo_height() - 2 * padding))
+                self.content.place_configure(height=max(1, self.winfo_height() - 2 * padding))
             self._queue_measure()
 
     def set_focus(self, focused: bool) -> None:
@@ -143,9 +142,9 @@ class RoundPanel(tk.Canvas):
             self._draw()
 
     def _resize(self, event) -> None:
-        self.itemconfigure(self._content_window, width=max(1, event.width - 2 * self.padding))
+        self.content.place_configure(width=max(1, event.width - 2 * self.padding))
         if self._fill_content:
-            self.itemconfigure(self._content_window, height=max(1, event.height - 2 * self.padding))
+            self.content.place_configure(height=max(1, event.height - 2 * self.padding))
         self._draw()
         self._queue_measure()
 
@@ -468,8 +467,8 @@ class ContactCards(tk.Frame):
         for card, (x, y, card_width, card_height) in zip(self._cards, self._positions):
             relative_y = y - offset
             if relative_y + card_height < 0 or relative_y > height - 2:
-                # Keep offscreen native children mapped for ttk Tab traversal,
-                # at one bounded hidden position instead of distant row offsets.
+                # Keep ordinary native child controls mapped at a bounded
+                # hidden position so normal ttk Tab traversal can reach them.
                 relative_y = -card_height - 1
             placement = (x, relative_y, card_width, card_height)
             if card.placement != placement:
