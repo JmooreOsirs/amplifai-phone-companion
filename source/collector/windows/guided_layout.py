@@ -85,10 +85,14 @@ def build(view, logo):
     shell.rowconfigure(2, weight=1)
     header = ttk.Frame(shell)
     header.grid(row=0, column=0, sticky="ew", pady=(0, space(12)))
-    view.logo = tk.PhotoImage(file=str(logo))
-    ratio = Fraction(space(180), view.logo.width()).limit_denominator(16)
-    view.logo = view.logo.zoom(ratio.numerator).subsample(ratio.denominator)
-    ttk.Label(header, image=view.logo).pack(side="left")
+    original_logo = tk.PhotoImage(file=str(logo))
+    view._logo_images = {}
+    for compact, width in ((False, space(180)), (True, min(space(120), 140))):
+        ratio = Fraction(width, original_logo.width()).limit_denominator(16)
+        view._logo_images[compact] = original_logo.zoom(ratio.numerator).subsample(ratio.denominator)
+    view.logo = view._logo_images[False]
+    logo_label = ttk.Label(header, image=view.logo)
+    logo_label.pack(side="left")
     view.recovery_toggle = ttk.Button(header, text="Details & recovery", style="Quiet.TButton",
         command=lambda: view.show_workspace("setup" if view._visible_workspace == "details" else "details"))
     view.recovery_toggle.pack(side="right")
@@ -112,15 +116,19 @@ def build(view, logo):
     outer.columnconfigure(0, weight=1)
     content = canvas.create_window((0, 0), window=outer, anchor="nw")
     outer.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+    last_width = None
     def resize(event):
+        nonlocal last_width
         maximum = space(1180 if view._journey_stage == "collection" else 880)
         width = min(event.width, maximum)
         canvas.itemconfigure(content, width=width)
         canvas.coords(content, max(0, (event.width - width) // 2), 0)
+        if width == last_width:
+            return
+        last_width = width
         for widget in descendants(outer):
             if isinstance(widget, ttk.Label) and not getattr(widget, "_brand_fixed_text", False):
                 widget.configure(wraplength=max(space(160), width - space(56)))
-        ttk.Style(view.window).configure("Native.Disclosure.TCheckbutton", wraplength=max(space(160), width - space(76)))
     canvas.bind("<Configure>", resize)
     view._resize_stage = lambda: resize(type("Size", (), {"width": canvas.winfo_width()})())
     view.stage_panels = {}
@@ -154,6 +162,22 @@ def build(view, logo):
     view.contact_workspace.grid(row=0, column=0, sticky="nsew")
     view.contact_workspace.grid_remove()
     view._layout_contacts()
+    def compact_layout(_event=None):
+        compact = view.window.winfo_height() < space(760)
+        if getattr(view, "compact_layout", None) == compact:
+            return
+        view.compact_layout = compact
+        shell.configure(padding=space(12 if compact else PAGE_SPACE))
+        view.logo = view._logo_images[compact]
+        logo_label.configure(image=view.logo)
+        header.grid_configure(pady=(0, space(8 if compact else 12)))
+        view.navigation.grid_configure(pady=(0, space(12 if compact else SECTION_SPACE)))
+        view.contact_workspace.set_padding(space(12 if compact else 20))
+        view.contact_actions.grid_configure(pady=(space(8 if compact else 12), 0))
+        view.resize_contact_header()
+        view.resize_contact_controls()
+    shell.bind("<Configure>", compact_layout)
+    compact_layout()
     for widget in descendants(outer):
         if isinstance(widget, (ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.Radiobutton,
                                ttk.Entry, ttk.Treeview, tk.Text, tk.Listbox)):
@@ -190,7 +214,7 @@ def build_collection(view, parent):
     view.collection_illustration_well = well = surface(parent, kind="well")
     well.pack(fill="x", pady=(0, space(12)))
     view.collection_illustration = CollectionIllustration(well.content, scale=view.layout_scale)
-    view.collection_illustration.pack(pady=(space(4), space(12)))
+    view.collection_illustration.pack(fill="x", pady=(space(4), space(12)))
     view.collection_illustration_caption = ttk.Label(well.content, style="Well.TLabel", anchor="center", takefocus=False)
     view.collection_illustration_caption.pack(fill="x", pady=(0, space(6)))
 
@@ -250,7 +274,7 @@ def byte_description(value):
 
 def refresh_collection(view):
     state, space = view.state, view.space
-    presentation = (state.phase, state.transfer_stage, state.transfer_bytes)
+    presentation = (state.phase, state.transfer_stage, state.transfer_bytes, view.native_active)
     if getattr(view, "_collection_presentation", None) == presentation:
         return
     view._collection_presentation = presentation
@@ -278,7 +302,8 @@ def refresh_collection(view):
         view.collection_metric_well.pack_forget()
     view.collection_next.configure(text=(
         "Next: unlock the backup to read available contacts and activity locally." if state.phase == "password_required" else
-        "Next: choose contacts, then review and save in your approved account." if processing else
+        ("Next: choose contacts. Continue saves your choices and builds your report in your approved account."
+         if view.native_active else "Next: choose contacts, then review and save in your approved account.") if processing else
         "Next: read available sources locally, then choose which contacts to share." if active == 1 else
         "Next: receive the iPhone backup on this PC. Keep the phone unlocked for Trust prompts."))
 

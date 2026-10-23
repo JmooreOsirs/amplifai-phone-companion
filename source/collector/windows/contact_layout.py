@@ -40,8 +40,12 @@ def build(view):
             count.grid(row=position[0], column=position[1], sticky="w" if stacked else "e",
                        pady=(space(8) if stacked else 0, 0))
         view.workspace_context.configure(wraplength=header.winfo_width())
+        compact = getattr(view, "compact_layout", False)
+        view.workspace_context.grid_remove() if compact else view.workspace_context.grid()
+        header.grid_configure(pady=(0, space(8 if compact else 12)))
     header.bind("<Configure>", resize_header)
     count.bind("<Configure>", resize_header)
+    view.resize_contact_header = lambda: resize_header(None)
 
     well = view.contact_controls = surface(workspace, kind="well", padding=12, background=PANEL)
     well.grid(row=1, column=0, sticky="ew", pady=(0, space(12)))
@@ -64,20 +68,22 @@ def build(view):
     search = ttk.Frame(controls, style="Well.TFrame")
     search.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(space(12), 0))
     search.columnconfigure(0, weight=1)
-    view.search_entry = ttk.Entry(search, textvariable=view.contact_query, width=20)
+    view.search_entry = ttk.Entry(search, textvariable=view.contact_query, width=1)
     view.search_entry.grid(row=0, column=0, sticky="ew", padx=(0, space(8)))
     view.search_entry.bind("<Return>", lambda _event: view.search_contacts())
     view.search_button = ttk.Button(search, text="Search names", command=view.search_contacts, style="Quiet.TButton")
     view.search_button.grid(row=0, column=1, sticky="e")
-    scope = ttk.Frame(search, style="Well.TFrame")
+    scope = ttk.Frame(controls, style="Well.TFrame")
     view.contact_scope = scope
-    scope.grid(row=0, column=2, sticky="e", padx=(space(12), 0))
+    scope.grid(in_=search, row=0, column=2, sticky="e", padx=(space(12), 0))
     view.scope_select_button = ttk.Button(scope, text="Select matches", style="Quiet.TButton", command=lambda: view.select_contact_scope(True))
     view.scope_clear_button = ttk.Button(scope, text="Deselect matches", style="Quiet.TButton", command=lambda: view.select_contact_scope(False))
     view.scope_menu = tk.Menu(scope, tearoff=False)
     view.scope_menu.add_command(label="Select all matches", command=lambda: view.select_contact_scope(True))
     view.scope_menu.add_command(label="Deselect all matches", command=lambda: view.select_contact_scope(False))
-    view.scope_menu_button = ttk.Menubutton(scope, text="Selection actions", style="Quiet.TMenubutton", menu=view.scope_menu)
+    view.scope_menu.add_separator()
+    view.scope_menu.add_command(label="No contacts selected", state="disabled")
+    view.scope_menu_button = ttk.Menubutton(scope, text="Selection", style="Quiet.TMenubutton", menu=view.scope_menu)
     view.scope_count_label = ttk.Label(scope, style="Well.Muted.TLabel")
     view.scope_count_label.pack(side="right")
     recovery = ttk.Frame(controls, style="Well.TFrame")
@@ -93,12 +99,12 @@ def build(view):
         position = (1, 0) if narrow else (0, 1)
         info = filters.grid_info()
         if (info["row"], info["column"]) != position:
-            filters.grid(row=position[0], column=position[1], columnspan=2 if narrow else 1,
+            filters.grid(row=position[0], column=position[1], columnspan=3 if narrow else 1,
                          sticky="w", pady=(space(8) if narrow else 0, 0))
             search.grid(row=2 if narrow else 1)
         if view.state.contact_workspace is not None and view.state.contact_workspace.is_scoped:
-            scope.grid(row=1 if narrow else 0, column=0 if narrow else 2,
-                       columnspan=2 if narrow else 1, sticky="w" if narrow else "e",
+            scope.grid(in_=controls if narrow else search, row=0, column=1 if narrow else 2,
+                       columnspan=1, sticky="e",
                        padx=(0 if narrow else space(12), 0), pady=(space(8) if narrow else 0, 0))
         else:
             scope.grid_remove()
@@ -108,9 +114,13 @@ def build(view):
                 item.pack_forget()
             if narrow:
                 view.scope_menu_button.pack(side="left", padx=(0, space(12)))
+                view.scope_count_label.pack_forget()
             else:
+                view.scope_count_label.pack(side="right")
                 view.scope_select_button.pack(side="left", padx=(0, space(8)))
                 view.scope_clear_button.pack(side="left", padx=(0, space(8)))
+        compact = getattr(view, "compact_layout", False)
+        well.grid_configure(pady=(0, space(8 if compact else 12)))
     controls.bind("<Configure>", resize_controls)
     view.resize_contact_controls = resize_controls
 
@@ -169,8 +179,12 @@ def refresh(view):
         count = state.total_contacts if group == "All" else workspace.main_count if workspace and group == "Main" else workspace.review_count if workspace else 0
         button.configure(text=f"{group} {count:,}", state="normal" if editing else "disabled",
                          style="Selected.Group.TButton" if group == (workspace.group if workspace else "All") else "Group.TButton")
-    intro = ("Review your selection in Main and Review. Only the contacts you choose continue to account review."
-             if workspace else "Choose contacts to include. Your selection is kept while you search and change pages.")
+    if view.native_active:
+        intro = (("Choose contacts in Main and Review. " if workspace else "Choose contacts to include. ") +
+                 "Continue saves your choices to your approved account and builds your report.")
+    else:
+        intro = ("Review your selection in Main and Review. Only the contacts you choose continue to account review."
+                 if workspace else "Choose contacts to include. Your selection is kept while you search and change pages.")
     view.workspace_context.configure(text=intro)
     if state.contacts:
         view.contact_empty_label.grid_remove()
@@ -192,7 +206,8 @@ def refresh(view):
     view.scope_menu_button.configure(state="normal" if editing else "disabled")
     view.scope_menu.entryconfigure(0, label=f"Select all in {scope}", state="normal" if editing else "disabled")
     view.scope_menu.entryconfigure(1, label=f"Deselect all in {scope}", state="normal" if editing else "disabled")
-    view.organize_button.configure(text=("Organizing" if view.organizing else "Organize") +
+    view.scope_menu.entryconfigure(3, label=f"{selected:,} of {workspace.filtered_count if workspace else len(state.contacts):,} selected in {scope}")
+    view.organize_button.configure(text="Organize" if getattr(view, "compact_layout", False) else ("Organizing" if view.organizing else "Organize") +
                                   (f" · {len(state.marked_group_ids):,} marked" if state.marked_group_ids else ""),
                                   state="normal" if editing or state.can_review and not view.native_selection_locked else "disabled")
     view.cancel_select_all_button.pack(side="left") if state.selecting_all else view.cancel_select_all_button.pack_forget()

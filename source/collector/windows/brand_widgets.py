@@ -128,6 +128,15 @@ class RoundPanel(tk.Canvas):
             self._border = color
             self._draw()
 
+    def set_padding(self, padding: int) -> None:
+        if self.padding != padding:
+            self.padding = padding
+            self.coords(self._content_window, padding, padding)
+            self.itemconfigure(self._content_window, width=max(1, self.winfo_width() - 2 * padding))
+            if self._fill_content:
+                self.itemconfigure(self._content_window, height=max(1, self.winfo_height() - 2 * padding))
+            self._queue_measure()
+
     def set_focus(self, focused: bool) -> None:
         if self._focused != focused:
             self._focused = focused
@@ -197,7 +206,7 @@ class _ContactCard:
         self.mark_command = self.move_command = None
         self.marked = tk.BooleanVar(master=owner, value=False)
         self.move_menu = tk.Menu(self.panel, tearoff=False)
-        self.move_button = ttk.Menubutton(self.panel.content, text="Move", menu=self.move_menu,
+        self.move_button = ttk.Menubutton(self.panel.content, text="⋯", menu=self.move_menu,
                                           style="Card.TMenubutton", takefocus=True)
         self.reason = tk.Label(self.panel.content, background=RAISED, foreground=MUTED,
                                font=owner._detail_font, anchor="nw", justify="left", borderwidth=0, padx=0, pady=0)
@@ -240,7 +249,7 @@ class ContactCards(tk.Frame):
         self._canvas = tk.Canvas(self, background=BACKGROUND, highlightbackground=BORDER,
                                  highlightthickness=1, borderwidth=0, takefocus=False,
                                  width=round((CONTACT_MINIMUM + 2 * ITEM_GAP) * self.scale),
-                                 height=round(240 * self.scale), yscrollincrement=round(24 * self.scale))
+                                 height=round(240 * self.scale), yscrollincrement=1)
         self._canvas.pack(fill="both", expand=True)
         self._content = tk.Frame(self._canvas, background=BACKGROUND, borderwidth=0)
         self._content_window = self._canvas.create_window(round(ITEM_GAP * self.scale / 2), 0,
@@ -391,10 +400,16 @@ class ContactCards(tk.Frame):
             return
         top = self._canvas.canvasy(0)
         y, height = card.panel.winfo_y(), card.panel.winfo_height()
+        # A tall card can exceed a compact viewport. Reveal the actual focused
+        # control in that case; aligning the whole card hides its top control.
+        focused = self.focus_get()
+        if height > viewport - 2 and focused in (card.button, card.move_button, card.mark_button):
+            y = focused.winfo_rooty() - self._content.winfo_rooty()
+            height = focused.winfo_height()
         if y < top:
-            self._canvas.yview_moveto(y / total)
-        elif y + height > top + viewport:
-            self._canvas.yview_moveto((y + height - viewport) / total)
+            self._canvas.yview_moveto(max(0, y - 1) / total)
+        elif y + height > top + viewport - 2:
+            self._canvas.yview_moveto((y + height + 2 - viewport) / total)
 
     def _bind_wheel(self, widget) -> None:
         widget.bind("<MouseWheel>", self._wheel)
@@ -410,7 +425,7 @@ class ContactCards(tk.Frame):
         return self._scroll(-units)
 
     def _scroll(self, units: int) -> str:
-        self._canvas.yview_scroll(units, "units")
+        self._canvas.yview_scroll(units * round(24 * self.scale), "units")
         return "break"
 
     def _viewport_changed(self, event) -> None:

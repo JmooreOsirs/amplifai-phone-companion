@@ -453,14 +453,35 @@ class PhoneWindow:
         guide_actions = ttk.Frame(self.setup_guide, style="Panel.TFrame")
         guide_actions.pack(fill="x", pady=(self.space(12), self.space(12)))
         self.guide_back = ttk.Button(guide_actions, text="Back", command=lambda: self.move_guide(-1))
-        self.guide_back.pack(side="left", padx=(0, self.space(12)))
         self.guide_next = ttk.Button(guide_actions, text="Next", command=lambda: self.move_guide(1))
-        self.guide_next.pack(side="left", padx=(0, self.space(12)))
         self.backup_check = ttk.Button(guide_actions, text="Check iPhone setting", command=lambda: self.start(BACKUP_CHECK_MODE))
-        self.backup_check.pack(side="left")
+        guide_buttons = (self.guide_back, self.guide_next, self.backup_check)
+        guide_layout = None
+        def arrange_guide_actions(_event=None):
+            nonlocal guide_layout
+            width = guide_actions.winfo_width()
+            positions, row, column, used = [], 0, 0, 0
+            for button in guide_buttons:
+                requested = button.winfo_reqwidth()
+                if column and used + requested > width:
+                    row, column, used = row + 1, 0, 0
+                positions.append((row, column))
+                column, used = column + 1, used + requested + self.space(12)
+            if positions != guide_layout:
+                guide_layout = positions
+                for button, (row, column) in zip(guide_buttons, positions):
+                    button.grid(row=row, column=column, sticky="w", padx=(0, self.space(12)),
+                                pady=(self.space(8) if row else 0, 0))
+        guide_actions.bind("<Configure>", arrange_guide_actions)
+        arrange_guide_actions()
         ttk.Label(self.setup_guide, textvariable=self.backup_setting, style="Panel.TLabel", wraplength=780).pack(fill="x")
         self.render_guide()
+        last_width = None
         def resize(event):
+            nonlocal last_width
+            if event.width == last_width:
+                return
+            last_width = event.width
             for label in (scope, status):
                 label.configure(wraplength=event.width)
             ttk.Style(self.window).configure("Native.Disclosure.TCheckbutton", wraplength=max(self.space(240), event.width - self.space(32)))
@@ -555,8 +576,10 @@ class PhoneWindow:
 
     def refresh_workspace(self) -> None:
         coverage, status = workspace_summary(self.state)
+        if self.native_active and self.state.can_review and self.state.selected_ids:
+            status = "Continue saves your chosen contacts."
         if self.native_active and self.state.reviewed and not self.state.handoff_id:
-            status = "Review available metadata. Continue sends this selection to the approved account and course."
+            status = "Continue saves this selection to your approved account."
             if self.native.phase == "handoff_expired":
                 status = "Handoff expired. Open Details & recovery to check your account or cancel locally."
         elif self.native_active and self.state._browser_received and not self.state.save_receipt_pending and not self.state.saved_acknowledged:

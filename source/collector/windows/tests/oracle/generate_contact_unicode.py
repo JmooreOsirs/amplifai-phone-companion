@@ -36,11 +36,11 @@ def main():
     if unicodedata.unidata_version != "15.0.0":
         raise RuntimeError("Regeneration requires Python 3.12 / Unicode 15.0.0")
     root = Path(__file__).resolve().parent
-    provenance = json.loads((root / "provenance.json").read_text())
+    provenance = json.loads((root / "provenance.json").read_text(encoding="utf-8"))
     for name, expected in provenance["files"].items():
         if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
             raise RuntimeError("Oracle custody mismatch: " + name)
-    captured = json.loads((root / "unicode-ranges.json").read_text())
+    captured = json.loads((root / "unicode-ranges.json").read_text(encoding="utf-8"))
     scalar, boundary = ({key: {value for start, end in ranges for value in range(start, end + 1)}
                          for key, ranges in captured[group].items()} for group in ("scalar", "boundary"))
     marks, extends = set(), set()
@@ -78,7 +78,7 @@ def main():
                                    f"missing={sorted(values[name] - actual)[:12]}, "
                                    f"extra={sorted(actual - values[name])[:12]}")
     if args.output:
-        args.output.write_text(json.dumps(patterns, indent=2) + "\n")
+        args.output.write_text(json.dumps(patterns, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"status": "matched", "tables": len(patterns),
                       "unicodeVersion": unicodedata.unidata_version,
                       "authorityCommit": provenance["authorityCommit"]}))

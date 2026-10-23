@@ -21,7 +21,7 @@ jobs:
   parity_ui:
     if: inputs.phase == 'parity-ui' || inputs.phase == 'parity-normal-open' || inputs.phase == 'native-delivery' || inputs.phase == 'native-setup' || inputs.phase == 'guided-diagnostic' || inputs.phase == 'guided-ui'
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       PYTHONPATH: source/collector;source/collector/tests;source/collector/windows;source/collector/windows/tests;source/script
     steps:
@@ -77,9 +77,11 @@ jobs:
         if: inputs.phase == 'native-setup' || inputs.phase == 'guided-diagnostic' || inputs.phase == 'guided-ui'
         shell: pwsh
         run: |
-          python -m unittest test_native_setup test_native_run test_native_app test_companion_status test_contact_workspace test_contact_groups test_contact_group_session test_brand_widgets test_journey test_pump_cadence test_startup_geometry test_visible_desktop -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetupTests.log')
+          python -m unittest test_native_setup test_native_run test_native_app test_companion_status test_contact_workspace test_contact_groups test_contact_group_session test_brand_widgets test_journey test_pump_cadence test_startup_geometry test_visible_desktop test_render_guided_gate -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiNativeSetupTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Render the guided journey on the actual Windows desktop; freeze only the full gate
+        # Preserve time for always-run diagnostic artifact upload after a stall.
+        timeout-minutes: 40
         if: ${{ !cancelled() && (inputs.phase == 'parity-ui' || inputs.phase == 'native-setup' || inputs.phase == 'guided-diagnostic' || inputs.phase == 'guided-ui') && (success() || inputs.phase == 'guided-diagnostic') }}
         shell: pwsh
         run: |

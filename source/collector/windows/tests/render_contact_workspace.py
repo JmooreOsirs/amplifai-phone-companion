@@ -122,14 +122,14 @@ def computed_styles(root, view) -> dict:
         "Current.Journey.TLabel": {"foreground": app.HEADING},
         "Raised.Metric.TLabel": {"background": RAISED, "foreground": app.HEADING, "font": ("Arial", "21", "bold")},
         "Raised.Meta.TLabel": {"background": RAISED, "foreground": app.MUTED, "font": ("Open Sans", "10")},
-        "Primary.TButton": {"background": app.LIME, "foreground": app.BACKGROUND, "padding": (spacing(18), spacing(12))},
-        "TButton": {"background": app.BORDER, "foreground": app.HEADING, "bordercolor": app.BORDER,
+        "Primary.TButton": {"background": app.PANEL, "foreground": app.BACKGROUND, "padding": (spacing(18), spacing(12))},
+        "TButton": {"background": app.PANEL, "foreground": app.HEADING, "bordercolor": app.BORDER,
                     "padding": (spacing(18), spacing(10)), "font": ("Arial", "11", "bold")},
         "Quiet.TButton": {"background": app.BACKGROUND, "foreground": app.MUTED,
                           "padding": (spacing(8), spacing(4)), "font": ("Arial", "10", "bold", "underline")},
         "Group.TButton": {"background": app.BACKGROUND, "foreground": app.HEADING,
                           "padding": (spacing(12), spacing(4)), "font": ("Arial", "10", "bold")},
-        "Selected.Group.TButton": {"background": app.LIME, "foreground": app.BACKGROUND},
+        "Selected.Group.TButton": {"background": app.BACKGROUND, "foreground": app.BACKGROUND},
         "Quiet.TMenubutton": {"background": app.BACKGROUND, "foreground": app.LIME},
         "Card.TMenubutton": {"background": RAISED, "foreground": app.MUTED},
         "TEntry": {"fieldbackground": app.BACKGROUND, "foreground": app.HEADING, "padding": (spacing(8),)},
@@ -150,7 +150,7 @@ def computed_styles(root, view) -> dict:
         key: str(style.lookup("Primary.TButton", key, state=state)) for key in ("background", "foreground")}
         for state in ((), ("disabled",), ("active",), ("focus",), ("pressed",),
                       ("disabled", "active"), ("disabled", "focus"), ("disabled", "pressed"))}
-    if result["primaryStates"]["disabled"] != {"background": app.BORDER, "foreground": app.MUTED}:
+    if result["primaryStates"]["disabled"] != {"background": app.PANEL, "foreground": app.MUTED}:
         raise RuntimeError("Disabled primary action lost its native semantic state")
     if any(value != result["primaryStates"]["disabled"] for name, value in result["primaryStates"].items()
            if name.startswith("disabled ")):
@@ -180,7 +180,8 @@ def computed_styles(root, view) -> dict:
             raise RuntimeError("Guided panel did not derive from the accepted rounded panel")
         result["panels"][name] = {"radiusPixels": panel.radius, "paddingPixels": panel.padding,
                                    "scale": panel.scale, "fill": panel._fill, "border": panel._border}
-        if panel.radius != round(12 * panel.scale) or panel.padding != round(20 * panel.scale):
+        padding = 12 if name == "contacts" and view.compact_layout else 20
+        if panel.radius != round(12 * panel.scale) or panel.padding != round(padding * panel.scale):
             raise RuntimeError("Guided panel radius or spacing drifted from the Mac reference")
     result["recessedAndRaisedSurfaces"] = {}
     for name, fill in (("contact_controls", app.BACKGROUND), ("collection_illustration_well", app.BACKGROUND),
@@ -194,12 +195,42 @@ def computed_styles(root, view) -> dict:
     result["layoutSpacing"] = {"scale": scale, "shellPaddingPixels": [int(str(value)) for value in root.tk.splitlist(view.shell.cget("padding"))],
                               "navigationGapPixels": [int(str(value)) for value in root.tk.splitlist(view.navigation.grid_info()["pady"])],
                               "logicalRhythm": [12, 20, 28]}
-    if (result["layoutSpacing"]["shellPaddingPixels"] != [round(28 * scale)]
-            or result["layoutSpacing"]["navigationGapPixels"] != [0, round(20 * scale)]):
+    result["layoutSpacing"]["compact"] = view.compact_layout
+    if (result["layoutSpacing"]["shellPaddingPixels"] != [round((12 if view.compact_layout else 28) * scale)]
+            or result["layoutSpacing"]["navigationGapPixels"] != [0, round((12 if view.compact_layout else 20) * scale)]):
         raise RuntimeError("Outer spacing diverged from the DPI-scaled Mac rhythm")
     result["contactCards"] = {"type": type(view.contacts).__name__, "font": list(view.contacts.cget("font")),
                                "columns": view.contacts._columns, "scale": view.contacts.scale}
     return result
+
+
+def rounded_fill_pixels(root, view, screenshot):
+    """Inspect actual rendered fill/corner pixels, not only the style layout name."""
+    from PIL import Image
+    from brand_controls import _blend
+    targets = [(view.review_button, app.PANEL, app.LIME, app.BORDER),
+               (view.pair_button, app.PANEL, app.LIME, app.BORDER)]
+    targets += [(button, app.BACKGROUND, app.LIME, _blend(app.LIME, app.BACKGROUND, .55))
+                for button in view.group_buttons.values() if button.cget("style") == "Selected.Group.TButton"]
+    targets += [(label, app.PANEL, app.LIME, app.LIME) for label in view.collection_stage_labels
+                if label.cget("style") == "Active.Stage.TLabel"]
+    evidence = []
+    with Image.open(screenshot) as source:
+        pixels = source.convert("RGB")
+        for widget, backdrop, fill, disabled_fill in targets:
+            x, y, width, height = bounds(root, widget)
+            if not widget.winfo_viewable() or min(x, y) < 0 or x + width > pixels.width or y + height > pixels.height:
+                continue
+            halo = round(5 * view.layout_scale) if isinstance(widget, ttk.Button) else 0
+            samples = {"corner": pixels.getpixel((x, y)),
+                       "fill": pixels.getpixel((x + width // 2, y + halo + 2))}
+            expected_fill = disabled_fill if widget.instate(("disabled",)) else fill
+            rgb = lambda color: tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+            if samples != {"corner": rgb(backdrop), "fill": rgb(expected_fill)}:
+                raise RuntimeError(f"Rendered rounded fill differs from its surface: {widget.cget('style')}: {samples}")
+            evidence.append({"style": widget.cget("style"), "bounds": [x, y, width, height],
+                             "disabled": widget.instate(("disabled",)), "samples": samples})
+    return evidence
 
 
 def keyboard_traversal(root, required, *, start):

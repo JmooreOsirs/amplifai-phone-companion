@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import faulthandler
 import hashlib
 import json
 import math
@@ -24,7 +25,7 @@ from native_setup_fixture import (collecting, exercise_controls, exercise_group_
                                   scenarios, text_scroll_evidence)
 from render_candidate import capture, create_root, descendants, place_viewport, visible_snapshot
 from render_contact_workspace import (bounds, check_keyboard, computed_styles, keyboard_traversal,
-                                      require_bounds, workspace_geometry)
+                                      require_bounds, rounded_fill_pixels, workspace_geometry)
 from test_native_app import SyntheticWorker
 from test_native_run import started
 from test_native_setup import CLIENT
@@ -251,6 +252,8 @@ def assert_group_workspace(root, view, name):
             if (button.cget("style") == "Selected.Group.TButton") != (group_name == group):
                 raise RuntimeError("Selected group has no accurate native state")
         for contact, card in zip(state.contacts, view.contacts._cards, strict=True):
+            if len(contact["name"]) <= 30 and len(str(card.button.cget("text")).splitlines()) > 2:
+                raise RuntimeError("Compact card options leave too little width for a normal contact name")
             if card.variable.get() != (contact["id"] in state.selected_ids):
                 raise RuntimeError("Contact checkbox disagrees with the preserved selection")
             if card.marked.get() != (contact["id"] in expected_marks):
@@ -270,13 +273,18 @@ def measure_pump(root, view):
     view.refresh()
     root.update()
     measurements = {}
+    root.qualification_pump_measurements = measurements
     for eager in (True, False):
-        durations, beats, renders, eager_job = [], [], [], [None]
+        durations, beats, renders, refresh_durations, eager_job = [], [], [], [], [None]
         original_refresh = view.refresh
         start_wall, start_cpu = time.perf_counter(), time.process_time()
         def refresh():
-            renders.append(time.perf_counter())
-            return original_refresh()
+            started = time.perf_counter()
+            renders.append(started)
+            try:
+                return original_refresh()
+            finally:
+                refresh_durations.append(time.perf_counter() - started)
         def heartbeat():
             now = time.perf_counter()
             if beats:
@@ -305,6 +313,7 @@ def measure_pump(root, view):
         wall = time.perf_counter() - start_wall
         measurement = {"wallSeconds": wall, "cpuSeconds": time.process_time() - start_cpu,
                        "fullRenders": len(renders), "heartbeatCount": len(beats),
+                       "refreshMaxSeconds": max(refresh_durations, default=0),
                        "heartbeatMaxSeconds": max(durations),
                        "heartbeatP95Seconds": sorted(durations)[math.floor((len(durations) - 1) * .95)],
                        "singlePumpContinuation": True}
@@ -355,6 +364,7 @@ def failure_context(root, view):
     readers = {
         "clientSize": lambda: [root.winfo_width(), root.winfo_height()],
         "keyboardTraversal": lambda: getattr(root, "qualification_keyboard_trace", []),
+        "pumpMeasurements": lambda: getattr(root, "qualification_pump_measurements", {}),
         "tkFocusOK": lambda: str(root.tk.call("info", "body", "::tk::FocusOK")),
         "controls": lambda: [widget_diagnostic(root, widget) for widget in descendants(root)
                              if isinstance(widget, (ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.Entry))],
@@ -401,22 +411,31 @@ def render(args, *, contacts_only=False, frozen_identity=None):
     checks, failures, cases = [], [], []
     root = view = None
     errors = []
+    reported_callbacks = 0
     width = height = scaling = None
 
-    def check(name, phase, operation, *, callback_errors=True):
+    def check(name, phase, operation):
+        nonlocal reported_callbacks
         metadata = {"scenario": name, "phase": phase, "viewport": [width, height], "tkScaling": scaling}
-        before_callbacks = len(errors)
+        started = time.perf_counter()
+        if getattr(args, "trace_stalls", False):
+            faulthandler.dump_traceback_later(60, repeat=True)
+        print(json.dumps({**metadata, "checkStarted": True}), flush=True)
         try:
             result = operation()
-            if callback_errors and len(errors) > before_callbacks:
-                raise RuntimeError("Tk callback failed: " + "; ".join(errors[before_callbacks:]))
+            if len(errors) > reported_callbacks:
+                raise RuntimeError("Tk callback failed: " + "; ".join(errors[reported_callbacks:]))
         except Exception as error:
             if not collect_all and getattr(error, "_guided_diagnostic_recorded", False):
                 raise
             if not collect_all:
                 error._guided_diagnostic_recorded = True
             failure = {**metadata, "errorType": type(error).__name__, "error": str(error),
-                       "traceback": traceback.format_exc(), "callbackErrors": errors[before_callbacks:]}
+                       "traceback": traceback.format_exc(), "callbackErrors": errors[reported_callbacks:],
+                       "durationSeconds": time.perf_counter() - started}
+            # Keep every callback in the viewport log, but attribute it once to
+            # the nearest check, including callbacks before or outside a check.
+            reported_callbacks = len(errors)
             if root is not None:
                 failure["window"] = failure_context(root, view)
                 try:
@@ -434,12 +453,13 @@ def render(args, *, contacts_only=False, frozen_identity=None):
             if not collect_all:
                 raise
             return False, None
-        checks.append({**metadata, "passed": True})
+        checks.append({**metadata, "passed": True, "durationSeconds": time.perf_counter() - started})
         return True, result
 
     for width, height, scaling in VIEWPORTS:
         root = view = None
         errors = []
+        reported_callbacks = 0
         created, root = check("viewport", "create-root", create_root)
         if not created:
             continue
@@ -451,6 +471,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
             with synthetic_view(root, args.logo) as current_view:
                 view = current_view
                 place_viewport(root, width, height)
+                check("viewport", "startup-callbacks", lambda: None)
                 if not contacts_only:
                     passed, result = check("viewport", "button-interactions", lambda: exercise_controls(view))
                     interactions.append({"viewport": [width, height], "tkScaling": scaling,
@@ -536,6 +557,9 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                     # Capture is deliberately inside the diagnostic boundary too.
                     captured, record = check(name, "capture", lambda: capture(root, args.output,
                         f"guided-{width}x{height}-scale-{scaling:.2f}-{name}"))
+                    if captured:
+                        _, pixels = check(name, "rounded-fill-pixels", lambda: rounded_fill_pixels(root, view, args.output / record["path"]))
+                        record["roundedFillPixels"] = pixels
                     passed = prepared and len(failures) == case_start
                     cases.append({"scenario": name, "viewport": [width, height], "tkScaling": scaling, "passed": passed})
                     if captured:
@@ -553,7 +577,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                 if not contacts_only and (width, height, scaling) == VIEWPORTS[0]:
                     _, performance = check("viewport", "pump", lambda: measure_pump(root, view))
         try:
-            check("viewport", "window", run_viewport, callback_errors=False)
+            check("viewport", "window", run_viewport)
         finally:
             view = None
             def destroy():
@@ -595,7 +619,15 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--collect-all-failures", action="store_true",
                         help="Source-only bounded census; retain every failure and exit nonzero if any check fails")
-    render(parser.parse_args())
+    args = parser.parse_args()
+    args.trace_stalls = True
+    # A stalled Tk callback must leave its Python stack in the CI log before
+    # the step deadline; this only runs in the synthetic Windows harness.
+    faulthandler.dump_traceback_later(60, repeat=True)
+    try:
+        render(args)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 if __name__ == "__main__":

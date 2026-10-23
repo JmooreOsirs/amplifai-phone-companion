@@ -8,10 +8,12 @@ layout change. Images are generated from Brand tokens with no bundled assets.
 from __future__ import annotations
 
 import base64
+import io
 import struct
 import tkinter as tk
 import zlib
 from tkinter import ttk
+from PIL import Image, ImageDraw
 
 from brand_tokens import BACKGROUND, PANEL, BORDER, HEADING, MUTED, LIME, BLUE, RAISED
 from brand_widgets import RoundPanel
@@ -102,9 +104,58 @@ def install_control_styles(window, style, *, scale=1.0):
             images[key] = (tk.PhotoImage(master=window, data=base64.b64encode(png).decode("ascii")), edge, halo)
         return images[key]
 
+    def glyph(key, size, draw):
+        cache_key = ("glyph", key, scale)
+        if cache_key not in images:
+            width, height = (space(value) for value in size)
+            canvas = Image.new("RGBA", (width * 4, height * 4))
+            draw(ImageDraw.Draw(canvas), lambda value: round(value * scale * 4))
+            output = io.BytesIO()
+            canvas.resize((width, height), Image.Resampling.LANCZOS).save(output, format="PNG")
+            images[cache_key] = tk.PhotoImage(master=window, data=base64.b64encode(output.getvalue()).decode("ascii"))
+        return images[cache_key]
+
+    def chevron(color):
+        return glyph(("chevron", color), (16, 12), lambda draw, s:
+                     draw.line([(s(4), s(4)), (s(8), s(8)), (s(12), s(4))], fill=color, width=s(2), joint="curve"))
+
+    menu_indicator = "Amplifai.Menubutton.indicator"
+    if menu_indicator not in style.element_names():
+        style.element_create(menu_indicator, "image", chevron(LIME), ("disabled", chevron(MUTED)),
+                             width=space(16), height=space(12), sticky="")
+
+    def check_image(selected=False, alternate=False, disabled=False, focus=False):
+        def draw_check(draw, s):
+            accent = _blend(LIME, BACKGROUND, .55) if disabled else LIME
+            outline = MUTED if disabled else BLUE
+            if focus:
+                draw.rounded_rectangle((s(1), s(1), s(27), s(27)), radius=s(6), outline=BLUE, width=s(2))
+            draw.rounded_rectangle((s(4), s(4), s(24), s(24)), radius=s(4),
+                                   fill=accent if selected else None,
+                                   outline=accent if selected else outline, width=s(2))
+            if selected:
+                draw.line([(s(8), s(14)), (s(12), s(18)), (s(20), s(9))], fill=BACKGROUND, width=s(2), joint="curve")
+            elif alternate:
+                draw.line([(s(9), s(14)), (s(19), s(14))], fill=outline, width=s(2))
+        return glyph(("check", selected, alternate, disabled, focus), (28, 28), draw_check)
+
+    check_indicator = "Amplifai.Checkbutton.indicator"
+    if check_indicator not in style.element_names():
+        style.element_create(check_indicator, "image", check_image(),
+            ("disabled", "selected", check_image(selected=True, disabled=True)),
+            ("disabled", "alternate", check_image(alternate=True, disabled=True)),
+            ("disabled", check_image(disabled=True)),
+            ("focus", "selected", check_image(selected=True, focus=True)),
+            ("focus", "alternate", check_image(alternate=True, focus=True)),
+            ("focus", check_image(focus=True)), ("selected", check_image(selected=True)),
+            ("alternate", check_image(alternate=True)), width=space(28), height=space(28), sticky="")
+    style.layout("TCheckbutton", [("Checkbutton.padding", {"sticky": "nsew", "children": [
+        (check_indicator, {"side": "left", "sticky": ""}),
+        ("Checkbutton.label", {"side": "left", "sticky": ""})]})])
+
     def control(name, key, fill, foreground, *, disabled_fill=None, radius=8, quiet=False,
                 menu=False, padding=(18, 10), font_size=11, active_foreground=None,
-                disabled_foreground=None, disabled_border=None):
+                disabled_foreground=None, disabled_border=None, backdrop=PANEL):
         outline = fill if quiet or fill == LIME else BORDER
         disabled_fill = disabled_fill or fill
         disabled_foreground = disabled_foreground or _blend(foreground, disabled_fill, 0.55)
@@ -121,20 +172,20 @@ def install_control_styles(window, style, *, scale=1.0):
             style.element_create(element, "image", normal, ("disabled", disabled),
                                  ("pressed", "focus", focused_down), ("focus", focused),
                                  ("pressed", down), ("active", active),
-                                 border=edge, padding=halo, sticky="nsew")
+                                 border=edge, padding=halo, width=0, height=0, sticky="nsew")
         kind = "Menubutton" if menu else "Button"
         children = [(f"{kind}.label", {"side": "left", "sticky": ""})]
-        if menu:
-            children.insert(0, ("Menubutton.indicator", {"side": "right", "sticky": ""}))
+        if menu and key != "CardMenu":
+            children.insert(0, (menu_indicator, {"side": "right", "sticky": ""}))
         style.layout(name, [(element, {"sticky": "nsew", "children": [
             (f"{kind}.padding", {"sticky": "nsew", "children": children})]})])
-        style.configure(name, background=fill, foreground=foreground, bordercolor=outline,
+        style.configure(name, background=backdrop, foreground=foreground, bordercolor=outline,
                         lightcolor=fill, darkcolor=fill, relief="flat", borderwidth=0,
                         padding=tuple(space(value) for value in padding),
                         font=("Arial", font_size, "bold", "underline") if quiet and not menu else ("Arial", font_size, "bold"),
                         arrowcolor=foreground, arrowsize=space(12), focuscolor=BLUE)
         pressed_foreground = _blend(foreground, BACKGROUND, 0.8) if quiet or key in {"Group", "SelectedGroup"} else foreground
-        style.map(name, background=[("disabled", disabled_fill), ("pressed", pressed), ("active", fill)],
+        style.map(name, background=[("disabled", backdrop), ("pressed", backdrop), ("active", backdrop)],
                   foreground=[("disabled", disabled_foreground), ("pressed", pressed_foreground), ("active", active_foreground)],
                   arrowcolor=[("disabled", disabled_foreground), ("active", active_foreground)])
 
@@ -142,14 +193,17 @@ def install_control_styles(window, style, *, scale=1.0):
     control("Primary.TButton", "Primary", LIME, BACKGROUND, disabled_fill=BORDER,
             disabled_foreground=MUTED, padding=(18, 12))
     control("Quiet.TButton", "Quiet", BACKGROUND, MUTED, quiet=True, padding=(8, 4),
-            font_size=10, active_foreground=HEADING)
+            font_size=10, active_foreground=HEADING, backdrop=BACKGROUND)
     control("Group.TButton", "Group", BACKGROUND, HEADING, radius=16, padding=(12, 4), font_size=10,
-            disabled_border=_blend(BORDER, BACKGROUND, 0.55))
+            disabled_border=_blend(BORDER, BACKGROUND, 0.55), backdrop=BACKGROUND)
     selected_disabled = _blend(LIME, BACKGROUND, 0.55)
     control("Selected.Group.TButton", "SelectedGroup", LIME, BACKGROUND, disabled_fill=selected_disabled,
-            disabled_foreground=BACKGROUND, disabled_border=selected_disabled, radius=16, padding=(12, 4), font_size=10)
-    control("Quiet.TMenubutton", "QuietMenu", BACKGROUND, LIME, quiet=True, menu=True, padding=(8, 4), font_size=10)
-    control("Card.TMenubutton", "CardMenu", RAISED, MUTED, menu=True, padding=(8, 4), font_size=10)
+            disabled_foreground=BACKGROUND, disabled_border=selected_disabled, radius=16, padding=(12, 4), font_size=10,
+            backdrop=BACKGROUND)
+    control("Quiet.TMenubutton", "QuietMenu", BACKGROUND, LIME, quiet=True, menu=True, padding=(8, 4), font_size=10,
+            backdrop=BACKGROUND)
+    control("Card.TMenubutton", "CardMenu", RAISED, MUTED, quiet=True, menu=True, padding=(4, 0), font_size=12,
+            backdrop=RAISED)
     style.map("Card.TMenubutton", foreground=[("disabled", _blend(MUTED, RAISED, 0.55)), ("active", LIME)],
               arrowcolor=[("disabled", _blend(MUTED, RAISED, 0.55)), ("active", LIME)])
 
@@ -159,10 +213,10 @@ def install_control_styles(window, style, *, scale=1.0):
         tile, edge, _ = image(fill, LIME if fill == LIME else BORDER, radius=16, reserve=False)
         element = f"Amplifai.{name}.border"
         if element not in style.element_names():
-            style.element_create(element, "image", tile, border=edge, sticky="nsew")
+            style.element_create(element, "image", tile, border=edge, padding=0, width=0, height=0, sticky="nsew")
         style.layout(name, [(element, {"sticky": "nsew", "children": [
             ("Label.padding", {"sticky": "nsew", "children": [("Label.label", {"sticky": ""})]})]})])
-        style.configure(name, background=fill, foreground=foreground, font=("Arial", 10, "bold"),
+        style.configure(name, background=PANEL, foreground=foreground, font=("Arial", 10, "bold"),
                         padding=(space(12), space(4)), anchor="center")
 
     trough, edge, _ = image(BORDER, BORDER, radius=5, reserve=False)
@@ -170,11 +224,24 @@ def install_control_styles(window, style, *, scale=1.0):
     for suffix, tile in (("trough", trough), ("pbar", bar)):
         element = f"Amplifai.Horizontal.Progressbar.{suffix}"
         if element not in style.element_names():
-            style.element_create(element, "image", tile, border=edge, sticky="nsew")
+            style.element_create(element, "image", tile, border=edge, padding=0, width=0, height=0, sticky="nsew")
     style.layout("Horizontal.TProgressbar", [("Amplifai.Horizontal.Progressbar.trough", {
         "sticky": "nsew", "children": [("Amplifai.Horizontal.Progressbar.pbar", {"side": "left", "sticky": "ns"})]})])
-    style.configure("Horizontal.TProgressbar", background=LIME, troughcolor=BORDER,
+    style.configure("Horizontal.TProgressbar", background=PANEL, troughcolor=BORDER,
                     lightcolor=LIME, darkcolor=LIME, borderwidth=0, thickness=space(14))
+
+    field, edge, halo = image(PANEL, BORDER, radius=16)
+    field_focus = image(PANEL, BLUE, focus=True, radius=16)[0]
+    field_element = "Amplifai.Entry.field"
+    if field_element not in style.element_names():
+        style.element_create(field_element, "image", field, ("focus", field_focus), border=edge,
+                             padding=halo, width=0, height=0, sticky="nsew")
+    style.layout("TEntry", [(field_element, {"sticky": "nsew", "children": [
+        ("Entry.padding", {"sticky": "nsew", "children": [("Entry.textarea", {"sticky": "nsew"})]})]})])
+    style.configure("TEntry", background=BACKGROUND, fieldbackground=PANEL)
+    style.configure("Vertical.TScrollbar", background=BORDER, troughcolor=BACKGROUND, bordercolor=BACKGROUND,
+                    lightcolor=BORDER, darkcolor=BORDER, arrowcolor=MUTED, gripcount=0)
+    style.map("Vertical.TScrollbar", background=[("active", MUTED), ("pressed", MUTED)])
 
 
 class JourneySteps(ttk.Frame):
@@ -242,12 +309,16 @@ class CollectionIllustration(tk.Canvas):
         self._processing = None
         super().__init__(parent, width=self.space(248), height=self.space(68),
                          background=BACKGROUND, highlightthickness=0, borderwidth=0, takefocus=False)
+        self.bind("<Configure>", lambda _event: self._draw())
         self.set_processing(False)
 
     def set_processing(self, processing):
         if processing == self._processing:
             return
         self._processing = processing
+        self._draw()
+
+    def _draw(self):
         self.delete("all")
         s = self.space
         stroke = max(1, s(2))
@@ -258,7 +329,7 @@ class CollectionIllustration(tk.Canvas):
         def rect(*points):
             self.create_rectangle(*(s(value) for value in points), outline=BLUE, width=stroke)
 
-        if processing:
+        if self._processing:
             rect(22, 18, 78, 53)
             line(22, 42, 78, 42)
             line(31, 48, 45, 48)
@@ -279,3 +350,8 @@ class CollectionIllustration(tk.Canvas):
             rect(166, 9, 236, 51)
             line(193, 52, 193, 60, 184, 64, 218, 64, 209, 60, 209, 52)
         line(101, 34, 139, 34, arrow="last", arrowshape=(s(9), s(11), s(5)))
+        width = self.winfo_width() if self.winfo_width() > 1 else self.winfo_reqwidth()
+        for item in self.find_all():
+            xs = self.coords(item)[::2]
+            anchor, fraction = (50, .25) if max(xs) < s(100) else (200, .75) if min(xs) > s(150) else (120, .5)
+            self.move(item, width * fraction - s(anchor), 0)
