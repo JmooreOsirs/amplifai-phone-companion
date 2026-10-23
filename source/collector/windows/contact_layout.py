@@ -201,4 +201,3 @@ def refresh(view):
         count = workspace.filtered_count
         start = workspace.page_start + 1 if count else 0
         view.contact_page.set(f"Showing {start:,}–{workspace.page_start + len(state.contacts):,} of {count:,} in {workspace.group}")
-
