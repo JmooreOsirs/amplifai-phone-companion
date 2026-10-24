@@ -35,8 +35,8 @@ android {
         applicationId = "ai.satoris.amplifai.phone"
         minSdk = 26
         targetSdk = 37
-        versionCode = 26102312
-        versionName = "2026.10.23-rc12"
+        versionCode = 26102413
+        versionName = "2026.10.24-rc13"
         testInstrumentationRunner = "ai.satoris.amplifai.phone.LocalBridgeInstrumentedTest"
 
     }

@@ -798,7 +798,7 @@ public final class MainActivity extends Activity {
         reviewButton.setVisibility(active || completed || nativeStopped || (contactsAvailable && (reviewed || bulkSelectionActive)) ? View.GONE : View.VISIBLE);
         styleButton(reviewButton, !reviewed);
         boolean bindingRetry = active && handoff.snapshot().state().equals("binding_pending");
-        handoffActionText = completed ? "Open saved account and report" : bindingRetry ? "Retry Continue" : active || nativeStopped ? "Open account in this phone's browser" :
+        handoffActionText = completed ? getString(R.string.handoff_open_saved_report) : bindingRetry ? "Retry Continue" : active || nativeStopped ? "Open account in this phone's browser" :
                 nativeSetup == null ? "Approve browser handoff" : "Continue with selected contacts";
         handoffButton.setVisibility(!bulkSelectionActive && (!contactsAvailable || active || completed || nativeStopped || preparingTransfer || reviewed)
                 ? View.VISIBLE : View.GONE);
@@ -811,7 +811,7 @@ public final class MainActivity extends Activity {
         else if (store == null) reason = "Private storage unavailable. Reopen after freeing space.";
         else if (handoff != null && !handoff.storageAvailable()) reason = "Private transfer cleanup failed. Close and reopen the app before another handoff.";
         else if (PagedTransfer.cleanupRequired()) reason = "Private transfer cleanup failed. Close and reopen the app before another handoff.";
-        else if (completed) reason = "Account save confirmed. Open your saved account and report; a new collection needs a new setup.";
+        else if (completed) reason = getString(R.string.handoff_completed_reason);
         else if (!started) reason = "Return to the app to continue.";
         else if (nativeSetup != null && (nativeRun == null || !nativeRun.current())) reason = "This collection is not current. Start a new setup from your signed-in account.";
         else if (updater.blocksCollection()) reason = "Finish or cancel the app update first.";
@@ -1675,8 +1675,8 @@ public final class MainActivity extends Activity {
         showSelection(false);
         progressPanel.handoff("completed", 0, 0);
         status.setText(R.string.handoff_saved_status);
-        review.setText("Confirmed saved sources remain in your account. Open the saved report to review them.");
-        setupMessage = "The browser acknowledged verified account saves. Open your account for saved results.";
+        review.setText(R.string.handoff_completed_review);
+        setupMessage = getString(R.string.handoff_completed_setup);
         refreshSetup();
     }
 

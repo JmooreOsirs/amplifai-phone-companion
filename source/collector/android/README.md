@@ -1,3 +1,9 @@
+## RC13 account handoff candidate
+
+Version `2026.10.24-rc13`, build `26102413`, integrates the reviewed Android PR3 handoff repairs onto the current native release lineage. Pairing replies advertise at most five minutes while local review retains its separate two-hour lifetime. Native connection intent is claimed before exact-scope verification and consumed through the existing checked endpoint. Reviewed returns identify their run, and a process-local completion hint restores only confirmed saved-report presentation after ACK and successful cleanup. New collection attempts clear that hint.
+
+Current unit evidence: 68 website and 64 Play tests pass. The new completion text uses normal Android string resources. Official signing, exact signed runtime qualification and publication remain separate release gates; the debug build is not a distributed release.
+
 # AMPLIFai Phone — Android
 
 `2026.10.23-rc12` (`26102312`) exposes Select all contacts and Deselect all
