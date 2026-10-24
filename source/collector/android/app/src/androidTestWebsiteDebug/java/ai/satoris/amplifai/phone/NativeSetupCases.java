@@ -428,7 +428,8 @@ final class NativeSetupCases {
         });
         // Activity state and two Choreographer callbacks do not mean the system's
         // task-return animation has finished compositing its previous snapshot.
-        SystemClock.sleep(1000);
+        await(() -> activity.hasWindowFocus(), "Returned Activity did not regain window focus");
+        instrumentation.getUiAutomation().waitForIdle(500, 5000);
         main(() -> {
             JSONArray labels = new JSONArray();
             collectVisibleLabels(activity.getWindow().getDecorView(), labels);
