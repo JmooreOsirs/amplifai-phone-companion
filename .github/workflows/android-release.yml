@@ -14,6 +14,8 @@ on:
 permissions:
   contents: read
   actions: read
+  checks: read
+  pull-requests: read
 concurrency:
   group: android-official-release
   cancel-in-progress: false
@@ -100,6 +102,8 @@ jobs:
     permissions:
       contents: write
       actions: read
+      checks: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
