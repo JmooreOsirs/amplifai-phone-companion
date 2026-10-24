@@ -171,6 +171,7 @@ public final class MainActivity extends Activity {
             }
             // Validate the surviving service before its immediate observer callback can reveal a code/destination.
             recoverActiveHandoff();
+            restoreCompletedHandoff();
             handoff.observe(MainActivity.this::showHandoff);
             refreshActions();
             updater.onSafetyChanged();
@@ -410,7 +411,7 @@ public final class MainActivity extends Activity {
         handoffButton = button("Approve browser handoff", actionBar);
         handoffButton.setEnabled(false);
         handoffButton.setOnClickListener(view -> {
-            if (nativeSetup != null && nativeSetup.state() == NativeSetupSession.State.CLOSED) openAccount();
+            if (completedHandoff() || nativeSetup != null && nativeSetup.state() == NativeSetupSession.State.CLOSED) openAccount();
             else if (handoff != null && handoff.snapshot().state().equals("binding_pending")) handoff.retryBinding();
             else if (handoff != null && handoff.snapshot().active()) openAccount();
             else startHandoff();
@@ -505,6 +506,7 @@ public final class MainActivity extends Activity {
                 if (!clearSource(source)) { session.close(); return; }
             }
             selectedIds.clear(); reviewed = false; nativeStarted = false;
+            NativeCompletionState.PROCESS.beginAttempt();
             nativeRun = null; nativeClaim = null; setupBusy = nativeRunTransferred = false;
             nativeAccountReturn = null;
             nativeCountry = null;
@@ -785,6 +787,7 @@ public final class MainActivity extends Activity {
     private void refreshActions() {
         if (handoffReason == null) return;
         boolean active = handoff != null && handoff.snapshot().active();
+        boolean completed = completedHandoff();
         boolean nativeStopped = nativeSetup != null && nativeSetup.state() == NativeSetupSession.State.CLOSED && nativeStarted;
         boolean busy = cancellation != null || permissionPendingSource != 0 || collectionDisclosure != null ||
                 preparingTransfer || bulkSelectionActive || reviewingSelection;
@@ -792,14 +795,14 @@ public final class MainActivity extends Activity {
                 !busy && !active && !updater.blocksCollection() && (nativeSetup == null ||
                 (nativeRun != null && nativeRun.state() == NativeRunAuthority.State.STARTED && nativeRun.current()));
         reviewButton.setEnabled(canReview);
-        reviewButton.setVisibility(active || nativeStopped || (contactsAvailable && (reviewed || bulkSelectionActive)) ? View.GONE : View.VISIBLE);
+        reviewButton.setVisibility(active || completed || nativeStopped || (contactsAvailable && (reviewed || bulkSelectionActive)) ? View.GONE : View.VISIBLE);
         styleButton(reviewButton, !reviewed);
         boolean bindingRetry = active && handoff.snapshot().state().equals("binding_pending");
-        handoffActionText = bindingRetry ? "Retry Continue" : active || nativeStopped ? "Open account in this phone's browser" :
+        handoffActionText = completed ? "Open saved account and report" : bindingRetry ? "Retry Continue" : active || nativeStopped ? "Open account in this phone's browser" :
                 nativeSetup == null ? "Approve browser handoff" : "Continue with selected contacts";
-        handoffButton.setVisibility(!bulkSelectionActive && (!contactsAvailable || active || nativeStopped || preparingTransfer || reviewed)
+        handoffButton.setVisibility(!bulkSelectionActive && (!contactsAvailable || active || completed || nativeStopped || preparingTransfer || reviewed)
                 ? View.VISIBLE : View.GONE);
-        handoffButton.setEnabled(nativeStopped || (active && (nativeSetup == null || !handoff.snapshot().state().equals("starting"))) || (canReview && reviewed && handoff != null &&
+        handoffButton.setEnabled(completed || nativeStopped || (active && (nativeSetup == null || !handoff.snapshot().state().equals("starting"))) || (canReview && reviewed && handoff != null &&
                 handoff.storageAvailable() && !PagedTransfer.cleanupRequired()));
         cancelHandoff.setVisibility(active || preparingTransfer || (nativeSetup != null && nativeStarted && !nativeStopped && !bulkSelectionActive) ? View.VISIBLE : View.GONE);
         cancelHandoffText = nativeSetup != null ? "Cancel this collection" : preparingTransfer ? "Cancel preparation" : "Cancel browser handoff";
@@ -808,6 +811,7 @@ public final class MainActivity extends Activity {
         else if (store == null) reason = "Private storage unavailable. Reopen after freeing space.";
         else if (handoff != null && !handoff.storageAvailable()) reason = "Private transfer cleanup failed. Close and reopen the app before another handoff.";
         else if (PagedTransfer.cleanupRequired()) reason = "Private transfer cleanup failed. Close and reopen the app before another handoff.";
+        else if (completed) reason = "Account save confirmed. Open your saved account and report; a new collection needs a new setup.";
         else if (!started) reason = "Return to the app to continue.";
         else if (nativeSetup != null && (nativeRun == null || !nativeRun.current())) reason = "This collection is not current. Start a new setup from your signed-in account.";
         else if (updater.blocksCollection()) reason = "Finish or cancel the app update first.";
@@ -911,6 +915,10 @@ public final class MainActivity extends Activity {
             return;
         }
         if (cancellation != null || permissionPendingSource != 0 || preparingTransfer || store == null) { status.setText("Cancel or finish the current operation first."); return; }
+        if (nativeSetup == null) {
+            NativeCompletionState.PROCESS.beginAttempt();
+            nativeAccountReturn = null;
+        }
         clearSupportCode();
         noteReviewDataChanged();
         if (!clearSource(source)) return;
@@ -1649,6 +1657,27 @@ public final class MainActivity extends Activity {
             updater.onSafetyChanged();
         }
         refreshActions();
+    }
+
+    private boolean completedHandoff() {
+        return nativeAccountReturn != null && nativeAccountReturn.completedHandoffId() != null &&
+                (nativeSetup == null || nativeRunTransferred) && (handoff == null || !handoff.snapshot().active());
+    }
+
+    private void restoreCompletedHandoff() {
+        if (handoff == null) return;
+        NativeAccountReturn completed = handoff.completedReturn(nativeAccountReturn, nativeSetup != null && !nativeRunTransferred);
+        if (completed == null) return;
+        // The service can finish while this Activity is unbound in the browser. Recover only
+        // the exact completed display/return context, never a run or collection permission.
+        nativeAccountReturn = completed;
+        reviewed = false;
+        showSelection(false);
+        progressPanel.handoff("completed", 0, 0);
+        status.setText(R.string.handoff_saved_status);
+        review.setText("Confirmed saved sources remain in your account. Open the saved report to review them.");
+        setupMessage = "The browser acknowledged verified account saves. Open your account for saved results.";
+        refreshSetup();
     }
 
     private void showNativeHandoff(HandoffService.Snapshot value) {
