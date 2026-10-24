@@ -56,6 +56,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Probe branch protection read with job-scoped token
         env:
@@ -72,4 +73,13 @@ jobs:
           except (ValueError, TypeError):
               value = {}
           print(json.dumps({'available':result.returncode == 0 and not value.get('errors'), 'data':value.get('data'), 'errorTypes':[e.get('type') for e in value.get('errors',[])]}, sort_keys=True))
+          for name in ('amplifai-android-signing','amplifai-release-publication'):
+              for suffix in ('','/deployment-branch-policies'):
+                  result = subprocess.run(['gh','api','repos/JmooreOsirs/amplifai-phone-companion/environments/'+name+suffix], text=True, capture_output=True, timeout=30)
+                  try:
+                      value = json.loads(result.stdout)
+                  except (ValueError, TypeError):
+                      value = {}
+                  fields = ('deployment_branch_policy','protection_rules') if not suffix else ('branch_policies','total_count')
+                  print(json.dumps({'environment':name,'path':suffix,'available':result.returncode == 0, 'data':{k:value.get(k) for k in fields}}, sort_keys=True))
           PYPROBE
