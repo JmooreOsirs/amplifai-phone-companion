@@ -227,7 +227,9 @@ def apk_metadata(apk: Path, tools: Path, spec: dict, *, instrumentation: bool = 
             "APK is outside the signed update byte bound")
     text = tool([tools / "aapt", "dump", "badging", apk])
     package = PACKAGE + ".test" if instrumentation else PACKAGE
-    match = re.search(r"^package: name='([^']+)' versionCode='([0-9]+)' versionName='([^']+)'", text, re.M)
+    # AGP's instrumentation APK has an exact test package but no release version.
+    # Production identity remains mandatory in the separate check below.
+    match = re.search(r"^package: name='([^']+)' versionCode='([0-9]*)' versionName='([^']*)'", text, re.M)
     require(match is not None and match.group(1) == package, "unexpected Android package")
     if not instrumentation:
         require(match.group(2) == str(spec['build']) and match.group(3) == spec['version']
