@@ -545,7 +545,7 @@ final class NativeSetupCases {
             set("nativeContinuePending", true); invoke("openNativeContinuation");
             Intent intent = interceptedAccountIntent.get();
             require(accountIntents.get() == 1 && intent != null && Intent.ACTION_VIEW.equals(intent.getAction()), "Bound continuation did not emit one ACTION_VIEW");
-            require((LocalBridge.ACCOUNT_ORIGIN + "/phone/account?continue=reviewed&enrollmentId=" + ENROLLMENT + "&week=phone")
+            require((LocalBridge.ACCOUNT_ORIGIN + "/phone/account?continue=reviewed&phoneRunId=" + RUN + "&enrollmentId=" + ENROLLMENT + "&week=phone")
                     .equals(intent.getDataString()), "Continuation intent lost its immutable account binding");
             invoke("openNativeContinuation");
             require(accountIntents.get() == 1, "Ready replay opened another browser intent");
