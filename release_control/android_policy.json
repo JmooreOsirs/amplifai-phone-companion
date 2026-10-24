@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "repository": "JmooreOsirs/amplifai-phone-companion",
+  "controlRef": "refs/heads/main",
+  "sourceRef": "refs/heads/release/native",
+  "qualifiedAncestor": "cccef9fe593d5ab72e36c648596a3ff617e876c2",
+  "signingEnvironment": "amplifai-android-signing",
+  "publicationEnvironment": "amplifai-release-publication",
+  "releaseAuthority": "owner-approved-source-release",
+  "operators": ["JmooreOsirs", "bac1876"],
+  "requiredChecks": ["release-control-checks"],
+  "requiredCheckAppId": 15368,
+  "codeOwners": "* @JmooreOsirs @bac1876\n",
+  "releases": {}
+}

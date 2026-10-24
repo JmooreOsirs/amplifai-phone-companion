@@ -1,0 +1,44 @@
+name: Android secret-free build
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact merged release/native source SHA
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: android-build
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Prepare exact Android SDK packages
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0"'
+      - name: Build reviewed source without release credentials
+        env:
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 release_control/android_build.py --source "$SOURCE_COMMIT" --output "$RUNNER_TEMP/android-build"
+      - name: Retain only bounded release inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-build-${{ github.run_id }}
+          path: ${{ runner.temp }}/android-build/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
