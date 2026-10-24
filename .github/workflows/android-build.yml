@@ -42,3 +42,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+      - name: Retain secret-free Gradle failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-build-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/android-build.log
+          if-no-files-found: ignore
+          retention-days: 7
