@@ -31,7 +31,7 @@ Candidate 4 APK SHA-256: `a530181c82619f6feb3966ade285a89878cde20244e7f15326b80a
 
 This is a locally debug-signed test build, visibly labeled **AMPLIFai RC12 test fix**. Package/version metadata remained RC12 for the current server admission check. The cosmetic debug resource and APK are excluded from this production patch. This hash does not identify an official release.
 
-## BrowserStack evidence and remaining checks
+## BrowserStack evidence and scope
 
 Tests used a BrowserStack Pixel 8 Pro running Android 14 and Firefox on that same phone. Ordinary Android call-log and SMS permissions succeeded. A separate disposable-device helper inserted fictional provider records; it did not place calls, send messages, or use a network. Its temporary default-SMS role was restored to Messages. Repeating the fixture insertion added zero duplicate records.
 
@@ -47,4 +47,4 @@ BrowserStack's Chrome routing issue is separate: same-device loopback was interc
 
 ## Release handoff
 
-Apply the focused changes to the canonical RC12 source, run the checks, and complete the remaining live check above. Build and sign the next Android release using the existing official signing identity and coordinated release-admission metadata. Do not publish the debug APK or copy its debug-only launcher label into the production release. No database migration or authorization bypass is required.
+Apply the focused changes to the current canonical Android lineage, preserving subsequent changes, and rerun the checks. Build and sign the next Android release using the existing official signing identity and coordinated release-admission metadata, then smoke-test that signed artifact before publishing. The candidate's collection, save, native completion, and report reopen/reload checks above have passed. Do not publish the debug APK or copy its debug-only launcher label into the production release. No database migration or authorization bypass is required.
