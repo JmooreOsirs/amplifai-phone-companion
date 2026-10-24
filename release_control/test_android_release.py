@@ -1,6 +1,7 @@
 """Fail-closed Android release boundaries; no real signing key or publication."""
 import os
 import json
+import base64
 from pathlib import Path
 import stat
 import subprocess
@@ -34,6 +35,14 @@ class AndroidReleaseTests(unittest.TestCase):
                            ("GITHUB_WORKFLOW_REF", "candidate-controlled-workflow")):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 android.context(self.policy, {**self.env, key: value})
+
+    def test_native_branch_requires_protection_and_exact_readable_owners(self):
+        owners = {"encoding": "base64", "content": base64.b64encode(self.policy["codeOwners"].encode()).decode() + "\n"}
+        android.validate_native_branch(self.policy, {"protected": True}, owners)
+        with self.assertRaises(ValueError):
+            android.validate_native_branch(self.policy, {"protected": False}, owners)
+        with self.assertRaises(ValueError):
+            android.validate_native_branch(self.policy, {"protected": True}, {**owners, "content": "dW50cnVzdGVk"})
 
     def test_unadmitted_versions_and_unqualified_publication_are_rejected(self):
         with self.assertRaises(ValueError):

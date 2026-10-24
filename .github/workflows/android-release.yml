@@ -38,7 +38,6 @@ jobs:
       - name: Validate exact approved build artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
         run: python3 release_control/android_release.py inspect --output "$RUNNER_TEMP/android-inspection"
       - name: Retain same-run protected authorization
         id: authorization
@@ -115,7 +114,6 @@ jobs:
       - name: Publish runtime-qualified artifact and verify public bodies
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
         run: python3 release_control/android_publish.py --output "$RUNNER_TEMP/android-publication"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

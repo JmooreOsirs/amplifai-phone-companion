@@ -93,15 +93,20 @@ def protected_custody(policy: dict, source: str, environment_name: str, other_en
     authority.require_approved_merge(metadata, policy, source, "release/native")
     for ref in ("main", "release/native"):
         encoded = quote(ref, safe="")
-        protection = release.api(f"{REPOSITORY}/branches/{encoded}/protection", audit=True)
+        branch = release.api(f"{REPOSITORY}/branches/{encoded}")
         owners = release.api(f"{REPOSITORY}/contents/.github/CODEOWNERS?ref={encoded}")
-        require(owners.get("encoding") == "base64", "effective CODEOWNERS unavailable")
-        release.validate_branch_custody(policy, protection, base64.b64decode(owners["content"]).decode())
+        validate_native_branch(policy, branch, owners)
     protected = release.api(f"{REPOSITORY}/branches/main")
     for name in [environment_name] + ([other_environment] if other_environment else []):
         env = release.api(f"{REPOSITORY}/environments/{name}")
         branches = release.api(f"{REPOSITORY}/environments/{name}/deployment-branch-policies")
         release.validate_protection({**policy, "signingEnvironment": name}, env, branches, protected, os.environ)
+
+
+def validate_native_branch(policy: dict, branch: dict, owners: dict) -> None:
+    require(branch.get("protected") is True and owners.get("encoding") == "base64"
+            and base64.b64decode("".join(owners.get("content", "").split()), validate=True).decode() == policy["codeOwners"],
+            "protected canonical branch and exact CODEOWNERS required")
 
 
 def validate_authorization_provenance(artifact: dict, jobs: dict, env: dict) -> None:
@@ -126,7 +131,9 @@ def authorization_receipt(policy: dict, spec: dict) -> dict:
             "policySha256": release.digest(ROOT / "android_policy.json"),
             "releaseSpecSha256": hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
             "checkedEnvironments": [policy["signingEnvironment"], policy["publicationEnvironment"]],
-            "custodyChecks": {"main": True, "release/native": True, "signingEnvironment": True, "publicationEnvironment": True}}
+            "custodyChecks": {"main": True, "release/native": True, "signingEnvironment": True, "publicationEnvironment": True},
+            "branchEnforcement": "github-native-protection-and-exact-merged-pr-check-proof",
+            "administrationApiAudit": False}
 
 
 def verify_authorization(policy: dict, spec: dict, root: Path) -> None:
