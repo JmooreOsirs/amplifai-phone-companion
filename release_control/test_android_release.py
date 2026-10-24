@@ -46,13 +46,31 @@ class AndroidReleaseTests(unittest.TestCase):
 
     def test_unadmitted_versions_and_unqualified_publication_are_rejected(self):
         with self.assertRaises(ValueError):
-            android.specification(self.policy, "2026.10.24-rc13")
+            android.specification({**self.policy, "releases": {}}, "2026.10.24-rc13")
         for version in ("../../key", "2026.10.24-rc13\n", "2026.10.24-rc0"):
             with self.assertRaises(ValueError):
                 android.specification(self.policy, version)
         for value in ({}, {"publication": {}}, {"publication": {"runtimeChecks": {}}}):
             with self.assertRaises(ValueError):
                 android_publish.publication_spec(value)
+
+    def test_instrumentation_may_omit_version_but_production_identity_remains_exact(self):
+        apk = self.root / "test.apk"
+        apk.write_bytes(b"metadata fixture")
+        spec = {"build": 26102413, "version": "2026.10.24-rc13"}
+        test = "package: name='ai.satoris.amplifai.phone.test' versionCode='' versionName=''\nsdkVersion:'26'\n"
+        with patch.object(android, "tool", return_value=test):
+            android.apk_metadata(apk, self.root, spec, instrumentation=True)
+            with self.assertRaises(ValueError):
+                android.apk_metadata(apk, self.root, spec)
+        empty_release = test.replace(".phone.test'", ".phone'")
+        with patch.object(android, "tool", return_value=empty_release), self.assertRaises(ValueError):
+            android.apk_metadata(apk, self.root, spec)
+        production = empty_release.replace("versionCode=''", "versionCode='26102413'").replace("versionName=''", "versionName='2026.10.24-rc13'")
+        with patch.object(android, "tool", return_value=production):
+            android.apk_metadata(apk, self.root, spec)
+            with self.assertRaises(ValueError):
+                android.apk_metadata(apk, self.root, spec, instrumentation=True)
 
     def test_artifact_must_match_successful_allowed_build_and_digest(self):
         spec = {"buildArtifact": {"runId": 10, "id": 20, "controlCommit": "a" * 40, "sha256": "b" * 64}}

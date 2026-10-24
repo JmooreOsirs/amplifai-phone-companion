@@ -7,9 +7,43 @@
   "signingEnvironment": "amplifai-android-signing",
   "publicationEnvironment": "amplifai-release-publication",
   "releaseAuthority": "owner-approved-source-release",
-  "operators": ["JmooreOsirs", "bac1876"],
-  "requiredChecks": ["release-control-checks"],
+  "operators": [
+    "JmooreOsirs",
+    "bac1876"
+  ],
+  "requiredChecks": [
+    "release-control-checks"
+  ],
   "requiredCheckAppId": 15368,
   "codeOwners": "* @JmooreOsirs @bac1876\n",
-  "releases": {}
+  "releases": {
+    "2026.10.24-rc13": {
+      "version": "2026.10.24-rc13",
+      "build": 26102413,
+      "sourceCommit": "23f249d6b70662377954d1281e79791fcabe2c6b",
+      "releaseAuthorized": true,
+      "buildArtifact": {
+        "runId": 40136047375,
+        "id": 12576903963,
+        "controlCommit": "150132b2f2943251b124c3d6f3d10c273952981e",
+        "sha256": "5d0201ca54e2d5fd4dfe03367e4e2ee1580281173ea1e3f5284ae0b0f89b64e9"
+      },
+      "unsignedApk": {
+        "bytes": 165734,
+        "sha256": "0528245bac7af6a35f24341b5a4295dca3947431ca5402b791dfec2af7f8f0a5"
+      },
+      "instrumentationApk": {
+        "bytes": 150192,
+        "sha256": "f12b542e14bc2805f74cd7df61f4a6f6276871f49a8504fa42779661d0d618db"
+      },
+      "sourceArchive": {
+        "bytes": 323582,
+        "sha256": "1ebcb6b92024d31f172520501149a7f3b708c70b34dd86f408d80acd4a01aaac"
+      },
+      "previousFeed": {
+        "bytes": 960,
+        "sha256": "c01ddb063ed0f4ce81b3c9d0896ed7239c3b72dd8dcf69bd37f843973abfa6d4"
+      }
+    }
+  }
 }
