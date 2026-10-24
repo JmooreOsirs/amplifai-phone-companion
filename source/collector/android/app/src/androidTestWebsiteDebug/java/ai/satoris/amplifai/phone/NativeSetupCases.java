@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ScrollView;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -425,6 +426,15 @@ final class NativeSetupCases {
             require(get("handoffButton", Button.class).isEnabled(), "Saved report action is disabled");
             require(!get("handoff", HandoffService.LocalBinder.class).snapshot().active(), "Completed display restarted the service");
         });
+        // Activity state and two Choreographer callbacks do not mean the system's
+        // task-return animation has finished compositing its previous snapshot.
+        SystemClock.sleep(1000);
+        main(() -> {
+            JSONArray labels = new JSONArray();
+            collectVisibleLabels(activity.getWindow().getDecorView(), labels);
+            try { receipt.put("confirmedReturnVisibleLabels", labels); }
+            catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+        });
         capture("confirmed-return");
         click("handoffButton");
         main(() -> {
@@ -625,6 +635,19 @@ final class NativeSetupCases {
             } finally { bitmap.recycle(); }
             screenshots.put(name + ".png");
         } catch (SecurityException unavailable) { receipt.put("screenshotUnavailable", true); }
+    }
+    private void collectVisibleLabels(View view, JSONArray labels) {
+        if (!view.isShown()) return;
+        if (view instanceof TextView text && text.getText().length() > 0) {
+            Rect bounds = new Rect();
+            if (view.getGlobalVisibleRect(bounds)) {
+                try { labels.put(new JSONObject().put("text", text.getText().toString())
+                        .put("bounds", bounds.toShortString()).put("alpha", view.getAlpha())); }
+                catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+            }
+        }
+        if (view instanceof ViewGroup group)
+            for (int index = 0; index < group.getChildCount(); index++) collectVisibleLabels(group.getChildAt(index), labels);
     }
     private void settled() throws Exception {
         CountDownLatch frame = new CountDownLatch(1);
