@@ -20,6 +20,7 @@ class AndroidReleaseTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.policy = android.read_json(android.ROOT / "android_policy.json")
         self.env = {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REPOSITORY": android.REPOSITORY,
+                    "GITHUB_RUN_ATTEMPT": "1",
                     "GITHUB_REF": "refs/heads/main", "GITHUB_REF_PROTECTED": "true",
                     "GITHUB_ACTOR": "bac1876", "GITHUB_TRIGGERING_ACTOR": "bac1876",
                     "GITHUB_WORKFLOW_REF": android.REPOSITORY + "/" + android.WORKFLOW + "@refs/heads/main"}
@@ -29,6 +30,7 @@ class AndroidReleaseTests(unittest.TestCase):
         for key, value in (("GITHUB_REF", "refs/heads/release/native"), ("GITHUB_ACTOR", "untrusted"),
                            ("GITHUB_TRIGGERING_ACTOR", "JmooreOsirs"), ("GITHUB_EVENT_NAME", "pull_request"),
                            ("GITHUB_REF_PROTECTED", "false"), ("GITHUB_REPOSITORY", "Osirs-io/amplifai-phone-companion"),
+                           ("GITHUB_RUN_ATTEMPT", "2"),
                            ("GITHUB_WORKFLOW_REF", "candidate-controlled-workflow")):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 android.context(self.policy, {**self.env, key: value})
@@ -46,6 +48,7 @@ class AndroidReleaseTests(unittest.TestCase):
     def test_artifact_must_match_successful_allowed_build_and_digest(self):
         spec = {"buildArtifact": {"runId": 10, "id": 20, "controlCommit": "a" * 40, "sha256": "b" * 64}}
         run = {"id": 10, "head_sha": "a" * 40, "head_branch": "main", "path": android.BUILD_WORKFLOW,
+               "run_attempt": 1,
                "event": "workflow_dispatch", "status": "completed", "conclusion": "success",
                "repository": {"full_name": android.REPOSITORY}, "head_repository": {"full_name": android.REPOSITORY},
                "actor": {"login": "bac1876"}, "triggering_actor": {"login": "bac1876"}}
@@ -103,12 +106,14 @@ class AndroidReleaseTests(unittest.TestCase):
         approved = {"signingRunId": 10, "signingControlCommit": "a" * 40,
                     "signedArtifactId": 20, "signedArtifactSha256": "b" * 64}
         run = {"id": 10, "head_sha": "a" * 40, "head_branch": "main", "path": android.WORKFLOW,
+               "run_attempt": 1,
                "event": "workflow_dispatch", "status": "completed", "conclusion": "success",
                "actor": {"login": "JmooreOsirs"}, "triggering_actor": {"login": "JmooreOsirs"},
                "repository": {"full_name": android.REPOSITORY}, "head_repository": {"full_name": android.REPOSITORY}}
         artifact = {"id": 20, "expired": False, "digest": "sha256:" + "b" * 64, "size_in_bytes": 100,
                     "workflow_run": {"id": 10, "head_sha": "a" * 40}, "created_at": "2026-10-24T20:01:00Z"}
         jobs = {"jobs": [{"name": "android-sign", "conclusion": "success", "started_at": "2026-10-24T20:00:00Z",
+                           "run_attempt": 1,
                            "completed_at": "2026-10-24T20:02:00Z"}]}
         android_publish.signer_provenance(approved, artifact, run, jobs)
         for key, value in (("created_at", "2026-10-24T19:00:00Z"), ("digest", "sha256:" + "c" * 64),
@@ -133,6 +138,7 @@ class AndroidReleaseTests(unittest.TestCase):
         artifact = {"id": 20, "digest": "sha256:" + "a" * 64, "expired": False, "size_in_bytes": 400,
                     "workflow_run": {"id": 10, "head_sha": "b" * 40}, "created_at": "2026-10-24T20:01:00Z"}
         jobs = {"jobs": [{"name": "android-inspect", "conclusion": "success", "started_at": "2026-10-24T20:00:00Z",
+                           "run_attempt": 1,
                            "completed_at": "2026-10-24T20:02:00Z"}]}
         android.validate_authorization_provenance(artifact, jobs, env)
         for change in ({"workflow_run": {"id": 11, "head_sha": "b" * 40}}, {"digest": "sha256:" + "c" * 64},
@@ -141,6 +147,9 @@ class AndroidReleaseTests(unittest.TestCase):
                 android.validate_authorization_provenance({**artifact, **change}, jobs, env)
         with self.assertRaises(ValueError):
             android.validate_authorization_provenance(artifact, {"jobs": []}, env)
+        previous_attempt = {"jobs": [{**jobs["jobs"][0], "run_attempt": 2}]}
+        with self.assertRaises(ValueError):
+            android.validate_authorization_provenance(artifact, previous_attempt, env)
 
     def test_runtime_receipt_is_traceable_and_bound_to_source_and_signed_apk(self):
         spec = {"version": "2026.10.24-rc13", "build": 26102413, "sourceCommit": "a" * 40}

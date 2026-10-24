@@ -50,6 +50,7 @@ def signer_provenance(approved: dict, artifact: dict, run: dict, jobs: dict) -> 
                     and run.get("head_sha") == approved["signingControlCommit"]
                     and run.get("head_branch") == "main" and run.get("path") == android.WORKFLOW
                     and run.get("event") == "workflow_dispatch"
+                    and run.get("run_attempt") == 1
                     and run.get("status") == "completed" and run.get("conclusion") == "success"
                     and run.get("actor", {}).get("login") in ("JmooreOsirs", "bac1876")
                     and run.get("triggering_actor", {}).get("login") == run.get("actor", {}).get("login")
@@ -58,6 +59,7 @@ def signer_provenance(approved: dict, artifact: dict, run: dict, jobs: dict) -> 
                     "signing workflow provenance changed")
     signers = [j for j in jobs.get("jobs", []) if j.get("name") == "android-sign"]
     android.require(len(signers) == 1 and signers[0].get("conclusion") == "success"
+                    and signers[0].get("run_attempt") == 1
                     and signers[0].get("started_at") and signers[0].get("completed_at")
                     and signers[0]["started_at"] <= artifact.get("created_at", "") <= signers[0]["completed_at"]
                     and artifact.get("id") == approved["signedArtifactId"]
@@ -128,7 +130,7 @@ def main() -> None:
     android.require(not args.output.exists(), "publication output already exists")
     artifact = release.api(f"{android.REPOSITORY}/actions/artifacts/{approved['signedArtifactId']}")
     run = release.api(f"{android.REPOSITORY}/actions/runs/{approved['signingRunId']}")
-    jobs = release.api(f"{android.REPOSITORY}/actions/runs/{approved['signingRunId']}/jobs?per_page=100")
+    jobs = release.api(f"{android.REPOSITORY}/actions/runs/{approved['signingRunId']}/attempts/1/jobs?per_page=100")
     signer_provenance(approved, artifact, run, jobs)
     names = android.asset_names(spec["version"])
     with tempfile.TemporaryDirectory(prefix="android-publication-") as temporary:

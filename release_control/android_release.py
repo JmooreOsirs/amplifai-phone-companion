@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,7 @@ def context(policy: dict, env: dict, workflow: str = WORKFLOW) -> None:
             and env.get("GITHUB_REPOSITORY") == REPOSITORY
             and env.get("GITHUB_REF") == "refs/heads/main"
             and env.get("GITHUB_REF_PROTECTED") == "true"
+            and env.get("GITHUB_RUN_ATTEMPT") == "1"
             and env.get("GITHUB_ACTOR") in policy["operators"]
             and env.get("GITHUB_TRIGGERING_ACTOR") == env.get("GITHUB_ACTOR")
             and env.get("GITHUB_WORKFLOW_REF") == REPOSITORY + "/" + workflow + "@refs/heads/main",
@@ -110,6 +112,7 @@ def validate_authorization_provenance(artifact: dict, jobs: dict, env: dict) -> 
             and artifact.get("workflow_run", {}).get("id") == int(env["GITHUB_RUN_ID"])
             and artifact.get("workflow_run", {}).get("head_sha") == env["GITHUB_SHA"]
             and len(inspectors) == 1 and inspectors[0].get("conclusion") == "success"
+            and inspectors[0].get("run_attempt") == 1
             and inspectors[0].get("started_at") and inspectors[0].get("completed_at")
             and inspectors[0]["started_at"] <= artifact.get("created_at", "") <= inspectors[0]["completed_at"],
             "authorization must come from this run's successful protected preflight")
@@ -119,13 +122,17 @@ def authorization_receipt(policy: dict, spec: dict) -> dict:
     return {"authorized": True, "controlCommit": os.environ["GITHUB_SHA"],
             "sourceCommit": spec["sourceCommit"], "version": spec["version"], "build": spec["build"],
             "runId": int(os.environ["GITHUB_RUN_ID"]),
-            "policySha256": release.digest(ROOT / "android_policy.json")}
+            "runAttempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+            "policySha256": release.digest(ROOT / "android_policy.json"),
+            "releaseSpecSha256": hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "checkedEnvironments": [policy["signingEnvironment"], policy["publicationEnvironment"]],
+            "custodyChecks": {"main": True, "release/native": True, "signingEnvironment": True, "publicationEnvironment": True}}
 
 
 def verify_authorization(policy: dict, spec: dict, root: Path) -> None:
     artifact_id = int(os.environ["ANDROID_AUTHORIZATION_ARTIFACT_ID"])
     artifact = release.api(f"{REPOSITORY}/actions/artifacts/{artifact_id}")
-    jobs = release.api(f"{REPOSITORY}/actions/runs/{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100")
+    jobs = release.api(f"{REPOSITORY}/actions/runs/{os.environ['GITHUB_RUN_ID']}/attempts/1/jobs?per_page=100")
     validate_authorization_provenance(artifact, jobs, os.environ)
     archive = root / "authorization.zip"
     release.download(f"https://api.github.com/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip", archive,
@@ -142,6 +149,7 @@ def validate_build(spec: dict, run: dict, artifact: dict) -> None:
     require(run.get("id") == build["runId"] and run.get("head_sha") == build["controlCommit"]
             and run.get("head_branch") == "main" and run.get("path") == BUILD_WORKFLOW
             and run.get("event") == "workflow_dispatch" and run.get("status") == "completed"
+            and run.get("run_attempt") == 1
             and run.get("conclusion") == "success"
             and run.get("repository", {}).get("full_name") == REPOSITORY
             and run.get("head_repository", {}).get("full_name") == REPOSITORY

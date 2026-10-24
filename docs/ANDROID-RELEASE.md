@@ -1,6 +1,6 @@
 # Protected Android release
 
-The publisher remains `JmooreOsirs/amplifai-phone-companion`. Android source comes from a reviewed normal merge into `release/native`; workflow/control source comes from reviewed `main`. Jeff (`JmooreOsirs`) and Brian (`bac1876`) may dispatch. A rerun by a different actor is rejected.
+The publisher remains `JmooreOsirs/amplifai-phone-companion`. Android source comes from a reviewed normal merge into `release/native`; workflow/control source comes from reviewed `main`. Jeff (`JmooreOsirs`) and Brian (`bac1876`) may dispatch. Every operation requires a fresh workflow dispatch (`run_attempt=1`); job/workflow reruns are rejected. Retry a failed operation with a new dispatch after inspecting retained outputs.
 
 ## Environment configuration
 
@@ -11,7 +11,7 @@ The signing environment needs these exact secret names:
 - `ANDROID_RELEASE_PKCS12_BASE64`: the existing official PKCS12 bytes, base64 encoded, transferred privately.
 - `ANDROID_RELEASE_PASSWORD`: the existing store/key password. No replacement key is generated.
 
-The existing publication environment retains its `RELEASE_POLICY_AUDIT_TOKEN`; it is not copied into the new signing environment. A main-only preflight audits both environments and protected source/control merges, then writes a same-run, same-control-commit, policy-hash-bound authorization artifact. The signer verifies that artifact and the successful preflight job before reading the key. The publication environment needs only that existing audit token. It receives no Android signing material. Build jobs receive no environment secrets. All jobs use minimal job-scoped `GITHUB_TOKEN` permissions; only publication can write repository contents.
+The existing publication environment retains its `RELEASE_POLICY_AUDIT_TOKEN`; it is not copied into the new signing environment. A main-only preflight audits both environments and protected source/control merges, then writes a same-run and attempt, same-control-commit, exact-release-spec/policy-hash-bound authorization artifact recording both successful environment and branch-custody checks. The signer verifies that artifact and the successful preflight job before reading the key. The publication environment needs only that existing audit token. It receives no Android signing material. Build jobs receive no environment secrets. All jobs use minimal job-scoped `GITHUB_TOKEN` permissions; only publication can write repository contents.
 
 The fixed alias is `amplifai-android-release`. The RSA-3072 certificate must remain SHA-256 `9f3fa36a8f3b44b8083080828d772cd5990552275a6ffbc68a097826e4e3c4c2`. Private values are never printed or stored in Git, artifacts, issue bodies, or workflow input fields.
 
