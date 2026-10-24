@@ -1,5 +1,6 @@
 """Fail-closed Android release boundaries; no real signing key or publication."""
 import os
+import json
 from pathlib import Path
 import stat
 import subprocess
@@ -125,6 +126,37 @@ class AndroidReleaseTests(unittest.TestCase):
             with patch.object(android_publish.publish, "release_snapshot", return_value=[{"tag_name": tag, "draft": False}]):
                 with self.assertRaises(ValueError):
                     android_publish.release_order(spec)
+
+    def test_preflight_authorization_cannot_be_replayed_from_another_run_or_job(self):
+        env = {"ANDROID_AUTHORIZATION_ARTIFACT_ID": "20", "ANDROID_AUTHORIZATION_ARTIFACT_SHA256": "a" * 64,
+               "GITHUB_RUN_ID": "10", "GITHUB_SHA": "b" * 40}
+        artifact = {"id": 20, "digest": "sha256:" + "a" * 64, "expired": False, "size_in_bytes": 400,
+                    "workflow_run": {"id": 10, "head_sha": "b" * 40}, "created_at": "2026-10-24T20:01:00Z"}
+        jobs = {"jobs": [{"name": "android-inspect", "conclusion": "success", "started_at": "2026-10-24T20:00:00Z",
+                           "completed_at": "2026-10-24T20:02:00Z"}]}
+        android.validate_authorization_provenance(artifact, jobs, env)
+        for change in ({"workflow_run": {"id": 11, "head_sha": "b" * 40}}, {"digest": "sha256:" + "c" * 64},
+                       {"created_at": "2026-10-24T19:00:00Z"}, {"expired": True}):
+            with self.assertRaises(ValueError):
+                android.validate_authorization_provenance({**artifact, **change}, jobs, env)
+        with self.assertRaises(ValueError):
+            android.validate_authorization_provenance(artifact, {"jobs": []}, env)
+
+    def test_runtime_receipt_is_traceable_and_bound_to_source_and_signed_apk(self):
+        spec = {"version": "2026.10.24-rc13", "build": 26102413, "sourceCommit": "a" * 40}
+        approved = {"runtimeReceiptPath": "release_control/android_runtime/2026.10.24-rc13.json",
+                    "signedApkSha256": "b" * 64, "runtimeChecks": dict.fromkeys(android_publish.RUNTIME_CHECKS, True)}
+        receipt = {**spec, "signedApkSha256": approved["signedApkSha256"],
+                   "runtimeChecks": approved["runtimeChecks"], "privateDataUsed": False}
+        path = self.root / approved["runtimeReceiptPath"]
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(receipt))
+        approved["runtimeReceiptSha256"] = android.release.digest(path)
+        with patch.object(android, "ROOT", self.root / "release_control"):
+            self.assertEqual(android_publish.runtime_receipt(spec, approved), receipt)
+            path.write_text(json.dumps({**receipt, "signedApkSha256": "c" * 64}))
+            with self.assertRaises(ValueError):
+                android_publish.runtime_receipt(spec, approved)
 
 
 if __name__ == "__main__":

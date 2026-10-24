@@ -28,7 +28,21 @@ def publication_spec(spec: dict) -> dict:
                     "signer control commit missing")
     for key in ("signingRunId", "signedArtifactId"):
         android.require(type(value.get(key)) is int and value[key] > 0, "signing provenance missing")
+    android.require(value.get("runtimeReceiptPath") == f"release_control/android_runtime/{spec['version']}.json",
+                    "runtime receipt must be a version-specific reviewed control file")
     return value
+
+
+def runtime_receipt(spec: dict, approved: dict) -> dict:
+    path = android.ROOT.parent / approved["runtimeReceiptPath"]
+    android.require(path.is_file() and not path.is_symlink() and path.stat().st_size <= 1024**2
+                    and release.digest(path) == approved["runtimeReceiptSha256"], "runtime evidence file changed")
+    receipt = android.read_json(path)
+    android.require(receipt.get("sourceCommit") == spec["sourceCommit"] and receipt.get("version") == spec["version"]
+                    and receipt.get("build") == spec["build"] and receipt.get("signedApkSha256") == approved["signedApkSha256"]
+                    and receipt.get("runtimeChecks") == approved["runtimeChecks"] and receipt.get("privateDataUsed") is False,
+                    "runtime evidence belongs to a different source or signed artifact")
+    return receipt
 
 
 def signer_provenance(approved: dict, artifact: dict, run: dict, jobs: dict) -> None:
@@ -109,6 +123,7 @@ def main() -> None:
     android.context(policy, os.environ)
     spec = android.specification(policy, os.environ.get("RELEASE_VERSION", ""))
     approved = publication_spec(spec)
+    runtime = runtime_receipt(spec, approved)
     android.protected_custody(policy, spec["sourceCommit"], policy["publicationEnvironment"])
     android.require(not args.output.exists(), "publication output already exists")
     artifact = release.api(f"{android.REPOSITORY}/actions/artifacts/{approved['signedArtifactId']}")
@@ -145,6 +160,8 @@ def main() -> None:
                          "sourceCommit": spec["sourceCommit"], "certificateSha256": android.CERTIFICATE,
                          "signedApkSha256": approved["signedApkSha256"], "runtimeChecks": approved["runtimeChecks"],
                          "runtimeReceiptSha256": approved["runtimeReceiptSha256"],
+                         "runtimeReceiptUrl": f"https://github.com/{android.REPOSITORY}/blob/{os.environ['GITHUB_SHA']}/{approved['runtimeReceiptPath']}",
+                         "runtimeEvidence": runtime,
                          "buildQualification": android.read_json(inputs / "build-qualification.json"),
                          "signingRunId": approved["signingRunId"], "publicationRunId": int(os.environ["GITHUB_RUN_ID"]),
                          "physicalCustomerAcceptance": False}

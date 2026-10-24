@@ -84,7 +84,7 @@ def specification(policy: dict, version: str) -> dict:
     return spec
 
 
-def protected_custody(policy: dict, source: str, environment_name: str) -> None:
+def protected_custody(policy: dict, source: str, environment_name: str, other_environment: str | None = None) -> None:
     def metadata(path):
         return release.api(path.removeprefix("repos/"), allow_list=True)
     authority.require_approved_merge(metadata, policy, os.environ["GITHUB_SHA"], "main")
@@ -95,11 +95,46 @@ def protected_custody(policy: dict, source: str, environment_name: str) -> None:
         owners = release.api(f"{REPOSITORY}/contents/.github/CODEOWNERS?ref={encoded}")
         require(owners.get("encoding") == "base64", "effective CODEOWNERS unavailable")
         release.validate_branch_custody(policy, protection, base64.b64decode(owners["content"]).decode())
-    env = release.api(f"{REPOSITORY}/environments/{environment_name}")
-    branches = release.api(f"{REPOSITORY}/environments/{environment_name}/deployment-branch-policies")
     protected = release.api(f"{REPOSITORY}/branches/main")
-    release.validate_protection({**policy, "signingEnvironment": environment_name}, env, branches,
-                                protected, os.environ)
+    for name in [environment_name] + ([other_environment] if other_environment else []):
+        env = release.api(f"{REPOSITORY}/environments/{name}")
+        branches = release.api(f"{REPOSITORY}/environments/{name}/deployment-branch-policies")
+        release.validate_protection({**policy, "signingEnvironment": name}, env, branches, protected, os.environ)
+
+
+def validate_authorization_provenance(artifact: dict, jobs: dict, env: dict) -> None:
+    inspectors = [job for job in jobs.get("jobs", []) if job.get("name") == "android-inspect"]
+    require(artifact.get("id") == int(env["ANDROID_AUTHORIZATION_ARTIFACT_ID"])
+            and artifact.get("digest") == "sha256:" + env["ANDROID_AUTHORIZATION_ARTIFACT_SHA256"]
+            and artifact.get("expired") is False and 0 < artifact.get("size_in_bytes", 0) <= 1024**2
+            and artifact.get("workflow_run", {}).get("id") == int(env["GITHUB_RUN_ID"])
+            and artifact.get("workflow_run", {}).get("head_sha") == env["GITHUB_SHA"]
+            and len(inspectors) == 1 and inspectors[0].get("conclusion") == "success"
+            and inspectors[0].get("started_at") and inspectors[0].get("completed_at")
+            and inspectors[0]["started_at"] <= artifact.get("created_at", "") <= inspectors[0]["completed_at"],
+            "authorization must come from this run's successful protected preflight")
+
+
+def authorization_receipt(policy: dict, spec: dict) -> dict:
+    return {"authorized": True, "controlCommit": os.environ["GITHUB_SHA"],
+            "sourceCommit": spec["sourceCommit"], "version": spec["version"], "build": spec["build"],
+            "runId": int(os.environ["GITHUB_RUN_ID"]),
+            "policySha256": release.digest(ROOT / "android_policy.json")}
+
+
+def verify_authorization(policy: dict, spec: dict, root: Path) -> None:
+    artifact_id = int(os.environ["ANDROID_AUTHORIZATION_ARTIFACT_ID"])
+    artifact = release.api(f"{REPOSITORY}/actions/artifacts/{artifact_id}")
+    jobs = release.api(f"{REPOSITORY}/actions/runs/{os.environ['GITHUB_RUN_ID']}/jobs?per_page=100")
+    validate_authorization_provenance(artifact, jobs, os.environ)
+    archive = root / "authorization.zip"
+    release.download(f"https://api.github.com/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip", archive,
+                     os.environ["ANDROID_AUTHORIZATION_ARTIFACT_SHA256"], 1024**2, authenticated=True)
+    proof = root / "authorization"
+    proof.mkdir()
+    extract_flat(archive, proof, {"authorization.json"})
+    require(read_json(proof / "authorization.json") == authorization_receipt(policy, spec),
+            "authorization receipt does not match current control/source/policy")
 
 
 def validate_build(spec: dict, run: dict, artifact: dict) -> None:
@@ -199,11 +234,11 @@ def asset_names(version: str) -> dict:
 
 
 def sign(policy: dict, spec: dict, output: Path, tools: Path) -> None:
-    protected_custody(policy, spec["sourceCommit"], policy["signingEnvironment"])
     names = asset_names(spec["version"])
     require(not output.exists(), "signing output already exists")
     with tempfile.TemporaryDirectory(prefix="amplifai-android-keys-", dir=os.environ["RUNNER_TEMP"]) as tmp:
         private = Path(tmp)
+        verify_authorization(policy, spec, private)
         inspect_build(policy, spec, private)
         inputs = private / "inputs"
         apk_metadata(inputs / "app-website-release-unsigned.apk", tools, spec)
@@ -254,10 +289,11 @@ def main() -> None:
     if args.mode == "sign":
         sign(policy, spec, args.output, Path(os.environ["ANDROID_HOME"]) / "build-tools/36.0.0")
     else:
+        protected_custody(policy, spec["sourceCommit"], policy["signingEnvironment"], policy["publicationEnvironment"])
         with tempfile.TemporaryDirectory(prefix="android-inspect-") as tmp:
-            receipt = inspect_build(policy, spec, Path(tmp))
+            inspect_build(policy, spec, Path(tmp))
         args.output.mkdir()
-        (args.output / "inspection.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        (args.output / "authorization.json").write_text(json.dumps(authorization_receipt(policy, spec), indent=2) + "\n")
 
 
 if __name__ == "__main__":

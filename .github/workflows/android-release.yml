@@ -22,9 +22,14 @@ env:
   PYTHONDONTWRITEBYTECODE: '1'
 jobs:
   inspect:
+    name: android-inspect
     if: github.repository == 'JmooreOsirs/amplifai-phone-companion' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    environment: amplifai-release-publication
     timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.authorization.outputs.artifact-id }}
+      artifact-digest: ${{ steps.authorization.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -33,7 +38,16 @@ jobs:
       - name: Validate exact approved build artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
         run: python3 release_control/android_release.py inspect --output "$RUNNER_TEMP/android-inspection"
+      - name: Retain same-run protected authorization
+        id: authorization
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-inspection-${{ github.run_id }}
+          path: ${{ runner.temp }}/android-inspection/authorization.json
+          if-no-files-found: error
+          retention-days: 1
   sign:
     name: android-sign
     needs: inspect
@@ -55,7 +69,8 @@ jobs:
       - name: Sign exact admitted APK and feed without executing candidate code
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_POLICY_AUDIT_TOKEN: ${{ secrets.RELEASE_POLICY_AUDIT_TOKEN }}
+          ANDROID_AUTHORIZATION_ARTIFACT_ID: ${{ needs.inspect.outputs.artifact-id }}
+          ANDROID_AUTHORIZATION_ARTIFACT_SHA256: ${{ needs.inspect.outputs.artifact-digest }}
           ANDROID_RELEASE_PKCS12_BASE64: ${{ secrets.ANDROID_RELEASE_PKCS12_BASE64 }}
           ANDROID_RELEASE_PASSWORD: ${{ secrets.ANDROID_RELEASE_PASSWORD }}
         run: python3 release_control/android_release.py sign --output "$RUNNER_TEMP/android-signed"
