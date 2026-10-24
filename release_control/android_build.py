@@ -76,6 +76,50 @@ def unit_results(directory: Path, minimum: int) -> dict:
     return counts
 
 
+def updater_fixtures(project: Path, scratch: Path, clean: dict) -> dict:
+    """Prepare public/synthetic test-only APKs without any release credential."""
+    assets = project / "app/src/androidTest/assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    historical = assets / "rc7-signed.apk"
+    url = ("https://github.com/" + android.REPOSITORY + "/releases/download/"
+           "android-2026.10.08-rc7/AMPLIFai-Phone-Android-2026.10.08-rc7.apk")
+    expected = "e4ce5ad5397fa82449f10e74f86b4070ae20fc9c1650329fc6472b842676b777"
+    release.download(url, historical, expected, 108317)
+    android.require(historical.stat().st_size == 108317, "historical fixture size changed")
+    tools = Path(clean["ANDROID_HOME"]) / "build-tools/36.0.0"
+    manifest = project / "app/src/androidTest/fixtures/wrong-signer/AndroidManifest.xml"
+    android.require(manifest.is_file(), "synthetic fixture source is missing")
+    scratch.mkdir(mode=0o700)
+    key = scratch / "synthetic-only.p12"
+    unsigned = scratch / "synthetic-only-unsigned.apk"
+    wrong = assets / "rc8-debug.apk"
+
+    def run(args):
+        subprocess.run([str(arg) for arg in args], env=clean, check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=90)
+
+    try:
+        run([tools / "aapt", "package", "-f", "-M", manifest, "-I",
+             Path(clean["ANDROID_HOME"]) / "platforms/android-37.0/android.jar", "-F", unsigned])
+        run([Path(clean["JAVA_HOME"]) / "bin/keytool", "-genkeypair", "-noprompt",
+             "-keystore", key, "-storetype", "PKCS12", "-storepass", "synthetic-test-only",
+             "-keypass", "synthetic-test-only", "-alias", "synthetic-test-only", "-keyalg", "RSA",
+             "-keysize", "2048", "-validity", "2", "-dname", "CN=Synthetic updater rejection fixture"])
+        key.chmod(0o600)
+        run([tools / "apksigner", "sign", "--ks", key, "--ks-pass", "pass:synthetic-test-only",
+             "--key-pass", "pass:synthetic-test-only", "--v4-signing-enabled", "false", "--out", wrong, unsigned])
+        result = subprocess.check_output([str(tools / "apksigner"), "verify", "--verbose", "--print-certs", str(wrong)],
+                                         env=clean, text=True, stderr=subprocess.PIPE, timeout=30)
+        android.require("Number of signers: 1" in result and android.CERTIFICATE not in result,
+                        "synthetic fixture must have a different signer")
+        android.require(0 < wrong.stat().st_size < 65536, "synthetic fixture is not bounded")
+        return {"historical": {"url": url, "sha256": expected, "bytes": 108317},
+                "wrongSigner": {"sha256": release.digest(wrong), "bytes": wrong.stat().st_size,
+                                "manifestSha256": release.digest(manifest), "productionIdentityUsed": False}}
+    finally:
+        shutil.rmtree(scratch)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", required=True)
@@ -105,6 +149,7 @@ def main() -> None:
                     and 26102312 < build < 2**31, "candidate release identity must advance RC12")
     clean = {key: os.environ[key] for key in ("PATH", "HOME", "JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "LANG", "TMPDIR") if key in os.environ}
     clean["GRADLE_USER_HOME"] = str(Path(os.environ["RUNNER_TEMP"]) / "android-gradle")
+    fixtures = updater_fixtures(project, Path(os.environ["RUNNER_TEMP"]) / "android-fixture-key", clean)
     with (Path(os.environ["RUNNER_TEMP"]) / "android-build.log").open("w") as log:
         result = subprocess.run([str(project / "gradlew"), "--no-daemon", "--no-configuration-cache", "--no-build-cache",
                                  "testWebsiteDebugUnitTest", "testPlayDebugUnitTest", "lintWebsiteRelease",
@@ -124,6 +169,7 @@ def main() -> None:
     receipt = {"schema": 1, "sourceCommit": args.source, "version": version, "build": build,
                "buildRunId": int(os.environ["GITHUB_RUN_ID"]), "privateDataUsed": False,
                "checks": {"websiteUnit": True, "playUnit": True, "lint": True, "unsignedBuild": True},
+               "updaterFixtures": fixtures,
                "unitTests": counts, "files": {p.name: {"bytes": p.stat().st_size, "sha256": release.digest(p)} for p in args.output.iterdir()}}
     (args.output / "build-qualification.json").write_text(json.dumps(receipt, indent=2) + "\n")
 

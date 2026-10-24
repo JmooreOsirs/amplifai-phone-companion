@@ -28,4 +28,6 @@ The fixed alias is `amplifai-android-release`. The RSA-3072 certificate must rem
 
 All third-party Actions are pinned. The build uses the committed Gradle wrapper and exact Android SDK package names; its Gradle subprocess receives a clean environment without GitHub or signing credentials. Signer temporary PKCS12 files are owner-only and removed in both process cleanup and an always-run workflow step. Hosted runners are disposable.
 
+Updater instrumentation assets are prepared only in the secret-free build. The historical RC7 APK is downloaded with its exact existing SHA-256 and size. A manifest-only wrong-signer APK is generated with a temporary synthetic test key, verified to have a different certificate, and bundled only into instrumentation. The key is deleted; its APK hash and manifest hash appear in build qualification. Neither generated APK nor a test key is tracked in product source.
+
 An interrupted publication can leave an exact tag or draft. The next run intentionally refuses to overwrite it. Inspect its identity and saved receipts before choosing a recovery action. Restoring prior website/feed pointers does not downgrade an installed app; an installed-app correction requires a higher build.
