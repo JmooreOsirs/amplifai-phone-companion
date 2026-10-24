@@ -173,6 +173,8 @@ def inspect_build(policy: dict, spec: dict, root: Path) -> dict:
 
 
 def apk_metadata(apk: Path, tools: Path, spec: dict, *, instrumentation: bool = False) -> None:
+    require(apk.is_file() and not apk.is_symlink() and 0 < apk.stat().st_size <= MAX_APK,
+            "APK is outside the signed update byte bound")
     text = tool([tools / "aapt", "dump", "badging", apk])
     package = PACKAGE + ".test" if instrumentation else PACKAGE
     match = re.search(r"^package: name='([^']+)' versionCode='([0-9]+)' versionName='([^']+)'", text, re.M)
@@ -219,6 +221,7 @@ def sign(policy: dict, spec: dict, output: Path, tools: Path) -> None:
                                   ("app-website-debug-androidTest.apk", "instrumentation.apk")):
             tool([tools / "apksigner", "sign", "--ks", key, "--ks-key-alias", ALIAS,
                              "--ks-pass", "env:ANDROID_RELEASE_PASSWORD", "--key-pass", "env:ANDROID_RELEASE_PASSWORD",
+                             "--v4-signing-enabled", "false",
                              "--out", output / target, inputs / original], signing=True)
             signature(output / target, tools)
         apk_metadata(output / names["apk"], tools, spec)
