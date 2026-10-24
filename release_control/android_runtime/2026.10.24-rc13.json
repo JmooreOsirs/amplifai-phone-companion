@@ -1,0 +1,318 @@
+{
+  "schema": 1,
+  "sourceCommit": "93cc302cc2f6bc1ebe070256f0a35597d9640852",
+  "version": "2026.10.24-rc13",
+  "build": 26102413,
+  "signedApkSha256": "c04cfa3a5a33caf6d61e232e0abdc9e2f8ed1b7250f99c485ec6224ac5e428d0",
+  "instrumentationSha256": "772808bcc3d803966e5bf2b978f2c6ef86c36f9ad8982267f8a61776d41732d1",
+  "signingRunId": 40137463102,
+  "signedArtifactId": 12577911665,
+  "runtimeChecks": {
+    "api29": true,
+    "api36": true,
+    "bulkSelectionIme": true,
+    "cleanup": true,
+    "expiryRevocation": true,
+    "nativeHandoffAck": true,
+    "syntheticDataOnly": true,
+    "upgrade": true
+  },
+  "privateDataUsed": false,
+  "hostedAccountSave": false,
+  "physicalDeviceAcceptance": false,
+  "networkIsolation": "Owned disposable emulators; airplane/data/wifi disabled and no WAN route; loopback retained.",
+  "scenarioCount": 25,
+  "additionalChecks": {
+    "updaterArchiveNegatives": true,
+    "installerCallbackReplayAndVersionReconciliation": true,
+    "exactRunAccountContinuation": true,
+    "backgroundCompletedReturn": true,
+    "renderedCompletionAndImeReviewed": true
+  },
+  "visualReview": [
+    "api29-native_setup_completion_v2-final/confirmed-return.png",
+    "api36-native_setup_completion_v2-final/confirmed-return.png",
+    "api29-selection_ime_api29_360-final/ime-review.png",
+    "api36-selection_ime_320_large-final/ime-review.png"
+  ],
+  "evidence": [
+    {
+      "api": 29,
+      "scenario": "account_connect",
+      "passed": true,
+      "receiptSha256": "cc3d0e9fa6c3a1d6953691a8cf3734b7597926048f223c7379a101f784ca62c5",
+      "instrumentationLogSha256": "07f3e16d8c09b53a48b63cb032eabee3011a0a727b959496bebf18825818da6d"
+    },
+    {
+      "api": 29,
+      "scenario": "active_recreation",
+      "passed": true,
+      "receiptSha256": "ad5217a4056b4ee993acbcd00786ab7387f8b911f2ab7442d82705d112236fa9",
+      "instrumentationLogSha256": "e25357fe38c603f9f582fdd92fc2e5ceae9c920a7ff4fcf6083d9e0bcc5febc3"
+    },
+    {
+      "api": 29,
+      "scenario": "bridge_all",
+      "passed": true,
+      "receiptSha256": "cca4d5cb98358ae1eed4b7c36caed6c2bee80cc33c2975e327a5f6142d5ad3b1",
+      "instrumentationLogSha256": "0a7b80ed9a0912b67c092e1441a059f053ab8025bc3bd08a2d9e9e91c11c4edf"
+    },
+    {
+      "api": 29,
+      "scenario": "bulk_selection",
+      "passed": true,
+      "receiptSha256": "52f6d8a96d899006075d23a325fa4b9c0efd5abded91e02388c914a6156b7f52",
+      "instrumentationLogSha256": "d5b8d5e61e3926eaaf7f56a2b5c6768caedc017e7aa383f2cbf21111ccc1bb34"
+    },
+    {
+      "api": 29,
+      "scenario": "native_setup_completion_v2",
+      "passed": true,
+      "receiptSha256": "a7835ef7fc91563bf81e6fbb026be735356ac5e8dcfe44e0a47f943da2ad47be",
+      "instrumentationLogSha256": "bfab21de4b0c3041485355f0fda2769012406a68703736a0bf718b91d013d99e",
+      "imageSha256": {
+        "disclosure.png": "8224aa423be653db499670e196fe7cb5303c57bbdba11794e44dde5a4708685d",
+        "selection.png": "87fe051ae7c1bc37a787ad9cbe5671677e420aeaa4979cda54a3210215edda2b",
+        "review.png": "0f5706ec904dcab6803a3c0cf23ce9ba77a125b42aec9efc82bc59bd9e23e036",
+        "received.png": "78dc378dbe00118900b6f5479a10bd2ebcc820bcdc616ccb33444f96be677560",
+        "binding-pending.png": "4489371a5dded79d2376601f7a0ea60cdec3bda3e792b18f09cef3c9f6cfed8b",
+        "review-end.png": "58e10505709a5b0be0b7dab85cb2cef4f9730f080567ced65b250b03d9d8c0c1",
+        "confirmed-return.png": "9561a7a1bae94a773676e81007361af60413dd3dabb3da613405d199ca22d446",
+        "service-ready.png": "960125bb8b665493542a24e4e3eae51faa0db01eeb41758ff22e2d92753e6c51",
+        "prepared.png": "2ec1c6918b940d59958208af668a49df1719bc1a97eaa77ac335f6ef32592dde"
+      }
+    },
+    {
+      "api": 29,
+      "scenario": "native_setup_service_v2",
+      "passed": true,
+      "receiptSha256": "69479976b6c29c890ef7e62304d8386a4b901ea136dc7724c3117410d2acbd93",
+      "instrumentationLogSha256": "60e3acc6800b898de853d055b11aa06e43e5fad5da616af947375a5766f3914e",
+      "imageSha256": {
+        "disclosure.png": "8224aa423be653db499670e196fe7cb5303c57bbdba11794e44dde5a4708685d",
+        "selection.png": "87fe051ae7c1bc37a787ad9cbe5671677e420aeaa4979cda54a3210215edda2b",
+        "review.png": "0f5706ec904dcab6803a3c0cf23ce9ba77a125b42aec9efc82bc59bd9e23e036",
+        "received.png": "78dc378dbe00118900b6f5479a10bd2ebcc820bcdc616ccb33444f96be677560",
+        "binding-pending.png": "4489371a5dded79d2376601f7a0ea60cdec3bda3e792b18f09cef3c9f6cfed8b",
+        "stopped.png": "8c87a0a9679095683efee2f270b2e8ef848e82a38b767698ed2b0b68dc7bfb3c",
+        "review-end.png": "58e10505709a5b0be0b7dab85cb2cef4f9730f080567ced65b250b03d9d8c0c1",
+        "service-ready.png": "f7445a9182aa1e457dc6051f3e39bd166d5bddd34bdbab86d4ad7787572266ed",
+        "prepared.png": "2ec1c6918b940d59958208af668a49df1719bc1a97eaa77ac335f6ef32592dde"
+      }
+    },
+    {
+      "api": 29,
+      "scenario": "native_setup_v2",
+      "passed": true,
+      "receiptSha256": "3c5b3371639df1a579229231f83990f52dd1bd961322dfb1b963aa753b4b73a5",
+      "instrumentationLogSha256": "731ba6fa243ef1a4ce0217657d676889b4eeeee59f71a4da6654c0379c0fb603",
+      "imageSha256": {
+        "disclosure.png": "612b26af415c83c7e61bf3f259c56d1f43c8f3b69866c094575dd8d6f695cbad",
+        "selection.png": "6e66e4b53c5fd848de1648eada00c98b5e552a15ee399d6e75138609a82b366f",
+        "review.png": "e1d12ad991149669b14312448df96bcb48a3f1815a2ec7828aad494347837287",
+        "stopped.png": "52776a4ef267010c6c9c741714b7721bc11bc447f2c2dce7500aaf6c7e505c9e",
+        "review-end.png": "2ffe6da4c418611a68ad847a132e861a6375995e2c794b2c33b1c7a6971f6588",
+        "prepared.png": "ea860a41df6acab4381b2c16f55e1efb597439569d65253f7e048913b0c3cb24"
+      }
+    },
+    {
+      "api": 29,
+      "scenario": "recreation_storage",
+      "passed": true,
+      "receiptSha256": "16015b77f742f7ba62474ebfd23b65f9fc347ae399df828edad9a8fbf1d677df",
+      "instrumentationLogSha256": "10a7107fc8553d16ebeec8740a2a3a1f96d112852b24691d3948bf48c817c7fc"
+    },
+    {
+      "api": 29,
+      "scenario": "selection_ime_api29_360",
+      "passed": true,
+      "receiptSha256": "166863677ae9cb37a114c90620e97a72b02cd32f3718c83fb7c1c71034f9e6f3",
+      "instrumentationLogSha256": "f6be5c3e5fb5321449884d03bb9ddec54cda25341d51a630334042e2db0e319c",
+      "imageSha256": {
+        "review.png": "382ec0027585b00c00dce756b12d4167ec2e0d99ac5a84cdd7e83ae87a3dba16",
+        "ime-filtered.png": "63f70e021dce1587d85062b6c086fe658f3197f6b39ba6d70d7d0ffc59ca2009",
+        "review-accessible.png": "6fa1da47332ba74026f3c9220953c9360b2f46aea447281318ac32169eb34bd0",
+        "ime-dismissed.png": "4d6e2eaf057f2e4cb1c79acf56379e3401f06bce133794cf21b73e7156d5fa65",
+        "ime-review.png": "7b0674b51ccf00730d51f7f825a2cfb221046fcfee41326dee0d377ee17d5338",
+        "ime-cancel.png": "a6d14b39ade44de25a522ff5dacb76034c49afbc2bc09869530082c8f2d94302",
+        "review-from-ime.png": "d45850e9616445b72abc0ddfbb78d1964b726ff5efa31d97f0bd74d8e5124017",
+        "ime-handoff.png": "63a25b7e74952e56adf7fbd6fb67c7312ed2eaab0f91952e7cd94663e8bcc084"
+      }
+    },
+    {
+      "api": 29,
+      "scenario": "selection_layout_320_large",
+      "passed": true,
+      "receiptSha256": "9dc73554fb7b2b574811d75fefe6b06243bcd152246a95ad23d9ce90fc2a0a34",
+      "instrumentationLogSha256": "7a131f9a185e9dfec6144975f1a9328f11cfc114b296a46543377f8db46b33cc",
+      "imageSha256": {
+        "review.png": "66b6918aff8beb5cec8323a04b5b706516c9308a241324be06408f7482105c9d",
+        "error-details.png": "9a421870b7f09ca06bdcf62f89f9dbd84b766a3e1e4c02c5d782b19e033b0ba7",
+        "review-accessible.png": "76faf674a8fb0fb068ebc23af613dfc098efe2654be1af6169c204c69385f49a",
+        "scrolled.png": "dac4ccff31496c00e32c9bd3d511be75c5da878c89779b9694083f6148b6aafb",
+        "populated.png": "2c3cba9210e0cb775abc9e8ec5f6bb85d866601cd938328319c9260f1ac5bbf4"
+      }
+    },
+    {
+      "api": 29,
+      "scenario": "updater",
+      "passed": true,
+      "receiptSha256": "a5e89cf81bd7eb8beca51ef8b2abd3aecbd7f0fe8c9a4b8da6cf0c2ef6bdc9a5",
+      "instrumentationLogSha256": "5c61c8fa11cedd12aab050da1dabcbe3a5ab51c4a8e446ace691fb848dcba0bc"
+    },
+    {
+      "api": 29,
+      "scenario": "upgrade",
+      "passed": true,
+      "receiptSha256": "527bdbf0738ffda781c0e576c07842cb6c6f35ec597f9d8aee66266013ac3e71"
+    },
+    {
+      "api": 36,
+      "scenario": "account_connect",
+      "passed": true,
+      "receiptSha256": "06d63ffd446cf00d660973a44a16af30fb6370f583e12c440cd1a307ff073616",
+      "instrumentationLogSha256": "07f3e16d8c09b53a48b63cb032eabee3011a0a727b959496bebf18825818da6d"
+    },
+    {
+      "api": 36,
+      "scenario": "active_recreation",
+      "passed": true,
+      "receiptSha256": "e41a74edc4aaf8aa157308ff7ef3ad1deff4cbc8d12b2ea7eca905c80a8f4ae5",
+      "instrumentationLogSha256": "e25357fe38c603f9f582fdd92fc2e5ceae9c920a7ff4fcf6083d9e0bcc5febc3"
+    },
+    {
+      "api": 36,
+      "scenario": "bridge_all",
+      "passed": true,
+      "receiptSha256": "46dcfae7553cbc428e6878e4892525310fe7e1722243a109324069436c672a2a",
+      "instrumentationLogSha256": "0a7b80ed9a0912b67c092e1441a059f053ab8025bc3bd08a2d9e9e91c11c4edf"
+    },
+    {
+      "api": 36,
+      "scenario": "bulk_selection",
+      "passed": true,
+      "receiptSha256": "45c30332fe9a2d7e2c4945b4d297c5a71f49b6c0e408fa579d8853a072e19c92",
+      "instrumentationLogSha256": "d5b8d5e61e3926eaaf7f56a2b5c6768caedc017e7aa383f2cbf21111ccc1bb34"
+    },
+    {
+      "api": 36,
+      "scenario": "native_setup_completion_v2",
+      "passed": true,
+      "receiptSha256": "a4eda154827ee1d6f794c777b4407724df3fcd901c73b2c6479a7213274e9c36",
+      "instrumentationLogSha256": "bfab21de4b0c3041485355f0fda2769012406a68703736a0bf718b91d013d99e",
+      "imageSha256": {
+        "disclosure.png": "6582fed655a45b3517a19ed31f420ebbec1c8b55ea3c96f0299bb674ad2232a0",
+        "selection.png": "568a676090288ba5c2876208439d02743345abdd0e123d2f8d6e995db5b928d2",
+        "review.png": "d6d114764fee1c6f2ffb6ddc444658f20446de7b166ac00f986c3fb712bc7f62",
+        "received.png": "7a19f4411c2a4928b844bf3fed50d9f3d14825d090ec1ea4c1882c5ae8f75eac",
+        "binding-pending.png": "93579671bb7129de9f8f0ba45a0b8d3b2993371c444301cff899944b8f81eadb",
+        "review-end.png": "da8321ce32a672311fa75233771614e1107ada0553e6d9e8a9991aa426a729e0",
+        "confirmed-return.png": "374e7f05b5bbd0744c2bef1c0327e4d356579a177bc0aa11508adf6175c7ce89",
+        "service-ready.png": "45ae1ea576d76b99e4a51fd1624e48e7e6e5b298e8a311f0ec1901e82965a8f6",
+        "prepared.png": "b2d23eb0e3b0b57edc77e2238d542e1ac18b457ac27ae623416a147e6fe48f06"
+      }
+    },
+    {
+      "api": 36,
+      "scenario": "native_setup_service_v2",
+      "passed": true,
+      "receiptSha256": "9c131bfeabfae4c3ca19d35add32811ca5b000310752583cc071e4c8cf805348",
+      "instrumentationLogSha256": "60e3acc6800b898de853d055b11aa06e43e5fad5da616af947375a5766f3914e",
+      "imageSha256": {
+        "disclosure.png": "b77864e3cdc0df8846a123d403d71e8a7942b73befb1be942f9e7400b37d84f6",
+        "selection.png": "568a676090288ba5c2876208439d02743345abdd0e123d2f8d6e995db5b928d2",
+        "review.png": "1724a5ac72fb0d9c5670a743de480c78bab813e5d24a3d483bece1edc29bc2af",
+        "received.png": "7a19f4411c2a4928b844bf3fed50d9f3d14825d090ec1ea4c1882c5ae8f75eac",
+        "binding-pending.png": "93579671bb7129de9f8f0ba45a0b8d3b2993371c444301cff899944b8f81eadb",
+        "stopped.png": "216aec80227d7bfb706c3d71e08521aed616f40cb0b6aa66fa1441260ac6af30",
+        "review-end.png": "da8321ce32a672311fa75233771614e1107ada0553e6d9e8a9991aa426a729e0",
+        "service-ready.png": "45ae1ea576d76b99e4a51fd1624e48e7e6e5b298e8a311f0ec1901e82965a8f6",
+        "prepared.png": "b2d23eb0e3b0b57edc77e2238d542e1ac18b457ac27ae623416a147e6fe48f06"
+      }
+    },
+    {
+      "api": 36,
+      "scenario": "native_setup_v2",
+      "passed": true,
+      "receiptSha256": "b586847c166bf26faa042708ba375ff2586cabad8d76fba694060d3746ba4157",
+      "instrumentationLogSha256": "731ba6fa243ef1a4ce0217657d676889b4eeeee59f71a4da6654c0379c0fb603",
+      "imageSha256": {
+        "disclosure.png": "406c5ce155600040b3e4e0b42a563f059cd862ba370c99de0b23fdd9c4e0c22b",
+        "selection.png": "aeb26f6912d0a06bae965f02c47f915a906cc800e93e0494a7c1c6f927925a57",
+        "review.png": "dfc8cca0eab589b9b679c6c6ad85ce03e2ce83b0a367c49753b94835f1e55d69",
+        "stopped.png": "40a265cf52dd1a71c7bef4d74c6ad7ce6bad4ac812f5a5c1b417b6833f504bc7",
+        "review-end.png": "13d67a078bf31fee53e8614d91a78a6ce55a056e05d0664540b58ed5b3f192ad",
+        "prepared.png": "71cb4b73d502949f4aa51ba8b248fcf892c4961c4804a8ca82ec89db52976670"
+      }
+    },
+    {
+      "api": 36,
+      "scenario": "recreation_storage",
+      "passed": true,
+      "receiptSha256": "1cfbb4cb2538a8d95389a3f7c7eeff99b3b71810a33130da8fd86154fc28a2a6",
+      "instrumentationLogSha256": "10a7107fc8553d16ebeec8740a2a3a1f96d112852b24691d3948bf48c817c7fc"
+    },
+    {
+      "api": 36,
+      "scenario": "selection_ime_320_large",
+      "passed": true,
+      "receiptSha256": "57f3c9699439b3eb89fc3547c49c1485053118dda05e4b6a44dac4ea6ea52234",
+      "instrumentationLogSha256": "0d54265d128e3e7d4b305155596be859bab113059b180f5bed41535e45460a65",
+      "imageSha256": {
+        "review.png": "eaa4452617a70332d19d11bfaf794d0e517ce3732851a48881c386556eb326b8",
+        "ime-filtered.png": "6a819a23a8304688fddf1a56b614975e3306d89238fceb2c7e12abc0f9bd8460",
+        "review-accessible.png": "1bccab9846b6369133fa009c6015dfa2593a0dc1b11b0182e53c99e0a22be7f6",
+        "ime-dismissed.png": "38bd8b0567b8e6abdd33550a8d128d3369a62ec36ab9851ca9e2fd2ebef88557",
+        "ime-review.png": "f8c971de13752b916c4d8a1074aaebfeecef13554b2843f1d0fb60fa7b8eaa8f",
+        "ime-cancel.png": "e5d44070ec1966918e408ff21428ea6b01ffdf66d2347df86dd60c20f8b8a3ad",
+        "review-from-ime.png": "25804eccd0c2b9c2a40fc477c3efa00d04c6541e6058225a90f18bf5ed29a76a",
+        "ime-handoff.png": "a64b6f02224e57389184866497bd09546eaae79504dae4c9b8a7f381e01e3ae6"
+      }
+    },
+    {
+      "api": 36,
+      "scenario": "selection_ime_360",
+      "passed": true,
+      "receiptSha256": "6378782972e90ac50528acf737f41e0210e14357b973ee010148b7fb61b6d3e6",
+      "instrumentationLogSha256": "6726b9590a1947768f228c18f3c20b64831cf39d58a47614e8eb63ef74a7f83b",
+      "imageSha256": {
+        "review.png": "40fa8bc73d2d85fad70fbb426ff87a146828c9a33cb68709a70d5a66f61673f9",
+        "ime-filtered.png": "f7413d03a1c30dfbd8ac1b3c6e8bcae943125fdfdc99d0e0d2196bdada4587b1",
+        "review-accessible.png": "8462ce77be36871cc5783d3c179a0c7fe611ebefd6eb5a16e6571fc53eec9924",
+        "ime-dismissed.png": "82edef95760f1f6ffc3fec0b9a13783f06bcdae4ee4610d760666e69de3222a6",
+        "ime-review.png": "e19bbdbb08b1270e0cf529c8706826832fe386d32b00f83dddc983ea2a32cfd2",
+        "ime-cancel.png": "38373f0b508c471132a3a9d38e09c99a4e24be7727b644338f881e56ad925420",
+        "review-from-ime.png": "1c76bd9d335abcb7fc6c4f76a75354ae7a9b92642e93e13f7f48153ae4754799",
+        "ime-handoff.png": "a6c76282113261cf770c33f208602185d7f7bd7939c8c149c7588c00ccca58cd"
+      }
+    },
+    {
+      "api": 36,
+      "scenario": "selection_layout_320_large",
+      "passed": true,
+      "receiptSha256": "51cb4a876da7175c00f21c3f67556867d2b78f681d62e9bb15620ac79f7ae8dc",
+      "instrumentationLogSha256": "51698514acfdfa3207423a4d941f7d6c1b512bc1be5b194843f98bf9ec35c190",
+      "imageSha256": {
+        "review.png": "99265522fdc74d9b6fee848406de5027b4af2a470d5689ab94771ca25b24257a",
+        "error-details.png": "74c813aa8c76fbe1fa7c45e71ad7d11ba4f20879f6b00807d7185a15f09353e0",
+        "review-accessible.png": "56d6214b97ef8cfc955059515c3af05872539474bf41f60aa0506022da1b6605",
+        "scrolled.png": "2c107811fec85cbc9d3c9b975a5638a9172cc56a0894914c3a897d13bf2feacb",
+        "populated.png": "21f924bb3ebb62fbbb470bea3f368da38cb2be1670a728794062b8c04adeda72"
+      }
+    },
+    {
+      "api": 36,
+      "scenario": "updater",
+      "passed": true,
+      "receiptSha256": "c6c577dcb85d9ffb935927ba87af7b3657483489a8542df401e517bd9824678a",
+      "instrumentationLogSha256": "5c61c8fa11cedd12aab050da1dabcbe3a5ab51c4a8e446ace691fb848dcba0bc"
+    },
+    {
+      "api": 36,
+      "scenario": "upgrade",
+      "passed": true,
+      "receiptSha256": "2392e741be24762014bf720711f7c80f03cc57f55727fdc7a1ed3dcda82d86f0"
+    }
+  ],
+  "scope": "Synthetic protocol, local store and emulator validation; no customer/provider reads or real account Save; manual ADB upgrade is distinct from consumer installer UX."
+}
