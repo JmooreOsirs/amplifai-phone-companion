@@ -85,14 +85,19 @@ def verify_feed(feed: Path, apk: Path, spec: dict, root: Path) -> None:
                     and all(line.endswith("\n") for line in lines) and lines[-1].startswith("signature="),
                     "signed feed metadata differs from the exact APK")
     signature = base64.b64decode(lines[-1][10:].strip(), validate=True)
+    verify_feed_signature("".join(lines[:9]).encode("ascii"), signature, root)
+
+
+def verify_feed_signature(body: bytes, signature: bytes, root: Path) -> None:
     android.require(len(signature) == 384, "unexpected RSA signature size")
+    certificate = android.ROOT / "android_update_publisher.der"
+    android.require(release.digest(certificate) == android.CERTIFICATE, "publisher certificate bytes changed")
     payload = root / "feed-payload"
-    payload.write_bytes("".join(lines[:9]).encode("ascii"))
+    payload.write_bytes(body)
     sig = root / "feed-signature"
     sig.write_bytes(signature)
     public = root / "publisher.pem"
-    public.write_text(release.command(["openssl", "pkey", "-pubin", "-inform", "DER", "-in",
-                                      android.ROOT / "android_update_publisher.der"]))
+    public.write_text(release.command(["openssl", "x509", "-inform", "DER", "-in", certificate, "-pubkey", "-noout"]))
     release.command(["openssl", "dgst", "-sha256", "-verify", public, "-signature", sig, payload])
 
 
