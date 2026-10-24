@@ -92,8 +92,10 @@ final class UpdateInstaller {
         }
         if (!AndroidUpdateFeed.hex(fileDigest.digest()).equals(release.sha256()))
             throw new IOException("apk_integrity");
-        int flags = Build.VERSION.SDK_INT >= 28
-                ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+        // Android 10's archive parser collects certificates only for GET_SIGNATURES.
+        // Request collection as well as modern signer details; verification below stays exact.
+        int flags = PackageManager.GET_SIGNATURES;
+        if (Build.VERSION.SDK_INT >= 28) flags |= PackageManager.GET_SIGNING_CERTIFICATES;
         PackageInfo info = context.getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), flags);
         if (info == null || !AndroidUpdateFeed.PACKAGE.equals(info.packageName) ||
                 info.applicationInfo == null || info.applicationInfo.minSdkVersion > Build.VERSION.SDK_INT ||
