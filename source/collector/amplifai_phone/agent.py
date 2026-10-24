@@ -165,7 +165,7 @@ def _contact_ids(
 def _error_code(exc: BaseException) -> str:
     from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
     from pyiosbackup.exceptions import BackupPasswordIsRequired
-    from pymobiledevice3.exceptions import PairingError
+    from pymobiledevice3.exceptions import ConnectionFailedToUsbmuxdError, PairingError
 
     if isinstance(exc, CaptureCancelled):
         return "cancelled"
@@ -177,6 +177,8 @@ def _error_code(exc: BaseException) -> str:
         return "device_backup_failed"
     if isinstance(exc, NotEnoughDiskSpaceError):
         return "backup_host_space"
+    if isinstance(exc, ConnectionFailedToUsbmuxdError):
+        return "phone_connection"
     if isinstance(exc, (ConnectionTerminatedError, ConnectionError)):
         return "connection_lost"
     if isinstance(exc, BackupCleanupIncomplete):
@@ -643,8 +645,11 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None, *,
     except WorkspaceError as exc:
         _emit(sink, _error_event(exc))
         return 1
-    except OSError:
-        _emit(sink, {"kind": "error", "code": "workspace_unavailable"})
+    except OSError as exc:
+        if mode == "backup-encryption-status" and isinstance(exc, (ConnectionError, TimeoutError)):
+            _emit(sink, _error_event(exc))
+        else:
+            _emit(sink, {"kind": "error", "code": "workspace_unavailable"})
         return 1
     except Exception as exc:
         if mode != "backup-encryption-status":
