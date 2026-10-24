@@ -20,25 +20,25 @@
     "2026.10.24-rc13": {
       "version": "2026.10.24-rc13",
       "build": 26102413,
-      "sourceCommit": "23f249d6b70662377954d1281e79791fcabe2c6b",
+      "sourceCommit": "93cc302cc2f6bc1ebe070256f0a35597d9640852",
       "releaseAuthorized": true,
       "buildArtifact": {
-        "runId": 40136047375,
-        "id": 12576903963,
-        "controlCommit": "150132b2f2943251b124c3d6f3d10c273952981e",
-        "sha256": "5d0201ca54e2d5fd4dfe03367e4e2ee1580281173ea1e3f5284ae0b0f89b64e9"
+        "runId": 40137219306,
+        "id": 12578041248,
+        "controlCommit": "fba3b8c6da1b8b4556cb996ffab610729d9c9b7b",
+        "sha256": "8462b6551a653d007cdc3b4ca2013e60e3a733e4ae9d7bdcb90acfb2ae6248b6"
       },
       "unsignedApk": {
-        "bytes": 165734,
-        "sha256": "0528245bac7af6a35f24341b5a4295dca3947431ca5402b791dfec2af7f8f0a5"
+        "bytes": 165726,
+        "sha256": "952e2cda16a3d58a17094365b5f8b0e55203965c822c5f404e0bd28dacf80363"
       },
       "instrumentationApk": {
-        "bytes": 150192,
-        "sha256": "f12b542e14bc2805f74cd7df61f4a6f6276871f49a8504fa42779661d0d618db"
+        "bytes": 257805,
+        "sha256": "8099a5007238cea6f8739e2bccc95722cab30065526d31587491be89e945337a"
       },
       "sourceArchive": {
-        "bytes": 323582,
-        "sha256": "1ebcb6b92024d31f172520501149a7f3b708c70b34dd86f408d80acd4a01aaac"
+        "bytes": 325700,
+        "sha256": "ac3692efa6b8613261080e9922d703937f8a2314d7dafe822b2b4354654631ed"
       },
       "previousFeed": {
         "bytes": 960,
