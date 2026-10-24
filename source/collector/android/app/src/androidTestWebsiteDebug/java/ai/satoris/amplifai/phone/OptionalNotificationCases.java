@@ -18,7 +18,6 @@ import android.widget.Button;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -270,9 +269,7 @@ final class OptionalNotificationCases {
         require(marker.isFile() && marker.length() > 0 && marker.length() <= 4096,
                 "Missing or oversized test-only process marker");
         JSONObject receipt;
-        try (FileInputStream input = new FileInputStream(marker)) {
-            receipt = new JSONObject(new String(input.readAllBytes(), StandardCharsets.UTF_8));
-        }
+        receipt = new JSONObject(new String(java.nio.file.Files.readAllBytes(marker.toPath()), StandardCharsets.UTF_8));
         require(receipt.getInt("schema") == 1 && kind.equals(receipt.getString("kind")) &&
                         nonce.equals(receipt.getString("nonce")), "Kill marker kind/nonce mismatch");
         require(receipt.getInt("pid") != Process.myPid(),
