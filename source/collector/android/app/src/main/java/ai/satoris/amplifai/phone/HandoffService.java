@@ -35,6 +35,7 @@ public final class HandoffService extends Service {
     private LocalBridge bridge;
     private NativeRunAuthority nativeRun;
     private NativeAccountReturn accountReturn;
+    private long completionAttempt;
     private final ExecutorService authorityExecutor = Executors.newSingleThreadExecutor();
     private boolean bindingActive;
     private String transferDigest;
@@ -82,6 +83,9 @@ public final class HandoffService extends Service {
         public void approve(PagedTransfer transfer, NativeRunAuthority run) { prepare(transfer, run); }
         public NativeRunAuthority nativeRun() { return nativeRun; }
         public NativeAccountReturn accountReturn() { return accountReturn; }
+        public NativeAccountReturn completedReturn(NativeAccountReturn expected, boolean newSetup) {
+            return storageReady ? NativeCompletionState.PROCESS.recover(expected, newSetup || snapshot.active()) : null;
+        }
         public void retryBinding() { if (snapshot.state().equals("binding_pending")) bindAndStart(); }
         public void cancel() { finish(LocalBridge.EndReason.CANCELLED); }
     }
@@ -140,6 +144,7 @@ public final class HandoffService extends Service {
         finish(LocalBridge.EndReason.CANCELLED);
         accountReturn = null;
         if (!storageReady) throw new IllegalStateException("handoff_storage_unavailable");
+        completionAttempt = NativeCompletionState.PROCESS.beginAttempt();
         sessionId = UUID.randomUUID().toString();
         pagesProvided = 0;
         pagesTotal = 0;
@@ -177,6 +182,7 @@ public final class HandoffService extends Service {
         TransferSourceBinding nextBinding = new TransferSourceBinding(nextSession, transfer.capturedSources());
         if (!TransferSourceBinding.permitted(nextBinding, nextSession, this::sourcePermissionGranted))
             throw new IllegalStateException("handoff_source_permission_changed");
+        completionAttempt = NativeCompletionState.PROCESS.beginAttempt();
         sessionId = nextSession;
         sourceBinding = nextBinding;
         pagesProvided = 0;
@@ -380,6 +386,7 @@ public final class HandoffService extends Service {
         }
         if (cleanupFailed) storageReady = false;
         if (!cleanupFailed && completedReturn != null) accountReturn = completedReturn;
+        if (hadSession) NativeCompletionState.PROCESS.finished(completionAttempt, reason, !cleanupFailed, completedReturn);
         if (hadSession) publish(cleanupFailed ? "failed" : reason.name().toLowerCase(java.util.Locale.ROOT), null);
     }
 

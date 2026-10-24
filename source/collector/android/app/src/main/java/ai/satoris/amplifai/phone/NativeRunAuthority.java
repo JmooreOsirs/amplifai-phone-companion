@@ -23,6 +23,8 @@ final class NativeRunAuthority implements LocalBridge.AccountProof, AutoCloseabl
     private String bindRequest;
     private String handoffId;
     private String digest;
+    private String verifiedIntentId;
+    private String verifiedIntentCapability;
 
     NativeRunAuthority(NativeSetupSession setup, NativeAuthorityTransport transport, Supplier<Instant> now, Supplier<String> ids) {
         this.setup = setup; this.transport = transport; this.now = now; this.ids = ids;
@@ -92,14 +94,27 @@ final class NativeRunAuthority implements LocalBridge.AccountProof, AutoCloseabl
 
     @Override public LocalBridge.Destination claim(String intent, String capability, String handoff, String payload) {
         try {
-            verify(intent, handoff, payload);
+            Map<String, Object> request;
+            synchronized (this) {
+                require(bound(handoff, payload));
+                request = connect(intent, capability, handoff, payload);
+                verifiedIntentId = verifiedIntentCapability = null;
+            }
+            // The server verifies a pending *claimed* intent. Claim first, then check
+            // its exact run/approval scope before allowing the bridge to approve it.
             Map<String, Object> fields = SetupJson.parse(transport.post(NativeAuthorityTransport.Route.CONNECT,
-                    bytes(SetupJson.encode(connect(intent, capability, handoff, payload)))), 1024);
+                    bytes(SetupJson.encode(request))), 1024);
             synchronized (this) {
                 require(bound(handoff, payload));
                 keys(fields, "destinationEmail", "destinationCourse");
                 equal(fields, "destinationEmail", approval().scope().email());
                 equal(fields, "destinationCourse", approval().scope().course());
+            }
+            verify(intent, handoff, payload);
+            synchronized (this) {
+                require(bound(handoff, payload));
+                verifiedIntentId = intent;
+                verifiedIntentCapability = capability;
                 return new LocalBridge.Destination(intent, approval().scope().email(), approval().scope().course());
             }
         } catch (NativeAuthorityTransport.Failure | IllegalArgumentException unavailable) { return null; }
@@ -107,13 +122,19 @@ final class NativeRunAuthority implements LocalBridge.AccountProof, AutoCloseabl
 
     @Override public boolean consume(String intent, String capability, String release, String handoff, String payload) {
         try {
-            verify(intent, handoff, payload);
-            Map<String, Object> request = connect(intent, capability, handoff, payload);
-            request.put("releaseCode", NativeSetupContract.capability(release));
+            Map<String, Object> request;
+            synchronized (this) {
+                require(verifiedConnection(intent, capability, handoff, payload));
+                request = connect(intent, capability, handoff, payload);
+                request.put("releaseCode", NativeSetupContract.capability(release));
+            }
+            // Pending-intent verification intentionally rejects released intents.
+            // The checked consume route now revalidates current server authority,
+            // the exact release proof, and idempotent retries after a lost reply.
             Map<String, Object> fields = SetupJson.parse(transport.post(NativeAuthorityTransport.Route.CONSUME,
                     bytes(SetupJson.encode(request))), 1024);
             synchronized (this) {
-                require(bound(handoff, payload)); keys(fields, "consumed");
+                require(verifiedConnection(intent, capability, handoff, payload)); keys(fields, "consumed");
                 return Boolean.TRUE.equals(fields.get("consumed"));
             }
         } catch (NativeAuthorityTransport.Failure | IllegalArgumentException unavailable) { return false; }
@@ -138,6 +159,9 @@ final class NativeRunAuthority implements LocalBridge.AccountProof, AutoCloseabl
     }
     private boolean bound(String handoff, String payload) {
         return state == State.BOUND && current() && handoff.equals(handoffId) && payload.equals(digest);
+    }
+    private boolean verifiedConnection(String intent, String capability, String handoff, String payload) {
+        return bound(handoff, payload) && intent.equals(verifiedIntentId) && capability.equals(verifiedIntentCapability);
     }
     private Map<String, Object> reference() {
         return SetupJson.object("runId", approval().runId(), "capability", setup.runCapability(now.get()));
@@ -168,5 +192,6 @@ final class NativeRunAuthority implements LocalBridge.AccountProof, AutoCloseabl
     @Override public synchronized void close() {
         state = State.CLOSED; setup.close(); readSources.clear();
         operationId = startRequest = bindRequest = handoffId = digest = null;
+        verifiedIntentId = verifiedIntentCapability = null;
     }
 }

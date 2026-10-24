@@ -13,4 +13,8 @@
     <string name="handoff_received_status">Reviewed metadata reached the browser. Account-save acknowledgment remains available for up to two hours; save or decline each source there, or cancel if you are using browser-only review.</string>
     <string name="handoff_received_review">The one-use pairing code has been consumed. Nothing is saved to an account by delivery alone. Confirm each browser source save before ending this handoff.</string>
     <string name="handoff_saved_status">The browser acknowledged confirmed account saves. The local handoff is closed.</string>
+    <string name="handoff_open_saved_report">Open saved account and report</string>
+    <string name="handoff_completed_reason">Account save confirmed. Open your saved account and report; a new collection needs a new setup.</string>
+    <string name="handoff_completed_review">Confirmed saved sources remain in your account. Open the saved report to review them.</string>
+    <string name="handoff_completed_setup">The browser acknowledged verified account saves. Open your account for saved results.</string>
 </resources>

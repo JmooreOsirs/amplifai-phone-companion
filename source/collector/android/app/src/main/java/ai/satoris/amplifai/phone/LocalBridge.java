@@ -364,7 +364,11 @@ public final class LocalBridge implements AutoCloseable {
     }
 
     private String pairResponse() {
-        long remaining = Math.max(1L, TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong()));
+        // The browser's pairing contract is bounded to five minutes. Account release
+        // renews the separate review/save window before replying; do not advertise
+        // that two-hour review lifetime as a pairing lifetime, including on retries.
+        long remaining = Math.max(1L, Math.min(PAIR_SECONDS,
+                TimeUnit.NANOSECONDS.toSeconds(expiresAt - clock.getAsLong())));
         String result = "{\"token\":\"" + token + "\",\"expiresInSeconds\":" + remaining +
                 ",\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + payloadSha256 + "\"";
         if (transfer == null) return result + "}";

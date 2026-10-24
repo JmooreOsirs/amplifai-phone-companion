@@ -56,7 +56,8 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
         Bundle result = new Bundle();
         try {
             if ("native_setup_v2".equals(testArguments.getString("scenario")) ||
-                    "native_setup_service_v2".equals(testArguments.getString("scenario"))) {
+                    "native_setup_service_v2".equals(testArguments.getString("scenario")) ||
+                    "native_setup_completion_v2".equals(testArguments.getString("scenario"))) {
                 result.putString("result", NativeSetupCases.run(this, testArguments));
                 finish(0, result);
                 return;
