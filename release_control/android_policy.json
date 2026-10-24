@@ -43,6 +43,25 @@
       "previousFeed": {
         "bytes": 960,
         "sha256": "c01ddb063ed0f4ce81b3c9d0896ed7239c3b72dd8dcf69bd37f843973abfa6d4"
+      },
+      "publication": {
+        "runtimeChecks": {
+          "api29": true,
+          "api36": true,
+          "bulkSelectionIme": true,
+          "cleanup": true,
+          "expiryRevocation": true,
+          "nativeHandoffAck": true,
+          "syntheticDataOnly": true,
+          "upgrade": true
+        },
+        "signingRunId": 40137463102,
+        "signingControlCommit": "5d42319f4ec748429f3132c2ef45b137f38c1368",
+        "signedArtifactId": 12577911665,
+        "signedArtifactSha256": "4b50a4e1d906ccc337197f189284e8b94feb3203a75c857417d961c79278a0f8",
+        "signedApkSha256": "c04cfa3a5a33caf6d61e232e0abdc9e2f8ed1b7250f99c485ec6224ac5e428d0",
+        "runtimeReceiptPath": "release_control/android_runtime/2026.10.24-rc13.json",
+        "runtimeReceiptSha256": "a888283206595c884e86c384c2ecd8c286d3f770a765fe2c34eb9d730837b429"
       }
     }
   }
