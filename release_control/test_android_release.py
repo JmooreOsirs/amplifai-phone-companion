@@ -176,6 +176,19 @@ class AndroidReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 android_publish.runtime_receipt(spec, approved)
 
+    def test_published_rc12_feed_uses_the_pinned_x509_certificate(self):
+        data = (android.ROOT / "test_data/android-rc12-update-v1.txt").read_bytes()
+        body, suffix = data.rsplit(b"signature=", 1)
+        signature = base64.b64decode(suffix.strip(), validate=True)
+        android_publish.verify_feed_signature(body, signature, self.root)
+
+    def test_changed_feed_payload_cannot_pass_the_publisher_certificate(self):
+        data = (android.ROOT / "test_data/android-rc12-update-v1.txt").read_bytes()
+        body, suffix = data.rsplit(b"signature=", 1)
+        signature = base64.b64decode(suffix.strip(), validate=True)
+        with self.assertRaises(ValueError):
+            android_publish.verify_feed_signature(body.replace(b"versionCode=26102312", b"versionCode=26102313"), signature, self.root)
+
 
 if __name__ == "__main__":
     unittest.main()
