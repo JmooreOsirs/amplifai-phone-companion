@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -155,6 +156,13 @@ def main() -> None:
                                  "testWebsiteDebugUnitTest", "testPlayDebugUnitTest", "lintWebsiteRelease",
                                  "assembleWebsiteRelease", "assembleWebsiteDebugAndroidTest"], cwd=project,
                                 env=clean, stdout=log, stderr=subprocess.STDOUT, timeout=1800)
+    if result.returncode != 0:
+        # Gradle receives no GitHub/signing credentials. Retain its bounded error
+        # tail in the job log as well as the separate failure diagnostic artifact.
+        log_path = Path(os.environ["RUNNER_TEMP"]) / "android-build.log"
+        with log_path.open("rb") as failed:
+            failed.seek(max(0, log_path.stat().st_size - 20_000))
+            sys.stderr.write(failed.read().decode("utf-8", errors="replace"))
     android.require(result.returncode == 0, "Android build/tests/lint failed; signing is unavailable")
     counts = {"website": unit_results(project / "app/build/test-results/testWebsiteDebugUnitTest", 68),
               "play": unit_results(project / "app/build/test-results/testPlayDebugUnitTest", 64)}
