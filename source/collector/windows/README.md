@@ -1,10 +1,12 @@
 # Windows companion source candidate
 
-This wrapper presents the local iPhone collector on Windows. The published unsigned TEST baseline is RC21 (`2026.10.22-rc21`, build `26102221`, MSI `1.0.21`, native source `efffc39d0012ec49e8530cd8412435d87a977163`). A runner-user install, released artifact, physical PC/iPhone test and authenticated account Save remain distinct evidence.
+This wrapper presents the local iPhone collector on Windows. The published unsigned TEST baseline is RC22 (`2026.10.23-rc22`, build `26102322`, MSI `1.0.22`, native source `3064b4df4d489f96a35b619a8fdd03802fe3cb5e`). A runner-user install, released artifact, physical PC/iPhone test and authenticated account Save remain distinct evidence.
 
-## RC22 candidate — October 23
+## RC23 candidate — October 23
 
-The source candidate is `2026.10.23-rc22`, build `26102322`, MSI `1.0.22`. It is not a released or admitted build until its exact qualification and publication receipts are recorded.
+The source candidate is `2026.10.23-rc23`, build `26102323`, MSI `1.0.23`. It accepts setup-v2 links with no path or exactly one root slash before the query, addressing the observed `amplifai-phone://setup/?` startup rejection. Every other path and all existing protocol, query-key, UUID, capability, character and length checks remain restricted. The change does not establish which browser or Windows component introduced the slash.
+
+Exact source/package build `40029755065` at `243309ce7a21ea275bdea8bacc43f29ff0c0c4d8` passed the Windows source, frozen-worker, MSI and RC22-to-RC23 upgrade/session-preservation gates. Guided run `40032364440` at the same commit passed 180 scenarios and 1,454 checks in each source/frozen mode, with matching geometry, styles and all 19 production modules. The handoff phase pins this RC23 MSI and its production-key signed distribution manifest, using published RC22 as the installed baseline. Corresponding-source/publication and signed frozen-helper handoff receipts are required before website activation. Windows remains unsigned Test; Ed25519 distribution signatures do not supply Authenticode publisher trust. Normal consumer policy and physical phone/account acceptance remain separate.
 
 Plain launch opens an account-led start screen. Connect phone in the authenticated account delivers the existing setup-v2 link, exact Windows disclosure and immutable account/course approval. A separate Start admits collection. The four visible steps are Approve, Collect, Choose and Save & report; only the current stage is presented, with Details & recovery available separately. Existing in-flight legacy review remains recoverable without a new backup.
 
@@ -18,7 +20,7 @@ The unchanged Mac name/phone/whole-word organization rules are checked against a
 
 Backup file telemetry now uses the existing 0.5-second throttle and exact final flush. The Windows helper drain runs every 50ms, while unchanged visual state and handoff polling keep a one-second heartbeat. This removes measured pipe backpressure; it does not reduce the device's full-backup wire payload or establish a customer's historical Save duration.
 
-Required candidate evidence: actual Windows source/frozen guided state renders and resolved styles, keyboard/text-scale checks, event-loop measurement, full-size shared helper/frozen worker, RC21 MSI replacement and signed update handoff. Physical phone/account acceptance stays separate. Windows remains unsigned TEST; the distribution signature does not add publisher trust.
+Required candidate evidence: actual Windows source/frozen guided state renders and resolved styles, keyboard/text-scale checks, event-loop measurement, full-size shared helper/frozen worker, RC22 MSI replacement and signed update handoff. Physical phone/account acceptance stays separate. Windows remains unsigned TEST; the distribution signature does not add publisher trust.
 
 ## RC20 supplemental native/bridge boundary test
 
