@@ -23,13 +23,13 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.lang.reflect.Field;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.Set;
@@ -56,7 +56,8 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
         Bundle result = new Bundle();
         try {
             if ("native_setup_v2".equals(testArguments.getString("scenario")) ||
-                    "native_setup_service_v2".equals(testArguments.getString("scenario"))) {
+                    "native_setup_service_v2".equals(testArguments.getString("scenario")) ||
+                    "native_setup_completion_v2".equals(testArguments.getString("scenario"))) {
                 result.putString("result", NativeSetupCases.run(this, testArguments));
                 finish(0, result);
                 return;
@@ -260,22 +261,38 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
         catch (IllegalAccessException failure) { throw new AssertionError(failure); }
     }
 
+    private static void copyFixture(InputStream input, OutputStream output) throws IOException {
+        byte[] block = new byte[8192];
+        int total = 0;
+        for (int count; (count = input.read(block)) != -1;) {
+            total += count;
+            if (total > 16 * 1024 * 1024) throw new IOException("fixture_size");
+            output.write(block, 0, count);
+        }
+    }
+
+    private static byte[] readFixture(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        copyFixture(input, output);
+        return output.toByteArray();
+    }
+
     private void verifyUpdaterArchive() throws Exception {
         Context target = getTargetContext();
         byte[] feed;
         byte[] certificate;
         try (InputStream input = getContext().getAssets().open("rc7-signed-feed.txt")) {
-            feed = input.readAllBytes();
+            feed = readFixture(input);
         }
         try (InputStream input = target.getAssets().open("android_update_publisher.der")) {
-            certificate = input.readAllBytes();
+            certificate = readFixture(input);
         }
         AndroidUpdateFeed.Release rc7 = AndroidUpdateFeed.parse(feed, certificate);
         File copy = new File(target.getNoBackupFilesDir(), "updater-rc7-fixture.apk");
         try {
             try (InputStream input = getContext().getAssets().open("rc7-signed.apk");
                  FileOutputStream output = new FileOutputStream(copy)) {
-                input.transferTo(output);
+                copyFixture(input, output);
             }
             UpdateInstaller.verifyArchive(target, rc7, copy, 26100806);
             expectUpdateRejection(target, new AndroidUpdateFeed.Release(26100808, rc7.versionName(),
@@ -294,12 +311,12 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
             File debug = new File(target.getNoBackupFilesDir(), "updater-wrong-signer-fixture.apk");
             try (InputStream input = getContext().getAssets().open("rc8-debug.apk");
                  FileOutputStream output = new FileOutputStream(debug)) {
-                input.transferTo(output);
+                copyFixture(input, output);
             }
             byte[] digest;
             try {
                 try (FileInputStream input = new FileInputStream(debug)) {
-                    digest = MessageDigest.getInstance("SHA-256").digest(input.readAllBytes());
+                    digest = MessageDigest.getInstance("SHA-256").digest(readFixture(input));
                 }
                 AndroidUpdateFeed.Release wrongSigner = new AndroidUpdateFeed.Release(26100808, "2026.10.08-rc8",
                         26, debug.length(), AndroidUpdateFeed.hex(digest), rc7.url());
@@ -315,15 +332,26 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
         try {
             UpdateInstaller.verifyArchive(context, release, file, 26100806);
             throw new AssertionError(label + " was accepted");
-        } catch (IOException expected) { /* A bad archive must fail before an OS session is created. */ }
+        } catch (IOException expected) {
+            String reason = switch (label) {
+                case "wrong version", "truncated APK" -> "apk_identity";
+                case "corrupt APK" -> "apk_integrity";
+                case "wrong signer" -> "apk_signer";
+                default -> throw new AssertionError("Unknown rejection fixture");
+            };
+            require(reason.equals(expected.getMessage()), label + " failed for the wrong reason");
+        }
     }
 
-    private void verifyUpdateCallbackState() {
+    private void verifyUpdateCallbackState() throws Exception {
         Context target = getTargetContext();
+        int installed = UpdateInstaller.archiveVersionCode(target.getPackageManager().getPackageInfo(target.getPackageName(), 0));
+        int firstTarget = Math.addExact(installed, 1);
+        int secondTarget = Math.addExact(installed, 2);
         SharedPreferences state = target.getSharedPreferences("android-update-status", Context.MODE_PRIVATE);
         state.edit().clear().commit();
         try {
-            UpdateInstallReceiver.pendingIntent(target, 987654, 26100809);
+            UpdateInstallReceiver.pendingIntent(target, 987654, firstTarget);
             require(UpdateInstallReceiver.pending(target), "pending installer guard missing");
             String nonce = state.getString("nonce", "");
             Intent callback = new Intent(target, UpdateInstallReceiver.class)
@@ -336,14 +364,14 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
             receiver.onReceive(target, new Intent(callback)
                     .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_SUCCESS));
             require(UpdateInstallReceiver.pending(target), "success callback cleared guard before installed version");
-            UpdateInstallReceiver.reconcile(target, 26100808);
+            UpdateInstallReceiver.reconcile(target, installed);
             require(UpdateInstallReceiver.pending(target), "old installed version cleared guard");
-            UpdateInstallReceiver.reconcile(target, 26100809);
+            UpdateInstallReceiver.reconcile(target, firstTarget);
             require(!UpdateInstallReceiver.pending(target) &&
-                    UpdateInstallReceiver.confirmedTarget(target) == 26100809,
+                    UpdateInstallReceiver.confirmedTarget(target) == firstTarget,
                     "installed target did not reconcile exactly");
 
-            UpdateInstallReceiver.pendingIntent(target, 987655, 26100810);
+            UpdateInstallReceiver.pendingIntent(target, 987655, secondTarget);
             String nextNonce = state.getString("nonce", "");
             Intent approval = new Intent(callback).putExtra("session", 987655)
                     .putExtra("nonce", nextNonce)
@@ -361,7 +389,7 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
                     "OS cancellation did not release guard");
             require(UpdateInstallReceiver.pendingApproval(target) == null,
                     "cancelled OS approval remained active");
-            UpdateInstallReceiver.pendingIntent(target, 987656, 26100810);
+            UpdateInstallReceiver.pendingIntent(target, 987656, secondTarget);
             receiver.onReceive(target, new Intent(callback).putExtra("session", 987656)
                     .putExtra("nonce", state.getString("nonce", ""))
                     .putExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE));
@@ -379,11 +407,11 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
         try {
             try (InputStream input = getContext().getAssets().open("synthetic-rc9-signed.apk");
                  FileOutputStream output = new FileOutputStream(copy)) {
-                input.transferTo(output);
+                copyFixture(input, output);
             }
             byte[] digest;
             try (FileInputStream input = new FileInputStream(copy)) {
-                digest = MessageDigest.getInstance("SHA-256").digest(input.readAllBytes());
+                digest = MessageDigest.getInstance("SHA-256").digest(readFixture(input));
             }
             AndroidUpdateFeed.Release fixture = new AndroidUpdateFeed.Release(26100809, "2026.10.08-rc9",
                     26, copy.length(), AndroidUpdateFeed.hex(digest),
@@ -492,7 +520,7 @@ public final class LocalBridgeInstrumentedTest extends Instrumentation {
             String token = capture(paired, "\\\"token\\\":\\\"([A-Za-z0-9_-]+)\\\"");
             String handoff = capture(paired, "\\\"handoffId\\\":\\\"([0-9a-f-]{36})\\\"");
             String digest = capture(paired, "\\\"payloadSha256\\\":\\\"([0-9a-f]{64})\\\"");
-            require(digest.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(payload))),
+            require(digest.equals(AndroidUpdateFeed.hex(MessageDigest.getInstance("SHA-256").digest(payload))),
                     "pairing digest mismatch");
             String auth = "Authorization: Bearer " + token + "\r\n";
             String acknowledgment = "{\"handoffId\":\"" + handoff + "\",\"payloadSha256\":\"" + digest + "\",\"saved\":true}";

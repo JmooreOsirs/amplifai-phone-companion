@@ -12,7 +12,7 @@ public final class NativeAccountReturnTest {
     @Test public void controlsAndSavedRecoveryCannotRequestReviewedContinuation() {
         NativeAccountReturn target = new NativeAccountReturn(RUN, ENROLLMENT, null, null);
         assertEquals("phoneRunControl=" + RUN + "&enrollmentId=" + ENROLLMENT + "&week=phone", URI.create(target.href(false)).getRawQuery());
-        assertEquals("continue=reviewed&enrollmentId=" + ENROLLMENT + "&week=phone", URI.create(target.href(true)).getRawQuery());
+        assertEquals("continue=reviewed&phoneRunId=" + RUN + "&enrollmentId=" + ENROLLMENT + "&week=phone", URI.create(target.href(true)).getRawQuery());
         NativeAccountReturn saved = target.completed(HANDOFF, "a".repeat(64));
         for (boolean active : new boolean[]{true, false}) {
             URI uri = URI.create(saved.href(active));
@@ -22,6 +22,24 @@ public final class NativeAccountReturnTest {
                     "&completedPayloadSha256=" + "a".repeat(64), uri.getRawQuery());
             assertFalse(uri.getRawQuery().contains("continue=")); assertFalse(uri.getRawQuery().contains("capability"));
         }
+    }
+
+    @Test public void reviewedReturnIdentifiesTheExactRunWithoutSecretsOrRetryChurn() {
+        NativeAccountReturn first = new NativeAccountReturn(RUN, ENROLLMENT, null, null);
+        NativeAccountReturn next = new NativeAccountReturn("99999999-9999-4999-8999-999999999999", ENROLLMENT, null, null);
+        // A new collection in the same account must not reopen the previous run's identical browser URL.
+        assertNotEquals(first.href(true), next.href(true));
+        assertEquals(first.href(true), first.href(true));
+        URI uri = URI.create(first.href(true));
+        assertEquals(LocalBridge.ACCOUNT_ORIGIN, uri.getScheme() + "://" + uri.getRawAuthority());
+        assertEquals("/phone/account", uri.getPath());
+        assertNull(uri.getFragment());
+        // This is the website's pending-return route. All values are non-secret routing context;
+        // the website must still authorize the run before it discovers or saves a phone selection.
+        assertArrayEquals(new String[]{"continue=reviewed", "phoneRunId=" + RUN,
+                "enrollmentId=" + ENROLLMENT, "week=phone"}, uri.getRawQuery().split("&"));
+        assertFalse(uri.getRawQuery().contains("phoneRunControl="));
+        assertFalse(uri.getRawQuery().contains("completedHandoffId="));
     }
 
     @Test public void partialCompletionAndUntrustedRoutingFieldsAreRejected() {

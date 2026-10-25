@@ -9,6 +9,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ScrollView;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -61,6 +62,7 @@ final class NativeSetupCases {
     private final JSONObject controls = new JSONObject();
     private final File output;
     private final boolean serviceFlow;
+    private final boolean completionFlow;
     private final JSONArray loopbackRequests = new JSONArray();
 
     static String run(Instrumentation instrumentation, Bundle arguments) throws Exception {
@@ -71,11 +73,13 @@ final class NativeSetupCases {
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(new Intent(instrumentation.getTargetContext(), MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
         try {
-            NativeSetupCases fixture = new NativeSetupCases(instrumentation, activity, "native_setup_service_v2".equals(arguments.getString("scenario")));
+            NativeSetupCases fixture = new NativeSetupCases(instrumentation, activity, arguments.getString("scenario"));
             try {
                 fixture.verify();
                 fixture.receipt.put("passed", true);
-                return fixture.serviceFlow
+                return fixture.completionFlow
+                        ? "synthetic service ACK and cleanup completed while the Activity was stopped; return restored only confirmed report presentation"
+                        : fixture.serviceFlow
                         ? "synthetic native Continue reached real foreground service binding, exact retry, selected-page delivery and received; Cancel removed authority and transfer files; no provider reads or account Save"
                         : "synthetic native approval, separate Start, selection/review/Continue availability, exact retries and late-response cancellation passed; no real collection or account Save";
             } catch (Exception | AssertionError failure) {
@@ -109,10 +113,11 @@ final class NativeSetupCases {
         }
     }
 
-    private NativeSetupCases(Instrumentation instrumentation, MainActivity activity, boolean serviceFlow) throws Exception {
-        this.instrumentation = instrumentation; this.activity = activity; this.serviceFlow = serviceFlow;
+    private NativeSetupCases(Instrumentation instrumentation, MainActivity activity, String scenario) throws Exception {
+        this.instrumentation = instrumentation; this.activity = activity;
+        this.completionFlow = "native_setup_completion_v2".equals(scenario);
+        this.serviceFlow = completionFlow || "native_setup_service_v2".equals(scenario);
         authority.deliveryEnabled = serviceFlow;
-        String scenario = serviceFlow ? "native_setup_service_v2" : "native_setup_v2";
         File root = instrumentation.getTargetContext().getExternalFilesDir("native-setup-fixture");
         require(root != null, "Target app external fixture storage is unavailable");
         output = new File(root, scenario);
@@ -121,7 +126,9 @@ final class NativeSetupCases {
                 .put("widthDp", activity.getResources().getConfiguration().screenWidthDp)
                 .put("heightDp", activity.getResources().getConfiguration().screenHeightDp)
                 .put("fontScale", activity.getResources().getConfiguration().fontScale)
-                .put("continueCoverage", serviceFlow
+                .put("continueCoverage", completionFlow
+                        ? "Actual service delivery, synthetic exact Save ACK and receipt, cleanup while Activity is stopped, and confirmed report return. No hosted account Save or provider reads."
+                        : serviceFlow
                         ? "Actual Continue dispatch uses the parent-granted emulator Contacts permission, real PagedTransfer and HandoffService. Authority and data are synthetic, navigation is intercepted. Local received is followed by Cancel, without a saved acknowledgment."
                         : "Actual Continue dispatch denies missing Android permission before binding. Selection freeze/late bind cancellation use the adapter directly with synthetic transport. Browser launch decision uses a bound synthetic run and intercepted Intent only. Service delivery still needs real permission authority.");
     }
@@ -302,7 +309,7 @@ final class NativeSetupCases {
         main(() -> {
             Intent intent = interceptedAccountIntent.get();
             require(accountIntents.get() == 1 && intent != null && Intent.ACTION_VIEW.equals(intent.getAction()), "Successful Continue did not emit exactly one account intent");
-            require((LocalBridge.ACCOUNT_ORIGIN + "/phone/account?continue=reviewed&enrollmentId=" + ENROLLMENT + "&week=phone")
+            require((LocalBridge.ACCOUNT_ORIGIN + "/phone/account?continue=reviewed&phoneRunId=" + RUN + "&enrollmentId=" + ENROLLMENT + "&week=phone")
                     .equals(intent.getDataString()), "Real Continue lost account return binding");
             invoke("showHandoff", new Class<?>[]{HandoffService.Snapshot.class}, handoff.snapshot());
             require(accountIntents.get() == 1, "Repeated ready service state launched another account intent");
@@ -325,10 +332,12 @@ final class NativeSetupCases {
         String release = SetupJson.encode(SetupJson.object("intentId", SyntheticAuthority.INTENT,
                 "capability", SyntheticAuthority.CONNECT_CAPABILITY, "releaseCode", SyntheticAuthority.RELEASE_CODE));
         JSONObject released = responseJson(request("POST", "/v3/release", "Content-Type: application/json\r\n", release), 200);
+        require(released.getLong("expiresInSeconds") > 0 && released.getLong("expiresInSeconds") <= 300,
+                "Service advertised the review lifetime as pairing expiry");
         JSONObject retried = responseJson(request("POST", "/v3/release", "Content-Type: application/json\r\n", release), 200);
         for (String key : new String[]{"token", "handoffId", "payloadSha256", "manifestJson"})
             require(released.getString(key).equals(retried.getString(key)), "Exact service release retry changed " + key);
-        require(authority.verifyCalls == 3 && authority.connectCalls == 1 && authority.consumeCalls == 2,
+        require(authority.verifyCalls == 1 && authority.connectCalls == 1 && authority.consumeCalls == 2,
                 "Service release retry did not revalidate synthetic current authority");
         String changed = SetupJson.encode(SetupJson.object("intentId", SyntheticAuthority.INTENT,
                 "capability", SyntheticAuthority.CONNECT_CAPABILITY, "releaseCode", syntheticCapability('Z')));
@@ -357,6 +366,10 @@ final class NativeSetupCases {
         main(() -> require(!get("savedAckForCurrentReview", Boolean.class) && handoff.accountReturn().completedHandoffId() == null,
                 "Local received claimed an account Save"));
         capture("received");
+        if (completionFlow) {
+            verifyCompletionReturn(handoff, run, authorization, handoffId, digest);
+            return;
+        }
         click("cancelHandoff");
         await(() -> !handoff.snapshot().active() && run.state() == NativeRunAuthority.State.CLOSED,
                 "Cancel did not close service and run authority");
@@ -379,6 +392,61 @@ final class NativeSetupCases {
                 .put("syntheticVerifyCalls", authority.verifyCalls).put("syntheticConnectCalls", authority.connectCalls)
                 .put("syntheticConsumeCalls", authority.consumeCalls);
         capture("stopped");
+    }
+
+    private void verifyCompletionReturn(HandoffService.LocalBinder handoff, NativeRunAuthority run,
+                                        String authorization, String handoffId, String digest) throws Exception {
+        main(() -> require(activity.moveTaskToBack(true), "Synthetic Activity did not enter background"));
+        await(() -> !get("started", Boolean.class) && get("handoff", HandoffService.LocalBinder.class) == null,
+                "Activity observer remained bound in background");
+        String headers = authorization + "Content-Type: application/json\r\n";
+        String acknowledgement = "{\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + digest + "\",\"saved\":true}";
+        require(status(request("POST", "/v1/acknowledge-save", headers,
+                acknowledgement.replace(digest, repeated('0', 64)))) == 409, "Mismatched save acknowledgement was accepted");
+        responseJson(request("POST", "/v1/acknowledge-save", headers, acknowledgement), 200);
+        responseJson(request("POST", "/v1/acknowledge-save", headers, acknowledgement), 200);
+        require(handoff.snapshot().active(), "Save acknowledgement skipped receipt confirmation");
+        String confirmation = "{\"handoffId\":\"" + handoffId + "\",\"payloadSha256\":\"" + digest + "\",\"received\":true}";
+        responseJson(request("POST", "/v1/confirm-ack-received", headers, confirmation), 200);
+        await(() -> !handoff.snapshot().active() && run.state() == NativeRunAuthority.State.CLOSED,
+                "Confirmed completion did not close service authority");
+        require(transferFiles().isEmpty() && !PagedTransfer.cleanupRequired(), "Confirmed completion left transfer files");
+        main(() -> activity.startActivity(new Intent(activity, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)));
+        await(() -> get("started", Boolean.class) && get("handoff", HandoffService.LocalBinder.class) != null,
+                "Activity did not bind after returning");
+        await(() -> {
+            NativeAccountReturn target = get("nativeAccountReturn", NativeAccountReturn.class);
+            return target != null && handoffId.equals(target.completedHandoffId());
+        }, "Confirmed presentation was not restored after background completion");
+        main(() -> {
+            require(!get("reviewed", Boolean.class), "Completion restored local review authority");
+            require("Open saved account and report".contentEquals(get("handoffButton", Button.class).getText()),
+                    "Completed return still shows the pending handoff action");
+            require(get("handoffButton", Button.class).isEnabled(), "Saved report action is disabled");
+            require(!get("handoff", HandoffService.LocalBinder.class).snapshot().active(), "Completed display restarted the service");
+        });
+        // Activity state and two Choreographer callbacks do not mean the system's
+        // task-return animation has finished compositing its previous snapshot.
+        await(() -> activity.hasWindowFocus(), "Returned Activity did not regain window focus");
+        instrumentation.getUiAutomation().waitForIdle(500, 5000);
+        main(() -> {
+            JSONArray labels = new JSONArray();
+            collectVisibleLabels(activity.getWindow().getDecorView(), labels);
+            try { receipt.put("confirmedReturnVisibleLabels", labels); }
+            catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+        });
+        capture("confirmed-return");
+        click("handoffButton");
+        main(() -> {
+            Intent intent = interceptedAccountIntent.get();
+            require(accountIntents.get() == 2 && intent != null &&
+                    intent.getDataString().contains("completedHandoffId=" + handoffId) &&
+                    intent.getDataString().contains("completedPayloadSha256=" + digest), "Saved report return lost its exact completion binding");
+        });
+        receipt.put("completionWhileUnbound", true).put("exactAckAndReceipt", true)
+                .put("completedReportReturn", true).put("completionRemovedTransferFiles", true)
+                .put("restoredCollectionAuthority", false);
     }
 
     private Set<String> transferFiles() {
@@ -477,7 +545,7 @@ final class NativeSetupCases {
             set("nativeContinuePending", true); invoke("openNativeContinuation");
             Intent intent = interceptedAccountIntent.get();
             require(accountIntents.get() == 1 && intent != null && Intent.ACTION_VIEW.equals(intent.getAction()), "Bound continuation did not emit one ACTION_VIEW");
-            require((LocalBridge.ACCOUNT_ORIGIN + "/phone/account?continue=reviewed&enrollmentId=" + ENROLLMENT + "&week=phone")
+            require((LocalBridge.ACCOUNT_ORIGIN + "/phone/account?continue=reviewed&phoneRunId=" + RUN + "&enrollmentId=" + ENROLLMENT + "&week=phone")
                     .equals(intent.getDataString()), "Continuation intent lost its immutable account binding");
             invoke("openNativeContinuation");
             require(accountIntents.get() == 1, "Ready replay opened another browser intent");
@@ -568,6 +636,19 @@ final class NativeSetupCases {
             } finally { bitmap.recycle(); }
             screenshots.put(name + ".png");
         } catch (SecurityException unavailable) { receipt.put("screenshotUnavailable", true); }
+    }
+    private void collectVisibleLabels(View view, JSONArray labels) {
+        if (!view.isShown()) return;
+        if (view instanceof TextView text && text.getText().length() > 0) {
+            Rect bounds = new Rect();
+            if (view.getGlobalVisibleRect(bounds)) {
+                try { labels.put(new JSONObject().put("text", text.getText().toString())
+                        .put("bounds", bounds.toShortString()).put("alpha", view.getAlpha())); }
+                catch (org.json.JSONException impossible) { throw new AssertionError(impossible); }
+            }
+        }
+        if (view instanceof ViewGroup group)
+            for (int index = 0; index < group.getChildCount(); index++) collectVisibleLabels(group.getChildAt(index), labels);
     }
     private void settled() throws Exception {
         CountDownLatch frame = new CountDownLatch(1);

@@ -20,7 +20,7 @@ record NativeAccountReturn(String runId, String enrollmentId, String completedHa
         if (completedHandoffId != null) return account(enrollmentId) + "&completedHandoffId=" + completedHandoffId +
                 "&completedPayloadSha256=" + completedPayloadSha256;
         return LocalBridge.ACCOUNT_ORIGIN + "/phone/account?" +
-                (reviewedHandoffActive ? "continue=reviewed" : "phoneRunControl=" + runId) +
+                (reviewedHandoffActive ? "continue=reviewed&phoneRunId=" + runId : "phoneRunControl=" + runId) +
                 "&enrollmentId=" + enrollmentId + "&week=phone";
     }
 

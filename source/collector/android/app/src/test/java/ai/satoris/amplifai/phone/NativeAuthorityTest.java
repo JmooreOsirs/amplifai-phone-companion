@@ -99,7 +99,7 @@ public final class NativeAuthorityTest {
         assertNull(run.claim(OPERATION, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", HANDOFF, DIGEST));
     }
 
-    @Test public void verifiedRunAndDestinationMustRemainCurrentForClaimAndEveryConsume() throws Exception {
+    @Test public void verifiedRunAndDestinationGateClaimAndConsumeRequiresItsExactProof() throws Exception {
         Map<String, Object> verified = bindResponse(); verified.remove("protocol"); verified.remove("operationId");
         AtomicReference<String> changed = new AtomicReference<>();
         AtomicReference<NativeRunAuthority> owner = new AtomicReference<>();
@@ -138,15 +138,153 @@ public final class NativeAuthorityTest {
             }
             changed.set(null);
             assertNull(run.claim(OPERATION, "K".repeat(43), HANDOFF, DIGEST));
-            assertEquals(0, connects.get());
+            assertEquals(5, connects.get());
             assertFalse(run.consume(OPERATION, "K".repeat(43), cap, HANDOFF, DIGEST));
             assertFalse(run.consume(OPERATION, cap, "R".repeat(43), HANDOFF, DIGEST));
             assertEquals(0, consumes.get());
             assertNotNull(run.claim(OPERATION, cap, HANDOFF, DIGEST));
-            assertEquals(1, connects.get());
+            assertEquals(6, connects.get());
             assertTrue(run.consume(OPERATION, cap, cap, HANDOFF, DIGEST));
             assertEquals(1, consumes.get());
             changed.set("cancel"); assertFalse(run.consume(OPERATION, cap, cap, HANDOFF, DIGEST));
+        }
+    }
+
+    @Test public void claimedIntentIsVerifiedBeforeApprovalAndReleasedIntentIsConsumedWithoutPendingVerification() throws Exception {
+        HandshakeServer server = new HandshakeServer();
+        try (NativeRunAuthority run = new NativeRunAuthority(prepared(), server, () -> NOW, () -> OPERATION)) {
+            run.start(); run.bind(HANDOFF, DIGEST);
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(0, server.consumes);
+            assertNotNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            assertEquals(Arrays.asList("claim", "verify"), server.events);
+            // A valid local verification does not authorize consumption without server release.
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            server.released = true;
+            assertTrue(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(1, server.verifies);
+            assertTrue(server.consumed);
+        }
+    }
+
+    @Test public void consumeRetryPreservesVerifiedBindingAfterLostReplyButStillChecksCurrentServerAuthority() throws Exception {
+        HandshakeServer server = new HandshakeServer();
+        try (NativeRunAuthority run = new NativeRunAuthority(prepared(), server, () -> NOW, () -> OPERATION)) {
+            run.start(); run.bind(HANDOFF, DIGEST);
+            assertNotNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            server.released = true; server.loseConsumeReply = true;
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertTrue(server.consumed);
+            assertTrue(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(2, server.consumes); assertEquals(1, server.verifies);
+            assertArrayEquals(server.firstConsumeRequest, server.lastConsumeRequest);
+            server.current = false;
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(3, server.consumes);
+            run.close();
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(3, server.consumes);
+        }
+    }
+
+    @Test public void failedScopeVerificationAndChangedBindingsCannotReachConsume() throws Exception {
+        HandshakeServer server = new HandshakeServer();
+        AtomicReference<Instant> time = new AtomicReference<>(NOW);
+        try (NativeRunAuthority run = new NativeRunAuthority(prepared(), server, time::get, () -> OPERATION)) {
+            run.start(); run.bind(HANDOFF, DIGEST);
+            server.verifyAllowed = false;
+            assertNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(0, server.consumes);
+            server.verifyAllowed = true;
+            assertNotNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            server.released = true;
+            assertFalse(run.consume(HANDOFF, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertFalse(run.consume(OPERATION, HandshakeServer.OTHER_CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, OPERATION, DIGEST));
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, "b".repeat(64)));
+            assertEquals(0, server.consumes);
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.OTHER_CAP, HANDOFF, DIGEST));
+            assertEquals(1, server.consumes); // Wrong release is rejected by the server, never treated as success.
+            time.set(run.approval().expiresAt());
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(1, server.consumes);
+        }
+    }
+
+    @Test public void failedReclaimClearsPriorProofAndExpiryDuringConsumeRejectsSuccess() throws Exception {
+        HandshakeServer server = new HandshakeServer();
+        AtomicReference<Instant> time = new AtomicReference<>(NOW);
+        try (NativeRunAuthority run = new NativeRunAuthority(prepared(), server, time::get, () -> OPERATION)) {
+            run.start(); run.bind(HANDOFF, DIGEST);
+            assertNotNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            server.verifyAllowed = false;
+            assertNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            server.released = true;
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(0, server.consumes);
+            server.released = false; server.verifyAllowed = true;
+            assertNotNull(run.claim(OPERATION, HandshakeServer.CAP, HANDOFF, DIGEST));
+            server.released = true;
+            Instant expires = run.approval().expiresAt();
+            server.beforeConsumeReply = () -> time.set(expires);
+            assertFalse(run.consume(OPERATION, HandshakeServer.CAP, HandshakeServer.RELEASE, HANDOFF, DIGEST));
+            assertEquals(1, server.consumes);
+        }
+    }
+
+    /** Models the published SQL's distinct pending-claimed and released-consume phases. */
+    private static final class HandshakeServer implements NativeAuthorityTransport {
+        static final String CAP = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        static final String RELEASE = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA";
+        static final String OTHER_CAP = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCA";
+        final java.util.List<String> events = new java.util.ArrayList<>();
+        final Map<String, Object> destination;
+        final byte[] start, bind;
+        boolean claimed, released, consumed, loseConsumeReply;
+        boolean current = true, verifyAllowed = true;
+        int verifies, consumes;
+        byte[] firstConsumeRequest, lastConsumeRequest;
+        Runnable beforeConsumeReply = () -> {};
+        HandshakeServer() throws Exception {
+            start = bytes(startResponse()); bind = bytes(bindResponse());
+            destination = bindResponse(); destination.remove("protocol"); destination.remove("operationId");
+        }
+        @Override public byte[] post(Route route, byte[] request) throws Failure {
+            if (route == Route.START) return start;
+            if (route == Route.BIND) return bind;
+            Map<String, Object> body = SetupJson.parse(request, 4096);
+            if (route == Route.CONNECT) {
+                events.add("claim"); requireConnection(body);
+                if (!current || released) throw new Failure(false);
+                claimed = true;
+                return bytes(SetupJson.object("destinationEmail", destination.get("destinationEmail"),
+                        "destinationCourse", destination.get("destinationCourse")));
+            }
+            if (route == Route.VERIFY) {
+                events.add("verify"); verifies++;
+                assertEquals("88888888-8888-4888-8888-888888888888", body.get("runId"));
+                assertEquals(destination.get("approvalId"), body.get("expectedApprovalId"));
+                assertEquals(OPERATION, body.get("intentId")); assertEquals(HANDOFF, body.get("handoffId"));
+                assertEquals(DIGEST, body.get("payloadSha256"));
+                if (!current || !verifyAllowed || !claimed || released || consumed) throw new Failure(false);
+                return bytes(destination);
+            }
+            if (route == Route.CONSUME) {
+                events.add("consume"); consumes++; requireConnection(body);
+                if (!current || !claimed || !released || !RELEASE.equals(body.get("releaseCode"))) throw new Failure(false);
+                if (firstConsumeRequest == null) firstConsumeRequest = request.clone();
+                lastConsumeRequest = request.clone();
+                consumed = true;
+                if (loseConsumeReply) { loseConsumeReply = false; throw new Failure(true); }
+                beforeConsumeReply.run();
+                return bytes(SetupJson.object("consumed", true));
+            }
+            throw new AssertionError("Unexpected route");
+        }
+        private void requireConnection(Map<String, Object> body) throws Failure {
+            if (!OPERATION.equals(body.get("intentId")) || !CAP.equals(body.get("capability"))
+                    || !HANDOFF.equals(body.get("handoffId")) || !DIGEST.equals(body.get("payloadSha256"))) throw new Failure(false);
         }
     }
 
