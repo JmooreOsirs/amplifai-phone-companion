@@ -26,7 +26,7 @@ from update_installer import READY, RuntimeReadGuard
 from verify_windows_install import verify
 
 BASELINE_BYTES = 43764598
-BASELINE_SHA256 = "f4dac86029dbf51b0ecfd9bd1269bebd0e4848e4ce75839ec5019042220c5394"
+BASELINE_SHA256 = "f3c83174d737effc07aeb01bbea1b3fe5f372e8ab74ed18f7a9de1a37d4319ae"
 FIXED_DATA_NAME = "AMPLIFai Phone Candidate"
 
 

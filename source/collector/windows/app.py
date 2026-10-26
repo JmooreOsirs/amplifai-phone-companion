@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 import webbrowser
+from datetime import timezone
 from pathlib import Path
 from typing import NamedTuple
 from tkinter import messagebox, ttk
@@ -28,8 +29,8 @@ WINDOW_TITLE = "AMPLIFai Phone · Windows unsigned TEST · " + VERSION
 SETUP_STEPS = (
     ("Connect your iPhone", "Use a data-capable USB cable and unlock the iPhone. Open Apple Devices on this PC and decide any normal Trust prompt yourself. The read-only check uses an existing trusted connection."),
     ("Check the backup setting", "Choose Check iPhone setting below. It reads the current encryption setting without starting a backup or changing the phone. On, Off and Unknown describe this check only."),
-    ("Prepare a backup if you choose", "Apple Devices → your iPhone → General → Backups. If you choose Encrypt local backup, keep the password. Confirming can start a separate backup and overwrite older local backups; allow PC storage. AMPLIFai cannot change encryption or reset the password."),
-    ("Finish, then return", "Let any Apple Devices backup finish before collecting here; it is a separate backup stored on this PC. Recheck if needed, then review the collection agreement below. Even encrypted backups may lack older Calls. Captured coverage is shown after collection."),
+    ("Optional encryption setting", "A manual backup is not required. AMPLIFai creates its own temporary backup when you start. To change encryption yourself: Apple Devices → your iPhone → General → Backups. Keep the password. Changing this setting can start a separate backup and overwrite older local backups. AMPLIFai cannot change encryption or reset the password."),
+    ("Start in AMPLIFai", "If Apple Devices is already making a separate backup, wait for that operation to finish. Then start collection here. AMPLIFai creates a temporary backup on this PC and lets you choose contacts afterwards. Even encrypted backups may lack older Calls; captured coverage appears after collection."),
 )
 
 
@@ -91,7 +92,13 @@ def fit_startup_window(window):
     window.update_idletasks()
 
 
-def window_title(state: Session) -> str:
+def window_title(state: Session, native=None) -> str:
+    outcome = native.phase if native is not None and native.active else state.collection_outcome
+    if outcome == "cancelled" and state.running and state.mode == "connect":
+        return WINDOW_TITLE + " · stopping collection"
+    if outcome in ("failed", "cancelled", "stopped", "refused", "handoff_expired"):
+        label = "collection failed" if outcome == "failed" else "stopped locally" if outcome in ("cancelled", "stopped") else "needs attention"
+        return WINDOW_TITLE + " · " + label
     if not state.running and state.inspected and not state.needs_inspection and not state.residue:
         return WINDOW_TITLE + " · ready"
     if not state.running and state.inspected and state.residue:
@@ -99,6 +106,29 @@ def window_title(state: Session) -> str:
     if not state.running and state.phase == "error":
         return WINDOW_TITLE + " · inspection failed"
     return WINDOW_TITLE
+
+
+def native_run_status(state: Session, native: NativeRun) -> dict | None:
+    run = native.run
+    if (run is None or native.completion is not None or state.saved_acknowledged
+            or run.expires_at <= native.now() or native.monotonic() >= native.run_deadline):
+        return None
+    if native.phase in ("failed", "cancelled"):
+        if state.running and state.mode == "connect":
+            return None
+        phase = "failed" if native.phase == "failed" else "stopped"
+    elif not native.current:
+        return None
+    elif native.phase == "bound":
+        phase = "handoff-ready"
+    elif state._capture_received:
+        phase = "choosing"
+    else:
+        phase = "collecting" if native.started else "preparing"
+    return {"runId": run.run_id, "approvalId": run.approval_id,
+            "enrollmentId": run.scope.enrollment_id,
+            "expiresAt": run.expires_at.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "phase": phase, "failureCode": "collection_failed" if phase == "failed" else None}
 
 
 def workspace_summary(state: Session) -> tuple[str, str]:
@@ -187,10 +217,12 @@ class PhoneWindow:
         self._pump_after = None
         self._queued_update_check = False
         self._status_snapshot = {"busy": True, "updateState": "deferred", "availableVersion": None, "availableBuild": None}
+        self._native_status_snapshot = None
         self.status_server = CompanionStatusServer(
             CompanionIdentity("windows", "x86_64", CHANNEL, BUNDLE_ID, VERSION, BUILD),
             status=lambda: dict(self._status_snapshot), request_update_check=self.enqueue_update_check,
             native_setup_v2=delivery is not None,
+            native_run_status=lambda: self._native_status_snapshot,
         )
         self.window.title(WINDOW_TITLE)
         self.window.geometry("1180x820")
@@ -218,7 +250,7 @@ class PhoneWindow:
 
     @property
     def native_busy(self):
-        return self.native_active and self.native.phase not in ("cancelled", "refused", "complete")
+        return self.native_active and self.native.phase not in ("cancelled", "failed", "refused", "complete", "handoff_expired")
 
     @property
     def native_selection_locked(self):
@@ -266,7 +298,7 @@ class PhoneWindow:
         try:
             link = SetupLink.parse(uri)
             if (self.native.claim_request is not None and link == self.native.claim_request.link
-                    and self.native.phase not in ("cancelled", "refused")):
+                    and self.native.phase not in ("cancelled", "failed", "refused", "handoff_expired")):
                 self.show_workspace("setup")
                 return "duplicate"
             inspecting = self.state.running and self.state.mode == "inspect" and not self.state._capture_received
@@ -493,7 +525,9 @@ class PhoneWindow:
             return
         run = self.native
         scope = run.run.scope if run.run else run.claim.scope if run.claim else None
+        preparing = run.phase in ("prepared", "starting", "start_uncertain")
         self.native_scope.set("Account save confirmed. Open results returns to this report." if run.completion
+            else journey(self.state, run).detail if preparing
             else "Confirm the account, course and sources below." if scope else "Waiting for the authenticated setup destination.")
         labels = {"claiming": "Confirming your account setup…", "pending_approval": "Check the agreement, then approve this collection. Approval does not start collection.",
             "approving": "Confirming your agreement…", "prepared": "Approved. Choose Start when your iPhone is ready.",
@@ -520,13 +554,12 @@ class PhoneWindow:
         self.native_start.configure(state="normal" if run.phase == "prepared" and run.current and idle and clean else "disabled")
         recoverable = run.phase in ("claim_uncertain", "approval_uncertain", "start_uncertain", "continue_uncertain", "bind_uncertain") or (run.current and run.authority == "paused" and run.phase in ("collecting", "bound"))
         self.native_retry.configure(state="normal" if idle and recoverable else "disabled")
-        self.native_cancel.configure(state="disabled" if run.phase in ("cancelled", "complete") else "normal")
+        self.native_cancel.configure(state="disabled" if run.phase in ("cancelled", "failed", "complete") else "normal")
         account_label = ("Open results" if run.completion else "Check saved report" if run.phase == "handoff_expired"
-                         else "Account controls" if run.run else "Open account")
+                         else "Reopen account" if run.run else "Open account")
         self.native_account_button.configure(text=account_label)
         self.open_account_button.configure(text=account_label)
         if hasattr(self, "native_heading"):
-            preparing = run.phase in ("prepared", "starting", "start_uncertain")
             self.native_heading.configure(text="Connect and check your iPhone" if preparing else "Approve this phone collection")
             self.setup_guide.grid() if preparing else self.setup_guide.grid_remove()
             self.native_text_host.grid_remove() if preparing else self.native_text_host.grid()
@@ -760,7 +793,7 @@ class PhoneWindow:
     def cooperative_failure(self, *, clear_password: bool = True) -> None:
         self._pending_continue = None
         if self.native_active:
-            self.native.cancel()
+            self.native.fail()
         self.state.cooperative_failure()
         if clear_password:
             self.clear_password()
@@ -1077,9 +1110,10 @@ class PhoneWindow:
             self._status_snapshot = {"busy": busy, "updateState": self.update_state,
                                      "availableVersion": manifest.version if manifest else None,
                                      "availableBuild": manifest.build if manifest else None}
+            self._native_status_snapshot = native_run_status(state, self.native)
             self.check_update_button.configure(state="normal" if self.status_owned and not busy and self.update_state != "checking" else "disabled")
             self.install_update_button.configure(state="normal" if manifest and not busy and self.update_state in {"available", "deferred"} else "disabled")
-        self.window.title(window_title(state))
+        self.window.title(window_title(state, getattr(self, "native", None)))
         self.status.set(state.status)
         self.transfer_status.set(state.transfer_status)
         self.coverage_status.set(state.coverage_status)
@@ -1306,7 +1340,7 @@ class PhoneWindow:
                     mode = self.state.mode
                     self.state.exited(event.get("code"))
                     if mode == "connect" and self.native_active and not self.state.saved_acknowledged:
-                        self.native.cancel()
+                        self.native.fail()
                     if mode != "inspect":
                         self.start("inspect")
                 else:

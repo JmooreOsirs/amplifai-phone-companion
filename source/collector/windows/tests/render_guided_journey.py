@@ -43,6 +43,7 @@ EXPECTED_STAGE = {
     "saved": "complete", "recovery": "contacts", "collection-error": "attention", "long-scope-error": "approval",
     "authority-paused": "attention", "authority-refused": "attention", "authority-cancelled": "attention",
     "authority-expired": "attention", "handoff-expired": "attention",
+    "collection-failed-clean": "attention", "collection-stopped-clean": "attention", "collection-failed-residue": "attention",
     "legacy-awaiting-destination": "save", "legacy-pending-destination": "save",
     "group-main": "contacts", "group-review": "contacts", "group-all": "contacts",
     "group-empty-review": "contacts", "group-empty-search": "contacts", "group-next-page": "contacts",
@@ -93,7 +94,7 @@ def assert_stage(root, view, name):
     current = journey(view.state, view.native)
     if current.stage != EXPECTED_STAGE[name]:
         raise RuntimeError(f"Wrong user stage for {name}: {current.stage}")
-    expected_panel = ("details" if name == "recovery" or current.stage == "attention" else
+    expected_panel = ("details" if name == "recovery" else
                       "save" if current.stage == "complete" else "approval" if current.stage == "prepare" else current.stage)
     # Tk retains a child's mapped flag when a stage ancestor is hidden.
     # Viewable checks the complete ancestor chain, as actual visibility requires.
@@ -198,6 +199,8 @@ def assert_actions(view, name):
             raise RuntimeError("Approval primary action does not respect the unchecked agreement")
     if name == "prepared" and str(view.native_start.cget("state")) != "normal":
         raise RuntimeError("Prepared run has no enabled Start action")
+    if name == "prepared" and "No manual backup is required" not in view.native_scope.get():
+        raise RuntimeError("Prepared screen hides automatic backup ownership before Start")
     if name == "contacts-empty" and str(view.review_button.cget("state")) != "disabled":
         raise RuntimeError("Empty selection exposes enabled Continue")
     if name in ("contacts", "reviewed-contacts"):
@@ -205,12 +208,21 @@ def assert_actions(view, name):
         if primary.cget("style") != "Primary.TButton" or str(primary.cget("state")) != "normal":
             raise RuntimeError("The contact action dock has no enabled branded primary Continue")
     if name in ("continue-uncertain", "bind-uncertain"):
-        if not view.recovery_retry_button.winfo_viewable() or str(view.contacts.cget("state")) != "disabled":
+        if not view.attention_action.winfo_viewable() or view.attention_action.cget("text") != "Retry confirmation" or str(view.contacts.cget("state")) != "disabled":
             raise RuntimeError("Uncertain Continue lost recovery or unlocked the approved selection")
     if name == "start-uncertain" and (view.native_agreement.winfo_viewable() or not view.native_retry.winfo_viewable()):
         raise RuntimeError("Uncertain Start re-asked approval or hid retry")
-    if name == "authority-paused" and not view.recovery_retry_button.winfo_viewable():
+    if name == "authority-paused" and not view.attention_action.winfo_viewable():
         raise RuntimeError("Paused retained review lost confirmation recovery")
+    if name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue"):
+        if "ready" in view.window.title() or view.journey.current != 1 or view.state.transfer_status:
+            raise RuntimeError("Terminal collection reverted to ready, approval or live read progress")
+        if name.endswith("clean") and (view.attention_action.winfo_viewable() or "original account tab" not in view.attention_detail.cget("text")):
+            raise RuntimeError("Clean terminal state lost the single original-account return")
+        if name.endswith("clean") and (not view.attention_account.winfo_viewable() or view.attention_account.cget("style") != "Quiet.TButton"):
+            raise RuntimeError("Clean terminal state lost its explicit closed-tab fallback")
+        if name.endswith("residue") and (not view.attention_action.winfo_viewable() or view.attention_action.cget("text") != "Remove marked temporary data"):
+            raise RuntimeError("Terminal residue state lost its cleanup action")
     if name.startswith("legacy-") and view.save_heading.cget("text") != "Connect your account":
         raise RuntimeError("Legacy local handoff incorrectly claims an approved account connection")
     if name == "pending-receipt" and view.state.saved_acknowledged:
@@ -534,7 +546,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                         continue
                     case_start = len(failures)
                     stage = EXPECTED_STAGE[name]
-                    panel = ("details" if name == "recovery" or stage == "attention" else
+                    panel = ("details" if name == "recovery" else
                              "save" if stage == "complete" else "approval" if stage == "prepare" else stage)
                     def prepare():
                         root.qualification_keyboard_trace = []

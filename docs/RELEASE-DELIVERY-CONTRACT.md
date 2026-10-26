@@ -1,6 +1,19 @@
 # Native delivery and website promotion contracts
 
-## October 23 Windows RC22 qualification — active work agreement
+## October 26 Windows RC24 qualification
+
+The immutable package/source candidate is `774ab26ba5be2af1726fd0303aabbfd5c07700bf`, version `2026.10.26-rc24`, build `26102624`, MSI `1.0.24`, on the existing unsigned Windows x64 Test channel. The canonical native executor remains on `codex/windows-rc24-terminal-recovery-oct26` at approved Astra / Max. Qualification-only changes bind completed evidence; they do not replace the source used for the package or corresponding-source offer.
+
+Build `40360291318` passed 368 tests with six platform skips, 302,304-row two-page encrypted Messages extraction, exact observed byte geometry and negative cases, frozen-worker validation, installed inventory/protocol checks and RC23-to-RC24 upgrade with session preservation. Guided run `40360118128` passed 192 scenarios and 1,538 checks in each source/frozen mode. All 27 proof files bind to the exact source; all 19 production GUI modules, resolved styles and geometry match. Manual and independent root review confirmed visible automatic-backup instructions before Start and truthful terminal recovery.
+
+The MSI is 43,772,790 bytes, SHA-256 `eba7fe8e6fb26e5c086f3c4aa0cc6c84db814f0f7077568ce0c1449f2a11a843`. The source ZIP is 404,430,648 bytes, SHA-256 `fe1a6b9bb82c128d0e14d0fa12b62f9a3ad37c43738c2c845d448f203cc11f81`. All 647 source members and 174 retained dependency archives passed readback; 173 native references matched the pinned baseline. Source coverage does not claim reproducible native binaries or legal clearance.
+
+The existing Ed25519 key signed the exact MSI and manifest. The pinned handoff gate must prove normal old-app close, parent-exit wait, standard installer UI, frozen-helper-owned immutable guards, retained session fixture, installed relaunch, same-logon setup delivery and retired-cache cleanup before release. Public distribution then requires all seven asset bodies to match their recorded hashes. Ed25519 does not provide Authenticode trust.
+
+Root verified the compatible diagnostic/advisory receiver in production before native publication; website admission, download and feed activation remain a separate owner step after the exact public packet is reviewed. RC23 is the rollback. Mac and Android releases remain unchanged. No synthetic or runner evidence establishes collection or Save on the original customer PC, iPhone or account; that database's header and structural integrity remain unknown.
+
+
+## October 23 Windows RC22 qualification — retained history
 
 The canonical native executor uses `codex/windows-guided-parity-oct23` with the
 approved GPT-6 Astra / Max setting. Windows RC22 is `2026.10.23-rc22`, build

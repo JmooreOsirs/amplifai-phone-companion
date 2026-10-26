@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from datetime import UTC, datetime
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -72,6 +73,9 @@ def encrypted_copy(source: Path, destination: Path) -> bytes:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--growth-pages", type=int, choices=(1, 2), default=1)
+    growth_pages = parser.parse_args().growth_pages
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="amplifai-one-page-qualification-") as temporary:
         workspace = SessionWorkspace(Path(temporary).resolve() / "sessions")
@@ -98,7 +102,7 @@ def main() -> None:
                             block = bytes(range(256)) * 4096
                             db.executemany("INSERT INTO fictional_body_payload VALUES (?)", ((block,) for _ in range(768)))
                     actual = path.stat().st_size
-                    declared = actual - PAGE if category == "messages" else actual
+                    declared = actual - growth_pages * PAGE if category == "messages" else actual
                     relative = DATABASES[category]
                     file_id = hashlib.sha1(("HomeDomain-" + relative).encode()).hexdigest()
                     raw = backup_path / file_id[:2] / file_id
@@ -133,7 +137,7 @@ def main() -> None:
                 manifest._conn.close()
         assert not session.exists()
     print(json.dumps({"status": "pass", "fictional": True, "deviceOrAccountAccess": False,
-                      "messages": ROWS, "sizes": sizes, "parseSeconds": round(parse_seconds, 3),
+                      "messages": ROWS, "growthPages": growth_pages, "sizes": sizes, "parseSeconds": round(parse_seconds, 3),
                       "totalSeconds": round(time.monotonic() - started, 3), "ownedSessionCleanup": "complete"}, sort_keys=True))
 
 

@@ -37,7 +37,7 @@ VALIDATION_CODES = frozenset({
     "unsupported_tokenizer", "validated_contacts_tables", "contacts_relationship_invalid",
     "contacts_types_invalid", "validated_messages_database", "copy_checksum_mismatch",
     "sidecar_present", "schema_unsupported", "validated_call_database", "unsupported_size_growth",
-    "validated_messages_one_page_growth",
+    "validated_messages_one_page_growth", "validated_messages_two_page_growth",
 })
 VALIDATION_SCOPES = frozenset({
     "contacts_tables_v1", "messages_database_v1", "encrypted_contacts_tables_v1",

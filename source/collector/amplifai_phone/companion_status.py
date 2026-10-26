@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TextIO
 
@@ -24,6 +25,9 @@ TOKEN_SECONDS = 60
 MAX_TOKENS = 8
 MAX_COMMAND_BYTES = 1024
 MAX_RESPONSE_BYTES = 4096
+NATIVE_STATUS_PATH = "/v1/status?nativeRun=1"
+RUN_PHASES = frozenset({"preparing", "collecting", "choosing", "handoff-ready", "failed", "stopped"})
+RUN_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,63}\Z")
 BUILD = re.compile(r"[1-9][0-9]{0,11}\Z")
 TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
@@ -73,6 +77,26 @@ def validated_status(value: object) -> dict[str, object]:
     return dict(value)
 
 
+def validated_native_run_status(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "runId", "approvalId", "enrollmentId", "expiresAt", "phase", "failureCode",
+    }:
+        raise ValueError("Invalid native run observation fields")
+    if any(type(value[key]) is not str or not RUN_ID.fullmatch(value[key])
+           for key in ("runId", "approvalId", "enrollmentId")):
+        raise ValueError("Invalid native run observation binding")
+    expiry = value["expiresAt"]
+    if type(expiry) is not str or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", expiry):
+        raise ValueError("Invalid native run observation expiry")
+    datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+    if (type(value["phase"]) is not str or value["phase"] not in RUN_PHASES
+            or value["failureCode"] != ("collection_failed" if value["phase"] == "failed" else None)):
+        raise ValueError("Invalid native run observation state")
+    return dict(value)
+
+
 def _unique_object(items: list[tuple[str, object]]) -> dict[str, object]:
     value: dict[str, object] = {}
     for key, item in items:
@@ -119,12 +143,14 @@ class _BoundedHTTPServer(ThreadingHTTPServer):
 class CompanionStatusServer:
     def __init__(self, identity: CompanionIdentity, status: Callable[[], dict[str, object]],
                  request_update_check: Callable[[], bool | None], *, port: int = STATUS_PORT,
-                 native_setup_v2: bool = False):
+                 native_setup_v2: bool = False,
+                 native_run_status: Callable[[], dict[str, object] | None] | None = None):
         self.identity = identity
         self.status = status
         self.request_update_check = request_update_check
         self.port = port
         self.native_setup_v2 = native_setup_v2 is True and identity.platform == "windows"
+        self.native_run_status = native_run_status if self.native_setup_v2 else None
         self._tokens: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
         self._httpd: _BoundedHTTPServer | None = None
@@ -206,6 +232,8 @@ class CompanionStatusServer:
 
             def do_OPTIONS(self) -> None:
                 method = {"/v1/status": "GET", "/v1/check-update": "POST"}.get(self.path)
+                if self.path == NATIVE_STATUS_PATH and owner.native_run_status is not None:
+                    method = "GET"
                 if self.path == "/v1/setup-capabilities" and (owner.identity.platform == "macos" or owner.native_setup_v2):
                     method = "GET"
                 requested = self.headers.get_all("Access-Control-Request-Headers") or []
@@ -228,11 +256,18 @@ class CompanionStatusServer:
                         identity["schema"] = 2
                     self._reply(200, {**identity, "protocols": ["phone-native-setup-v2" if owner.native_setup_v2 else "phone-native-setup-v1"]})
                     return
-                if self.path != "/v1/status":
+                observation_requested = self.path == NATIVE_STATUS_PATH and owner.native_run_status is not None
+                if self.path != "/v1/status" and not observation_requested:
                     self._reply(403)
+                    return
+                if observation_requested and (self.headers.get_all("Content-Length") is not None
+                                              or self.headers.get_all("Transfer-Encoding") is not None):
+                    self._reply(400)
                     return
                 try:
                     state = validated_status(owner.status())
+                    if observation_requested:
+                        state["nativeRunStatus"] = validated_native_run_status(owner.native_run_status())
                 except (ValueError, TypeError):
                     self._reply(503)
                     return

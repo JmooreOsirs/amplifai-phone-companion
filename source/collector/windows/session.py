@@ -196,6 +196,7 @@ class Session:
         self._retired_destination_ids: set[str] = set()
         self._browser_received = False
         self._failure_status = ""
+        self.collection_outcome = ""
         self._completed = self._saved_exit = self._stopping = self._failed = False
 
     @property
@@ -339,6 +340,7 @@ class Session:
             self._backup_check_received = False
             self.backup_check_status = "Backup setting: checking the currently connected trusted iPhone…"
         if mode == "connect":
+            self.collection_outcome = ""
             self.contacts = []
             self.total_contacts = 0
             self.contact_query = ""
@@ -1288,9 +1290,19 @@ class Session:
             self.needs_inspection = False
             self.phase = "completed" if self._saved_exit and not self.residue else "idle"
             self.status = "Account save acknowledged; helper exited and no abandoned temporary sessions were found." if self.phase == "completed" else "Temporary data checked. Review collection agreement to connect." if not self.residue else "Marked temporary phone data remains. Explicitly remove it before another collection."
+            if self.collection_outcome in {"failed", "stopped"}:
+                outcome = "Collection failed." if self.collection_outcome == "failed" else "Collection stopped."
+                cleanup = ("Marked temporary phone data remains. Remove it before another collection."
+                           if self.residue else "Temporary data checked; no marked abandoned sessions remain.")
+                self.status = f"{outcome} {cleanup} Account Save is not confirmed."
         else:
             self._saved_exit = self.mode == "connect" and code == 0 and self._completed and self.saved_acknowledged and not self._failed and not self._stopping
             self.needs_inspection = True
             self.inspected = False
             self.phase = "checking" if self._saved_exit else "error"
             self.status = "Account save acknowledged; check temporary data before completion." if self._saved_exit else self._failure_status or "Helper stopped; cleanup is unconfirmed. Check temporary data before collecting again."
+            if self.mode == "connect":
+                self.collection_outcome = "saved" if self._saved_exit else "failed" if self._failed or not self._stopping else "stopped"
+                self.transfer_status = ""
+                self.transfer_stage = ""
+                self.progress = None

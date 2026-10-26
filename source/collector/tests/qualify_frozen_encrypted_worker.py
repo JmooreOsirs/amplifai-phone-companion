@@ -75,6 +75,8 @@ def main() -> int:
                 db.execute("PRAGMA page_size=4096")
                 for statement in statements:
                     db.execute(statement)
+                if category == "messages":
+                    db.execute("CREATE TABLE fictional_padding(value BLOB)")
             size = path.stat().st_size
             request: dict[str, object] = {
                 "category": category, "path": str(path), "actual_size": size,
@@ -90,10 +92,22 @@ def main() -> int:
                 if growth != {"code": "validated_messages_one_page_growth", "copy_checksum_matches": True}:
                     raise AssertionError("Frozen worker rejected proven one-page Messages geometry")
                 larger = worker(helper, {**request, "manifest_size": size - 8192})
-                if larger != {"code": "unsupported_size_growth", "copy_checksum_matches": True}:
-                    raise AssertionError("Frozen worker admitted more than one Messages page")
+                if larger != {"code": "validated_messages_two_page_growth", "copy_checksum_matches": True}:
+                    raise AssertionError("Frozen worker rejected proven two-4096-page Messages geometry")
                 results["messagesOnePage"] = growth["code"]
                 results["messagesTwoPages"] = larger["code"]
+                excess = worker(helper, {**request, "manifest_size": size - 12288})
+                if excess != {"code": "unsupported_size_growth", "copy_checksum_matches": True}:
+                    raise AssertionError("Frozen worker admitted three Messages pages")
+                results["messagesThreePages"] = excess["code"]
+                with path.open("r+b") as damaged:
+                    damaged.seek(4096)
+                    damaged.write(b"\xff")
+                broken = worker(helper, {**request, "manifest_size": size - 8192,
+                                        "copied_sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+                if broken != {"code": "structural_invalid", "copy_checksum_matches": True}:
+                    raise AssertionError("Frozen worker admitted a corrupt two-page-growth database")
+                results["messagesTwoPagesCorrupt"] = broken["code"]
             if category == "calls":
                 rejected = worker(helper, {**request, "copied_sha256": "0" * 64})
                 if rejected != {"code": "copy_checksum_mismatch", "copy_checksum_matches": False}:
