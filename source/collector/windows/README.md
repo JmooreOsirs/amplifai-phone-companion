@@ -1,5 +1,15 @@
 # Windows companion source candidate
 
+## RC25 encryption preparation
+
+Start collection first reads the connected iPhone's backup encryption setting. The result is bound to that approved native run. After a successful On check and clean local inspection, the same current server run must admit Start; the helper receives `--require-encrypted-backup`. Its existing preflight rechecks the actual phone and its post-backup guard rejects a backup that does not confirm encryption. Read-only rechecks do not start collection.
+
+Off or Unknown shows the Apple Devices guide and an explicit **Continue with available data** choice without confirmed call history. That choice uses the same approval and revalidates server admission. Canceled, failed, expired or replaced runs cannot inherit a successful check. Retry preserves the original Start operation; the collector still performs its encryption check. Source-specific missing/unavailable results and per-source account Save remain unchanged.
+
+In Apple Devices, select the connected, unlocked, trusted iPhone, then **General → Backups → Encrypt local backup**. Older iTunes uses **Summary → Backups**. Set and keep the backup password. Enabling encryption can start Apple's separate backup and overwrite earlier local backups; wait for it to finish. AMPLIFai creates its own temporary backup, so no separate manual backup is required. Enter the backup password only in the local companion when prompted; it is not an Apple ID password or device passcode. AMPLIFai does not change encryption or reset passwords. Encryption does not guarantee complete call or message history. [Apple encryption guidance](https://support.apple.com/en-us/108353), [Apple Devices backup guide](https://support.apple.com/guide/devices-windows/back-up-and-restore-your-device-mchla3c8ed03/windows).
+
+Qualification remains separate from physical PC/iPhone/account acceptance. RC24 stays the rollback release; the new build requires its own source, package, guide rendering, signature and normal update-handoff evidence before publication.
+
 This wrapper presents the local iPhone collector on Windows. The published unsigned TEST baseline and rollback is RC23 (`2026.10.23-rc23`, build `26102323`, MSI `1.0.23`, exact native source `243309ce7a21ea275bdea8bacc43f29ff0c0c4d8`). A runner-user install, released artifact, physical PC/iPhone test and authenticated account Save remain distinct evidence.
 
 ## RC24 candidate — October 26

@@ -93,6 +93,46 @@ class EncryptionPreparationTests(unittest.TestCase):
         self.assertEqual(view.native.backup_setting, "unknown")
         self.assertEqual(view.native_worker.operations, [])
 
+    def test_next_start_rechecks_a_changed_setting(self):
+        view, _ = ready()
+        view.check_backup_setting()
+        finish_check(view, True)
+        view.start_native()
+        finish_check(view, False)
+        self.assertEqual(view.native.backup_setting, "off")
+        self.assertEqual(view.native_worker.operations, [])
+
+    def test_helper_launch_failure_and_failed_cleanup_inspection_do_not_start(self):
+        view, _ = ready()
+        view.helper.start.side_effect = OSError("synthetic launch failure")
+        view.start_native()
+        self.assertEqual(view.native.backup_setting, "unknown")
+        self.assertEqual(view.native.phase, "prepared")
+        self.assertEqual(view.native_worker.operations, [])
+        view, _ = ready()
+        view.start_native()
+        view.events.put({"kind": BACKUP_CHECK_MODE, "backupEncrypted": True})
+        view.events.put({"kind": "process-exit", "code": 0})
+        view.pump()
+        view.events.put({"kind": "process-exit", "code": 1})
+        view.pump()
+        self.assertEqual(view.native_worker.operations, [])
+
+    def test_collector_encryption_guard_failure_keeps_specific_recovery_and_no_save(self):
+        for code in ("backup_encryption_disabled", "backup_encryption_unknown", "backup_encryption_changed"):
+            with self.subTest(code=code):
+                view, _ = ready()
+                view.start_native()
+                finish_check(view, True)
+                tick(view)
+                view.events.put({"kind": "error", "code": code})
+                view.events.put({"kind": "process-exit", "code": 1})
+                view.pump()
+                self.assertEqual(view.native.phase, "failed")
+                self.assertIn("Apple Devices", view.native.message)
+                self.assertFalse(view.state.saved_acknowledged)
+                self.assertFalse(view.state._capture_received)
+
     def test_check_error_keeps_approval_but_never_auto_starts(self):
         view, _ = ready()
         view.start_native()
@@ -121,9 +161,9 @@ class EncryptionPreparationTests(unittest.TestCase):
                     self.assertEqual(view.native_worker.operations, [])
 
     def test_remote_replacement_and_late_cancellation_cannot_launch(self):
-        for action in ("refused", "replacement_required", "cancel", "owner_lost"):
+        for action in ("refused", "replacement_required", "cancel", "owner_lost", "expire"):
             with self.subTest(action=action):
-                view, _ = ready()
+                view, clock = ready()
                 view.start_native()
                 finish_check(view, True)
                 if action == "cancel":
@@ -131,6 +171,9 @@ class EncryptionPreparationTests(unittest.TestCase):
                     tick(view)
                 elif action == "owner_lost":
                     view.status_owned = False
+                    tick(view)
+                elif action == "expire":
+                    clock.advance(86400)
                     tick(view)
                 elif action == "refused":
                     tick(view, Outcome("refused"))
@@ -172,7 +215,7 @@ class EncryptionPreparationTests(unittest.TestCase):
         view.start_native()
         finish_check(view, True)
         tick(view)
-        view.events.put({"kind": "needs-password"})
+        view.events.put({"kind": "state", "state": "password_required"})
         view.pump()
         view.password.get.return_value = "synthetic-local-backup-password"
         view.send_password()

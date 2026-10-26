@@ -28,9 +28,9 @@ from session import BACKUP_CHECK_MODE, WEBSITE_ORIGIN, ProtocolError, Session, c
 WINDOW_TITLE = "AMPLIFai Phone · Windows unsigned TEST · " + VERSION
 SETUP_STEPS = (
     ("Connect your iPhone", "Use a data-capable USB cable and unlock the iPhone. Open Apple Devices on this PC and decide any normal Trust prompt yourself. The read-only check uses an existing trusted connection."),
-    ("Check the backup setting", "Choose Check iPhone setting below. It reads the current encryption setting without starting a backup or changing the phone. On, Off and Unknown describe this check only."),
-    ("Optional encryption setting", "A manual backup is not required. AMPLIFai creates its own temporary backup when you start. To change encryption yourself: Apple Devices → your iPhone → General → Backups. Keep the password. Changing this setting can start a separate backup and overwrite older local backups. AMPLIFai cannot change encryption or reset the password."),
-    ("Start in AMPLIFai", "If Apple Devices is already making a separate backup, wait for that operation to finish. Then start collection here. AMPLIFai creates a temporary backup on this PC and lets you choose contacts afterwards. Even encrypted backups may lack older Calls; captured coverage appears after collection."),
+    ("Check the backup setting", "Start collection automatically checks backup encryption before starting a backup. Check iPhone setting below only reads the setting. If it is Off or Unknown, follow the next step or deliberately continue with available data without confirmed call history."),
+    ("Enable encryption for call history", "In Apple Devices, select your connected, unlocked and trusted iPhone → General → Backups → Encrypt local backup. In older iTunes, use Summary → Backups → Encrypt local backup. Set and keep the backup password. Enabling encryption may start Apple's own backup and overwrite older local backups; let it finish before using AMPLIFai."),
+    ("Start in AMPLIFai", "No separate manual backup is required. AMPLIFai creates its own temporary backup. When asked, enter the backup password only in this local app, never on the website. It is not your Apple ID password or device passcode. AMPLIFai cannot change encryption or reset passwords. Even encrypted backups may lack older calls or messages; check each source after collection."),
 )
 
 
@@ -340,16 +340,50 @@ class PhoneWindow:
         self.refresh()
 
     def start_native(self):
-        if (not self.state.inspected or self.state.needs_inspection or self.state.residue or self.state.running
-                or not self.status_owned or self.update_state == "installing"):
+        self.check_backup_setting(start_after=True)
+
+    def check_backup_setting(self, *, start_after=False):
+        if (not self.state.can_check_backup_setting or not self.status_owned or self.update_state == "installing"
+                or self.native.pending is not None or not self.native_worker.idle):
             return
-        self.native_action(self.native.start)
+        if self.native_active:
+            try:
+                self.native.check_backup_setting()
+            except SetupProtocolError:
+                return
+            self._native_backup_check = (self.native, start_after)
+        self.start(BACKUP_CHECK_MODE)
+
+    def complete_native_backup_check(self, mode):
+        intent = getattr(self, "_native_backup_check", None)
+        if intent is None:
+            return
+        run, start_after = intent
+        if run is not self.native or not run.current or run.phase != "prepared":
+            self._native_backup_check = None
+            return
+        if mode == BACKUP_CHECK_MODE:
+            run.checked_backup_setting(self.state.checked_backup_setting)
+            if run.backup_setting in ("off", "unknown"):
+                self.guide_step = 2
+                self.render_guide()
+        elif mode == "inspect":
+            self._native_backup_check = None
+            if start_after and run.backup_setting == "on" and self.state.can_check_backup_setting and self.status_owned and self.update_state != "installing":
+                self.native_action(run.start)
+
+    def start_with_available_data(self):
+        if (not self.state.can_check_backup_setting or not self.status_owned or self.update_state == "installing"
+                or self.native.backup_setting not in ("off", "unknown")):
+            return
+        self.native_action(lambda: self.native.start(available_data=True))
 
     def cancel_native(self):
-        if self.state.running and self.state.mode == "connect":
+        if self.state.running and self.state.mode in ("connect", BACKUP_CHECK_MODE):
             self.stop()
             return
         self._pending_continue = None
+        self._native_backup_check = None
         self.native.cancel()
         self.native_checked.set(False)
         self.sync_native_authority()
@@ -380,7 +414,9 @@ class PhoneWindow:
             self.dispatch_native(result)
         elif result == "start":
             if (not self.state.running and self.state.inspected and not self.state.needs_inspection
-                    and not self.state.residue and self.native.current):
+                    and not self.state.residue and self.native.current and self.status_owned
+                    and self.update_state != "installing"
+                    and self.native.call_history_preparation in ("confirmedEncryptedBackup", "continueWithoutConfirmedCoverage")):
                 self.state.approve(True)
                 self.start("connect", native_admitted=True)
             else:
@@ -469,24 +505,36 @@ class PhoneWindow:
         for button in (self.native_approve, self.native_start, self.native_retry):
             button.pack(side="left", padx=(0, self.space(12)))
         secondary = ttk.Frame(pane, style="Panel.TFrame")
-        secondary.grid(row=6, column=0, sticky="ew", pady=(0, self.space(12)))
+        self.native_available = ttk.Button(pane, text="Continue with available data", style="Quiet.TButton", command=self.start_with_available_data)
+        self.native_available.grid(row=6, column=0, sticky="w", pady=(0, self.space(12)))
+        secondary.grid(row=7, column=0, sticky="ew", pady=(0, self.space(12)))
         self.native_cancel = ttk.Button(secondary, text="Cancel setup", command=self.cancel_native)
         self.native_cancel.pack(side="left", padx=(0, self.space(12)))
         self.native_account_button = ttk.Button(secondary, text="Open account", command=self.open_account)
         self.native_account_button.pack(side="left")
         links = self.native_links = ttk.Frame(pane, style="Panel.TFrame")
-        links.grid(row=7, column=0, sticky="ew")
+        links.grid(row=8, column=0, sticky="ew")
         for title, href in (("Account privacy", DISCLOSURE["privacyHref"]), ("Windows privacy", DISCLOSURE["supplementHref"])):
             ttk.Button(links, text=title, command=lambda path=href: webbrowser.open(WEBSITE_ORIGIN + path)).pack(side="left", padx=(0, self.space(12)))
         self.setup_guide = ttk.Frame(pane, style="Panel.TFrame")
-        self.setup_guide.grid(row=8, column=0, sticky="ew", pady=(self.space(20), 0))
+        self.setup_guide.grid(row=9, column=0, sticky="ew", pady=(self.space(20), 0))
         ttk.Label(self.setup_guide, textvariable=self.guide_heading, style="Panel.Heading.TLabel", wraplength=780).pack(fill="x", pady=(0, self.space(12)))
-        self.guide_text = self.readable_text(self.setup_guide, height=5)
+        guide_text_host = ttk.Frame(self.setup_guide, style="Panel.TFrame")
+        guide_text_host.pack(fill="x")
+        guide_text_host.columnconfigure(0, weight=1)
+        self.guide_text = self.readable_text(guide_text_host, height=6)
+        self.guide_text.pack_forget()
+        self.guide_text.grid(row=0, column=0, sticky="ew")
+        guide_scroll = ttk.Scrollbar(guide_text_host, command=self.guide_text.yview)
+        guide_scroll.grid(row=0, column=1, sticky="ns")
+        self.guide_text.configure(yscrollcommand=guide_scroll.set)
+        self.guide_text.bind("<Tab>", focus_text)
+        self.guide_text.bind("<Shift-Tab>", lambda event: focus_text(event, True))
         guide_actions = ttk.Frame(self.setup_guide, style="Panel.TFrame")
         guide_actions.pack(fill="x", pady=(self.space(12), self.space(12)))
         self.guide_back = ttk.Button(guide_actions, text="Back", command=lambda: self.move_guide(-1))
         self.guide_next = ttk.Button(guide_actions, text="Next", command=lambda: self.move_guide(1))
-        self.backup_check = ttk.Button(guide_actions, text="Check iPhone setting", command=lambda: self.start(BACKUP_CHECK_MODE))
+        self.backup_check = ttk.Button(guide_actions, text="Check iPhone setting", command=self.check_backup_setting)
         guide_buttons = (self.guide_back, self.guide_next, self.backup_check)
         guide_layout = None
         def arrange_guide_actions(_event=None):
@@ -552,6 +600,11 @@ class PhoneWindow:
         self.native_agreement.configure(state="normal" if run.phase == "pending_approval" and run.claim_current and idle else "disabled")
         self.native_approve.configure(state="normal" if run.phase == "pending_approval" and run.claim_current and self.native_checked.get() and idle and clean else "disabled")
         self.native_start.configure(state="normal" if run.phase == "prepared" and run.current and idle and clean else "disabled")
+        partial = run.phase == "prepared" and run.backup_setting in ("off", "unknown")
+        self.native_start.configure(text="Check again and start" if partial else "Start collection")
+        if hasattr(self, "native_available"):
+            self.native_available.configure(state="normal" if partial and run.current and idle and clean else "disabled")
+            self.native_available.grid() if partial else self.native_available.grid_remove()
         recoverable = run.phase in ("claim_uncertain", "approval_uncertain", "start_uncertain", "continue_uncertain", "bind_uncertain") or (run.current and run.authority == "paused" and run.phase in ("collecting", "bound"))
         self.native_retry.configure(state="normal" if idle and recoverable else "disabled")
         self.native_cancel.configure(state="disabled" if run.phase in ("cancelled", "failed", "complete") else "normal")
@@ -753,7 +806,8 @@ class PhoneWindow:
                 self.state.status = "Open Phone in your signed-in account, then choose Connect phone to approve this collection."
                 self.refresh()
             return
-        if native_admitted and (not self.native.current or not self.native.started or self.native.phase != "collecting"):
+        if native_admitted and (not self.native.current or not self.native.started or self.native.phase != "collecting"
+                or self.native.call_history_preparation not in ("confirmedEncryptedBackup", "continueWithoutConfirmedCoverage")):
             return
         if not getattr(self, "status_owned", True) or getattr(self, "update_state", "") == "installing":
             self.state.status = "Collection is paused while another companion or Windows Installer owns this operation."
@@ -776,11 +830,17 @@ class PhoneWindow:
             self._rendering_contacts = False
             self.clear_password()
         try:
-            self.helper.start(mode)
+            if mode == "connect":
+                self.helper.start(mode, require_encrypted_backup=self.native.call_history_preparation == "confirmedEncryptedBackup")
+            else:
+                self.helper.start(mode)
         except (OSError, RuntimeError):
             self.state.exited(1)
             self.state.status = "The packaged helper could not start. No collection is assumed. Check the package/runtime; temporary data still needs inspection."
-            if self.native_active:
+            if mode == BACKUP_CHECK_MODE:
+                self.complete_native_backup_check(mode)
+                self._native_backup_check = None
+            elif self.native_active:
                 self.native.cancel()
         self.refresh()
 
@@ -792,7 +852,7 @@ class PhoneWindow:
 
     def cooperative_failure(self, *, clear_password: bool = True) -> None:
         self._pending_continue = None
-        if self.native_active:
+        if self.native_active and self.state.mode != BACKUP_CHECK_MODE:
             self.native.fail()
         self.state.cooperative_failure()
         if clear_password:
@@ -1071,6 +1131,7 @@ class PhoneWindow:
             if not messagebox.askyesno("Discard local phone review?", "Request stop discards the local reviewed import after the helper exits. Account parts may already be saved, while their final browser receipt may still be pending. Keep this window open and finish in the browser if you want to complete that save. Stop anyway?"):
                 return
         self._pending_continue = None
+        self._native_backup_check = None
         if self.native_active:
             self.native.cancel()
             self.sync_native_authority()
@@ -1339,6 +1400,7 @@ class PhoneWindow:
                 if event.get("kind") == "process-exit":
                     mode = self.state.mode
                     self.state.exited(event.get("code"))
+                    self.complete_native_backup_check(mode)
                     if mode == "connect" and self.native_active and not self.state.saved_acknowledged:
                         self.native.fail()
                     if mode != "inspect":
@@ -1388,6 +1450,9 @@ class PhoneWindow:
                             self.send(self.state.finish())
                     if event.get("kind") == "error" and self.state.phase == "error":
                         self.cooperative_failure()
+                        if (self.native_active and self.state.mode == "connect" and event.get("code") in {
+                                "backup_encryption_disabled", "backup_encryption_unknown", "backup_encryption_changed"}):
+                            self.native.message = self.state.status
             now = time.monotonic()
             if now >= getattr(self, "_next_handoff_poll", 0.0):
                 self.send(self.state.poll())

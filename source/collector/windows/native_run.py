@@ -232,6 +232,8 @@ class NativeRun:
         self.handoff_id = self.payload_sha256 = self.intent_id = ""
         self.completion = None
         self.stop_requested = False
+        self.backup_setting = "not_checked"
+        self.call_history_preparation = None
 
     @property
     def active(self):
@@ -306,13 +308,36 @@ class NativeRun:
         self.phase = "approving"
         return self._send("approve", APPROVE_PATH, self.approval_request.body)
 
-    def start(self):
+    def check_backup_setting(self):
+        if not self.current or self.started or self.phase != "prepared" or self.pending is not None:
+            raise SetupProtocolError("A current unstarted prepared run is required")
+        self.backup_setting = "checking"
+        self.call_history_preparation = None
+        self.message = "Checking the connected iPhone's backup encryption setting. No backup has started."
+
+    def checked_backup_setting(self, encrypted):
+        if not self.current or self.phase != "prepared" or self.backup_setting != "checking":
+            return
+        self.backup_setting = "on" if encrypted is True else "off" if encrypted is False else "unknown"
+        label = "Off" if encrypted is False else "Unknown"
+        self.message = ("Backup encryption is On. Call history will be checked during collection; complete history is not guaranteed."
+            if encrypted is True else
+            f"Backup encryption is {label}. Follow the Apple Devices guide and check again, or continue with available data without confirmed call history.")
+
+    def start(self, *, available_data=False):
         if not self.current or self.started or self.phase != "prepared":
             raise SetupProtocolError("A current unstarted prepared run is required")
+        if available_data is False and self.backup_setting == "on":
+            self.call_history_preparation = "confirmedEncryptedBackup"
+        elif available_data is True and self.backup_setting in ("off", "unknown"):
+            self.call_history_preparation = "continueWithoutConfirmedCoverage"
+        else:
+            raise SetupProtocolError("Check this iPhone's backup setting before starting collection")
         self.operation_id = str(uuid.uuid4())
         self.start_body = request_body({**self._run_fields(), "expectedApprovalId": self.run.approval_id,
                                        "operationId": self.operation_id})
         self.phase = "starting"
+        self.message = ""
         return self._send("start", START_PATH, self.start_body)
 
     def _run_fields(self):
@@ -392,7 +417,7 @@ class NativeRun:
         self.message = "Stop requested locally. Account Save is not confirmed."
 
     def fail(self):
-        if self.phase in ("cancelled", "refused", "handoff_expired", "complete"):
+        if self.phase in ("cancelled", "failed", "refused", "handoff_expired", "complete"):
             return
         self.pending = None
         self.authority = "paused"

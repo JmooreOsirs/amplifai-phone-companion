@@ -117,17 +117,27 @@ def scenarios():
     yield "approval-uncertain", run, inspected()
     run, _ = prepared()
     yield "prepared", run, inspected()
-    for encrypted in (True, False):
+    for encrypted in (True, False, None):
         run, _ = prepared()
+        run.check_backup_setting()
         state = inspected()
         state.begin(BACKUP_CHECK_MODE)
-        state.handle({"kind": BACKUP_CHECK_MODE, "backupEncrypted": encrypted})
+        if encrypted is not None:
+            state.handle({"kind": BACKUP_CHECK_MODE, "backupEncrypted": encrypted})
         state.exited(0)
+        run.checked_backup_setting(state.checked_backup_setting)
         state.begin("inspect")
         state.handle({"kind": "residue", "sessions": []})
         state.exited(0)
-        yield "backup-encrypted" if encrypted else "backup-unencrypted", run, state
+        yield "backup-encrypted" if encrypted is True else "backup-unencrypted" if encrypted is False else "backup-unknown", run, state
     run, _ = prepared()
+    run.check_backup_setting()
+    state = inspected()
+    state.begin(BACKUP_CHECK_MODE)
+    yield "backup-checking", run, state
+    run, _ = prepared()
+    run.check_backup_setting()
+    run.checked_backup_setting(True)
     run.complete(run.start(), Outcome("uncertain"))
     yield "start-uncertain", run, inspected()
     for name in ("connecting", "collecting", "password", "processing"):
@@ -288,6 +298,14 @@ def exercise_controls(view):
     view.helper.start.assert_not_called()
     view.refresh()
     view.native_start.invoke()
+    view.helper.start.assert_called_once_with(BACKUP_CHECK_MODE)
+    view.events.put({"kind": BACKUP_CHECK_MODE, "backupEncrypted": True})
+    view.events.put({"kind": "process-exit", "code": 0})
+    view.pump()
+    view.events.put({"kind": "residue", "sessions": []})
+    view.events.put({"kind": "process-exit", "code": 0})
+    view.pump()
+    view.helper.start.reset_mock()
     first = view.native_worker.waiting.body
     tick(view, Outcome("uncertain"))
     view.refresh()
@@ -295,7 +313,7 @@ def exercise_controls(view):
     if view.native_worker.waiting.body != first:
         raise RuntimeError("Start retry changed operation")
     tick(view)
-    view.helper.start.assert_called_once_with("connect")
+    view.helper.start.assert_called_once_with("connect", require_encrypted_backup=True)
     view.state = review_state()
     view.render_contacts()
     view.refresh()

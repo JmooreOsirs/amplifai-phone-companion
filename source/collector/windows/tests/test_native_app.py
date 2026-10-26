@@ -61,6 +61,17 @@ def tick(view, outcome=None):
     view.pump_native()
 
 
+def checked_start(view):
+    view.start_native()
+    view.events.put({"kind": "backup-encryption-status", "backupEncrypted": True})
+    view.events.put({"kind": "process-exit", "code": 0})
+    view.pump()
+    view.events.put({"kind": "residue", "sessions": []})
+    view.events.put({"kind": "process-exit", "code": 0})
+    view.pump()
+    view.helper.start.reset_mock()
+
+
 class NativeAppTests(unittest.TestCase):
     def test_visible_pre_start_copy_explains_automatic_backup(self):
         view, _ = native_window()
@@ -310,10 +321,10 @@ class NativeAppTests(unittest.TestCase):
         tick(view)
         self.assertEqual(view.native.phase, "prepared")
         view.helper.start.assert_not_called()
-        view.start_native()
+        checked_start(view)
         view.helper.start.assert_not_called()
         tick(view)
-        view.helper.start.assert_called_once_with("connect")
+        view.helper.start.assert_called_once_with("connect", require_encrypted_backup=True)
         self.assertTrue(view.state.running)
         self.assertIsNone(view.state.approval)
 
@@ -344,7 +355,7 @@ class NativeAppTests(unittest.TestCase):
     def test_start_response_loss_and_late_response_never_duplicate_helper(self):
         view, _ = native_window()
         view.native, _ = prepared()
-        view.start_native()
+        checked_start(view)
         first = view.native_worker.waiting
         tick(view, Outcome("uncertain"))
         view.helper.start.assert_not_called()
@@ -352,7 +363,7 @@ class NativeAppTests(unittest.TestCase):
         self.assertEqual(first.body, view.native_worker.waiting.body)
         tick(view)
         view.handle_native_result(view.native.complete(first, Outcome("accepted", response(view.native, "start"))))
-        view.helper.start.assert_called_once_with("connect")
+        view.helper.start.assert_called_once_with("connect", require_encrypted_backup=True)
 
     def test_continue_freezes_exact_selection_before_pair_or_bind_and_retries_exact(self):
         view, _ = native_window()
@@ -442,7 +453,7 @@ class NativeAppTests(unittest.TestCase):
     def test_local_failure_retires_inflight_start_before_late_success(self):
         view, _ = native_window()
         view.native, _ = prepared()
-        view.start_native()
+        checked_start(view)
         view.cooperative_failure()
         tick(view)
         self.assertEqual(view.native.phase, "failed")
