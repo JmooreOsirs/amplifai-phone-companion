@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from contextlib import contextmanager
+import _tkinter
 import faulthandler
 import hashlib
 import json
@@ -30,6 +32,35 @@ from test_native_app import SyntheticWorker
 from test_native_run import started
 from test_native_setup import CLIENT
 from test_session import inspected
+
+
+class EventPumpGuard:
+    """Bound synthetic Tk drains while retaining the real event ordering."""
+    def __init__(self, root, *, timeout=10.0):
+        self.root, self.timeout = root, timeout
+        self.events = deque(maxlen=128)
+        self.event_count = 0
+        self.last_failure = None
+        root.bind_all("<Configure>", self.record, add="+")
+        root.update = lambda: self.drain(_tkinter.ALL_EVENTS, "update")
+        root.update_idletasks = lambda: self.drain(_tkinter.IDLE_EVENTS, "update_idletasks")
+
+    def record(self, event):
+        self.event_count += 1
+        self.events.append({"widget": str(event.widget), "width": event.width, "height": event.height})
+
+    def drain(self, flags, operation):
+        started = time.perf_counter()
+        processed = 0
+        while self.root.tk.dooneevent(flags | _tkinter.DONT_WAIT):
+            processed += 1
+            if time.perf_counter() - started >= self.timeout:
+                self.last_failure = {"operation": operation, "timeoutSeconds": self.timeout,
+                                     "processedEvents": processed, "configureEvents": self.event_count,
+                                     "recentConfigureEvents": list(self.events)}
+                raise RuntimeError(f"Tk {operation} did not settle within {self.timeout:g}s; "
+                                   f"processed {processed} events")
+
 
 VIEWPORTS = ((1180, 820, 4 / 3), (920, 749, 4 / 3), (680, 680, 4 / 3), (680, 680, 1.75))
 EXPECTED_STAGE = {
@@ -428,6 +459,9 @@ def failure_context(root, view):
     result = {}
     readers = {
         "clientSize": lambda: [root.winfo_width(), root.winfo_height()],
+        "eventPump": lambda: root.qualification_event_guard.last_failure,
+        "scheduledCallbacks": lambda: [list(root.tk.splitlist(root.tk.call("after", "info", job)))
+                                         for job in root.tk.splitlist(root.tk.call("after", "info"))],
         "keyboardTraversal": lambda: getattr(root, "qualification_keyboard_trace", []),
         "pumpMeasurements": lambda: getattr(root, "qualification_pump_measurements", {}),
         "tkFocusOK": lambda: str(root.tk.call("info", "body", "::tk::FocusOK")),
@@ -443,6 +477,10 @@ def failure_context(root, view):
         return chain
     readers["focusedWidgetAndAncestors"] = focus_chain
     if view is not None:
+        readers["stagePanels"] = lambda: {
+            name: {"panel": widget_diagnostic(root, panel),
+                   "content": widget_diagnostic(root, panel.content)}
+            for name, panel in view.stage_panels.items()}
         readers["scrollViewports"] = lambda: {
             name: widget_diagnostic(root, widget) for name, widget in
             (("details", view.details_canvas), ("contacts", view.contacts._canvas))}
@@ -531,6 +569,8 @@ def render(args, *, contacts_only=False, frozen_identity=None):
         created, root = check("viewport", "create-root", create_root)
         if not created:
             continue
+        if getattr(args, "trace_stalls", False):
+            root.qualification_event_guard = EventPumpGuard(root)
         root.report_callback_exception = lambda kind, value, trace: errors.append(f"{kind.__name__}: {value}")
 
         def run_viewport():

@@ -11,6 +11,35 @@ from unittest.mock import Mock, patch
 import render_guided_journey as renderer
 
 
+class EventPumpGuardTests(unittest.TestCase):
+    def test_settled_events_keep_normal_and_idle_drains_distinct(self):
+        root = Mock()
+        guard = renderer.EventPumpGuard(root)
+        for method, flags in ((root.update, renderer._tkinter.ALL_EVENTS),
+                              (root.update_idletasks, renderer._tkinter.IDLE_EVENTS)):
+            root.tk.dooneevent.reset_mock(side_effect=True)
+            root.tk.dooneevent.side_effect = [1, 1, 0]
+            with patch.object(renderer.time, "perf_counter", side_effect=[0.0, 0.1, 0.2]):
+                method()
+            self.assertEqual(root.tk.dooneevent.call_count, 3)
+            root.tk.dooneevent.assert_called_with(flags | renderer._tkinter.DONT_WAIT)
+        self.assertIsNone(guard.last_failure)
+
+    def test_nonsettling_events_fail_with_bounded_layout_evidence(self):
+        root = Mock()
+        guard = renderer.EventPumpGuard(root, timeout=1.0)
+        for width in range(140):
+            guard.record(SimpleNamespace(widget=".save", width=width, height=320))
+        root.tk.dooneevent.return_value = 1
+        with patch.object(renderer.time, "perf_counter", side_effect=[0.0, 0.5, 1.0]):
+            with self.assertRaisesRegex(RuntimeError, "did not settle"):
+                root.update()
+        self.assertEqual(guard.last_failure["processedEvents"], 2)
+        self.assertEqual(guard.last_failure["configureEvents"], 140)
+        self.assertEqual(len(guard.last_failure["recentConfigureEvents"]), 128)
+        self.assertEqual(guard.last_failure["recentConfigureEvents"][-1]["width"], 139)
+
+
 class GuidedGateTests(unittest.TestCase):
     def run_injected(self, output, *, collect_all, at_exit=False):
         roots = []
