@@ -96,11 +96,12 @@ def validate_messages_size_difference(backup,entry,destination,actual_size,*,wor
             try:worker.communicate(timeout=.5)
             except subprocess.TimeoutExpired:pass
 
-def _validate(request, *, one_page_growth=False):
+def _validate(request, *, growth_pages=0):
+    if type(growth_pages) is not int or growth_pages not in (0,1,2):return 'unsafe'
     if not isinstance(request,dict) or set(request)!={'path','actual_size','manifest_size','digest'}:return 'unsafe'
     actual,expected,digest=request['actual_size'],request['manifest_size'],request['digest']
     if type(actual) is not int or type(expected) is not int or not 512<=actual<2**63 or not 512<=expected<2**63:return 'unsafe'
-    if (actual<=expected if one_page_growth else actual>=expected):return 'unsafe'
+    if (actual<=expected if growth_pages else actual>=expected):return 'unsafe'
     if not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{40}',digest):return 'unsafe'
     path=Path(request['path'])
     if not proof._frozen_owned_path(path):return 'unsafe'
@@ -115,7 +116,7 @@ def _validate(request, *, one_page_growth=False):
         page=int.from_bytes(raw[16:18],'big');page=65536 if page==1 else page
         pages=int.from_bytes(raw[28:32],'big')
         if not 512<=page<=65536 or page&(page-1) or not pages or raw[24:28]!=raw[92:96] or pages*page!=actual or expected%page:return 'structural_invalid'
-        if one_page_growth and actual-expected!=page:return 'unsupported_size_growth'
+        if growth_pages and (actual-expected!=growth_pages*page or growth_pages==2 and page!=4096):return 'unsupported_size_growth'
         stream.seek(0);hasher=hashlib.sha1()
         while chunk:=stream.read(256*1024):
             if time.monotonic()>deadline:return 'timed_out'

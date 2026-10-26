@@ -6,7 +6,7 @@ The released collector, review, and Save/ACK behavior remains the acceptance bas
 
 The app owns an IPv4 loopback status server at `127.0.0.1:48752`, separate from the reviewed-data bridge at port 48751. Exactly one status server can own the port; a second app reports the conflict and cannot collect until the other app closes. Never take over a listener or delete another app.
 
-Allowed origins are exactly `https://amplifai-database-engine.vercel.app` and `https://amplifai.satoris.ai`. Require exact Host `127.0.0.1:48752`, one Origin header, bounded requests, no redirects, `no-store`, and explicit local-network preflight. No account, phone, path, or review data is returned.
+Allowed origins are exactly `https://amplifai-database-engine.vercel.app` and `https://amplifai.satoris.ai`. Require exact Host `127.0.0.1:48752`, one Origin header, bounded requests, no redirects, `no-store`, and explicit local-network preflight. The default response contains app/update identity only. No phone content, paths or review data is returned.
 
 `GET /v1/status` returns at most 4096 bytes:
 
@@ -15,6 +15,12 @@ Allowed origins are exactly `https://amplifai-database-engine.vercel.app` and `h
 ```
 
 Platforms: `macos`, `windows`. Architectures: `arm64`, `x86_64`. Channels: `macos-arm64`, `macos-intel-test`, `windows-x64-test`. Update states: `checking`, `current`, `available`, `deferred`, `installing`, `failed`, `manual`. Build is a digit string (1–12 digits); version is a bounded release label. The token is random, one-use, origin-bound, expires after 60 seconds, and does not authorize installation.
+
+Windows RC24 adds the exact opt-in read `GET /v1/status?nativeRun=1`. Default `/v1/status` retains its field set for older strict clients. Only the literal opted-in path is admitted, with the same Origin/Host/loopback, GET/OPTIONS and 4096-byte response bounds; request bodies, duplicate or extra query fields are rejected. Older apps return 403: that means observation unavailable, not stopped or failed.
+
+The opted-in response adds `nativeRunStatus`, either null or exactly `{runId, approvalId, enrollmentId, expiresAt, phase, failureCode}`. IDs are canonical UUIDs; expiry is the fixed admitted UTC instant serialized with milliseconds. Phase is `preparing`, `collecting`, `choosing`, `handoff-ready`, `failed` or `stopped`; failureCode is `collection_failed` only for `failed`, otherwise null. The existing response envelope identifies the installed client. No capability, account identity, source count, path or raw error leaves the app. Terminal observations wait for the owned collection helper to exit. Expired authority, confirmed Save and unsupported local phases produce null.
+
+This observation has no authority. The website must authorize and match the exact run/approval/enrollment/expiry and admitted client identity before using it for presentation. Recover durable Save/receipt first; a local failure must not cancel a handoff already received or being saved. No observation can approve, revoke, create a run, mark Saved or authorize retry/collection. A missing or mismatching observation is unknown. Main recovery returns to the original account tab; Reopen account is an explicit fallback that may open another tab.
 
 `POST /v1/check-update` accepts only `{"schema":1,"token":"..."}` (1024 bytes maximum). Consume a valid capability before action. Return `202 {"checking":true}` for an accepted native check, `409 {"deferred":true}` while busy, or `403 {}` for denied/expired/reused capability. The native wrapper rechecks its live safety gate before starting any update action. The website validates a strict schema and offers a native check or a CPU-matched official download; unreachable does not prove uninstalled.
 

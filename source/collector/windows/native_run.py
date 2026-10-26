@@ -240,7 +240,7 @@ class NativeRun:
     @property
     def current(self):
         return (self.run is not None and self.run.expires_at > self.now() and self.monotonic() < self.run_deadline
-                and self.phase not in ("refused", "cancelled", "complete", "handoff_expired"))
+                and self.phase not in ("refused", "cancelled", "failed", "complete", "handoff_expired"))
 
     @property
     def claim_current(self):
@@ -389,7 +389,16 @@ class NativeRun:
         self.authority = "paused"
         self.phase = "cancelled"
         self.stop_requested = self.started
-        self.message = "Stopped locally. Return to the original account tab to stop this setup or collection."
+        self.message = "Stop requested locally. Account Save is not confirmed."
+
+    def fail(self):
+        if self.phase in ("cancelled", "refused", "handoff_expired", "complete"):
+            return
+        self.pending = None
+        self.authority = "paused"
+        self.phase = "failed"
+        self.stop_requested = self.started
+        self.message = "This collection could not finish. Account Save is not confirmed. Source diagnostic details remain available here."
 
     def handoff_expired(self):
         self.pending = None
@@ -412,7 +421,7 @@ class NativeRun:
         self.message = "Confirmation is unavailable. Check your connection and PC clock, then retry. No new collection or transfer is authorized until confirmation."
 
     def timeout(self):
-        if self.run is not None and not self.current and self.phase not in ("cancelled", "refused", "complete", "handoff_expired"):
+        if self.run is not None and not self.current and self.phase not in ("cancelled", "failed", "refused", "complete", "handoff_expired"):
             self._refused()
             return True
         if self.pending is not None and self.monotonic() >= self.deadline:

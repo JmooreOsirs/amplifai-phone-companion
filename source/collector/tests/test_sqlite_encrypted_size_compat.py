@@ -310,8 +310,43 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                 self.assertEqual(samples[-1]["size_difference_validation"],
                                  "validated_messages_one_page_growth")
 
+    def test_two_4096_page_growth_requires_all_proofs_and_parses_metadata(self) -> None:
+        backup = self._backup(("messages",), delta=-8192)
+        capture = _parse_entries(backup, self.copy_path, datetime(2026, 10, 26, tzinfo=UTC),
+                                 RETAINED_HISTORY_START, workspace=self.workspace)
+        self.assertNotIn("messages", capture.missing_sources)
+        self.assertEqual(len(capture.messages.records), 1)
+        self.assertEqual(capture.messages.records[0].source_id, 7)
+        self.assertNotIn("PRIVATE_BODY", repr(capture.messages))
+
+    def test_two_page_growth_still_rejects_missing_proof_sidecars_and_corruption(self) -> None:
+        cases = (("missing-digest", {"digest_mode": "missing"}, "insufficient_manifest"),
+                 ("wrong-digest", {"digest_mode": "wrong"}, "checksum_mismatch"),
+                 ("wal", {"sidecar": ("messages", "-wal")}, "sidecar_present"),
+                 ("shm", {"sidecar": ("messages", "-shm")}, "sidecar_present"),
+                 ("journal", {"sidecar": ("messages", "-journal")}, "sidecar_present"),
+                 ("broken", {"corrupt": "messages"}, "structural_invalid"),
+                 ("smaller-pages", {"page_size": 512, "payload_bytes": 16384}, "unsupported_size_growth"))
+        for label, options, expected in cases:
+            with self.subTest(case=label):
+                self._new_case(label)
+                self.assertEqual(self._growth_failure(delta=-8192, **options)["validationCode"], expected)
+        self._new_case("larger-two-pages")
+        self.assertEqual(self._growth_failure(delta=-16384, page_size=8192)["validationCode"], "unsupported_size_growth")
+
+    def test_faulty_two_page_success_cannot_authorize_one_page_or_other_categories(self) -> None:
+        worker = SimpleNamespace(returncode=0, poll=lambda: 0,
+            communicate=lambda *args, **kwargs: (json.dumps({"code": "validated_messages_two_page_growth",
+                                                             "copy_checksum_matches": True}), None))
+        for category, delta in (("messages", -4096), ("messages", 4096), ("contacts", 4096), ("calls", 4096)):
+            with self.subTest(category=category, delta=delta):
+                self._new_case(category + str(delta))
+                backup = self._backup((category,), delta=delta)
+                with patch.object(sqlite_encrypted_size_compat.subprocess, "Popen", return_value=worker):
+                    self._reject_length(backup, category)
+
     def test_other_growth_deltas_are_not_percentage_or_page_tolerances(self) -> None:
-        for delta in (1, 4095, 4097, 8192, 16 * 4096, 17 * 4096, 8_388_608 // 100):
+        for delta in (1, 4095, 4097, 8191, 8193, 12288, 16 * 4096, 17 * 4096, 8_388_608 // 100):
             with self.subTest(delta=delta):
                 self._new_case(str(delta))
                 safe = self._growth_failure(delta=-delta, payload_bytes=8_388_608)
@@ -375,6 +410,12 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                     self._reject_length(backup, category)
 
     def test_one_page_mutation_after_staged_row_discards_messages_only(self) -> None:
+        self._assert_staged_growth_mutation(4096, "validated_messages_one_page_growth")
+
+    def test_two_page_mutation_after_staged_row_discards_messages_only(self) -> None:
+        self._assert_staged_growth_mutation(8192, "validated_messages_two_page_growth")
+
+    def _assert_staged_growth_mutation(self, growth, success_code) -> None:
         for mutation in ("rewrite", "replace", "wal", "raw-replace", "manifest"):
             with self.subTest(mutation=mutation):
                 self._new_case(mutation)
@@ -382,7 +423,7 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                 entry = backup.get_entry_by_domain_and_path("HomeDomain", DATABASES["messages"])
                 manifest = backup._manifest_db._conn
                 manifest.execute("UPDATE Files SET file=? WHERE relativePath=?",
-                                 (self._archive(DATABASES["messages"], entry.size - 8192,
+                                 (self._archive(DATABASES["messages"], entry.size - 4096 - growth,
                                                 hashlib.sha1(entry.real_path.read_bytes()).digest()),
                                   DATABASES["messages"]))
                 manifest.commit()
@@ -429,7 +470,7 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                 self.assertEqual(tuple(store.counts.values()), (1, 1, 0))
                 self.assertEqual(len(store.collection("messages")), 0)
                 self.assertEqual(capture.source_diagnostics[0]["validationCode"],
-                                 "validated_messages_one_page_growth")
+                                 success_code)
 
     def test_one_page_larger_messages_late_wal_discards_source(self) -> None:
         from amplifai_phone import ios_backup
@@ -607,8 +648,8 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
                 self.assertEqual(sqlite_encrypted_size_compat._validate({**request, **fields}),
                                  ("unsafe", None))
 
-    def test_two_page_larger_messages_remains_unavailable_in_partial_capture(self) -> None:
-        backup = self._backup(tuple(DATABASES), delta=-8192)
+    def test_three_page_larger_messages_remains_unavailable_in_partial_capture(self) -> None:
+        backup = self._backup(tuple(DATABASES), delta=-12288, payload_bytes=16384)
         # Required Contacts must keep their ordinary exact-size path. Adjust
         # only its fictional manifest entry, leaving Messages contradictory.
         db = backup._manifest_db._conn

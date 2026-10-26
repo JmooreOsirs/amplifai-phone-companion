@@ -8,6 +8,27 @@ from test_session import BINDING, captured, inspected, paired, reviewed
 
 
 class JourneyTests(unittest.TestCase):
+    def test_terminal_recovery_has_one_action_until_cleanup_is_checked(self):
+        native, _ = started()
+        native.fail()
+        state = inspected()
+        state.needs_inspection = True
+        self.assertEqual(journey(state, native).action, "inspect")
+        state.begin("inspect")
+        self.assertEqual(journey(state, native).action, "wait")
+        state.handle({"kind": "residue", "sessions": []})
+        state.exited(0)
+        self.assertEqual(journey(state, native).action, "return")
+        state.residue = [{"marked": True}]
+        self.assertEqual(journey(state, native).action, "clear")
+
+    def test_preparation_explains_app_owned_backup_without_manual_prerequisite(self):
+        native, _ = prepared()
+        text = journey(inspected(), native).detail
+        self.assertIn("creates", text)
+        self.assertIn("temporary backup", text)
+        self.assertNotIn("finish any Apple Devices backup", text)
+
     def test_plain_launch_requires_account_but_existing_legacy_work_stays_recoverable(self):
         state = inspected()
         self.assertEqual(journey(state, None).stage, "account")
@@ -32,7 +53,8 @@ class JourneyTests(unittest.TestCase):
                 getattr(native, action)()
                 result = journey(state, native)
                 self.assertEqual(result.stage, "attention")
-                self.assertEqual(result.detail, native.message)
+                self.assertIn(native.message, result.detail)
+                self.assertIn(result.action, {"return", "wait"})
                 self.assertTrue(state.reviewed)
                 self.assertFalse(state.saved_acknowledged)
 

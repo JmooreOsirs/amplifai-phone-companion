@@ -62,6 +62,83 @@ def tick(view, outcome=None):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_advisory_uses_exact_run_and_waits_for_exit_and_yields_to_save_receipt(self):
+        view, _ = native_window()
+        native, clock = started()
+        state = source_window().state
+        observe = view.pump.__globals__["native_run_status"]
+        initial = observe(state, native)
+        self.assertEqual(initial["runId"], native.run.run_id)
+        self.assertEqual(initial["approvalId"], native.run.approval_id)
+        self.assertEqual(initial["phase"], "collecting")
+        native.fail()
+        self.assertIsNone(observe(state, native))
+        state.exited(1)
+        stopped = observe(state, native)
+        self.assertEqual(stopped["phase"], "failed")
+        self.assertEqual(stopped["expiresAt"], initial["expiresAt"])
+        self.assertNotIn("capability", stopped)
+        state.saved_acknowledged = True
+        self.assertIsNone(observe(state, native))
+        state.saved_acknowledged = False
+        clock.advance(86400)
+        self.assertIsNone(observe(state, native))
+
+    def test_helper_error_exit_and_clean_inspection_keep_failure_and_diagnostic(self):
+        from journey import journey
+        from test_windows_source_diagnostics import diagnostic
+        view, _ = native_window()
+        view.native, _ = started()
+        view.state = source_window().state
+        facts = diagnostic(declaredBytes=794714112, rawBytes=794722320,
+                           copiedBytes=794722304, validationCode="unsupported_size_growth",
+                           copyDigest="matched")
+        view.events.put({"kind": "transfer", "stage": "processing", "processedBytes": 1211527184})
+        view.events.put({"kind": "selected-payload-diagnostic", **facts})
+        view.events.put({"kind": "error", "code": "selected_payload_length"})
+        view.events.put({"kind": "process-exit", "code": 1})
+        view.pump()
+        view.events.put({"kind": "residue", "sessions": []})
+        view.events.put({"kind": "process-exit", "code": 0})
+        view.pump()
+        self.assertEqual(view.native.phase, "failed")
+        self.assertFalse(view.native.current)
+        self.assertEqual(view.state.collection_outcome, "failed")
+        self.assertEqual(view.state.source_diagnostics, [facts])
+        self.assertNotIn("agreement", view.state.status)
+        self.assertNotIn("Reading", view.state.transfer_status)
+        self.assertEqual(journey(view.state, view.native).step, 1)
+        title = view.pump.__globals__["window_title"](view.state, view.native)
+        self.assertIn("failed", title)
+        self.assertNotIn("ready", title)
+        self.assertFalse(view.state.saved_acknowledged)
+
+    def test_unexpected_helper_exit_is_failure_not_owner_cancel(self):
+        view, _ = native_window()
+        view.native, _ = started()
+        view.state = source_window().state
+        view.events.put({"kind": "process-exit", "code": 1})
+        view.pump()
+        self.assertEqual(view.native.phase, "failed")
+        self.assertNotIn("Stopped locally", view.native.message)
+
+    def test_explicit_stop_survives_inspection_without_restarting_approval(self):
+        from journey import journey
+        view, _ = native_window()
+        view.native, _ = started()
+        view.state = source_window().state
+        view.stop()
+        view.events.put({"kind": "process-exit", "code": 0})
+        view.pump()
+        view.events.put({"kind": "residue", "sessions": []})
+        view.events.put({"kind": "process-exit", "code": 0})
+        view.pump()
+        self.assertEqual(view.native.phase, "cancelled")
+        self.assertEqual(view.state.collection_outcome, "stopped")
+        self.assertEqual(journey(view.state, view.native).step, 1)
+        self.assertNotIn("agreement", view.state.status)
+        self.assertFalse(view.state.can_connect)
+
     def pending_continue(self, *, refreshing=False):
         view, _ = native_window()
         view.native, _ = started()
@@ -352,7 +429,7 @@ class NativeAppTests(unittest.TestCase):
         view.start_native()
         view.cooperative_failure()
         tick(view)
-        self.assertEqual(view.native.phase, "cancelled")
+        self.assertEqual(view.native.phase, "failed")
         view.helper.start.assert_not_called()
 
     def test_received_and_pending_receipt_cannot_finish_native_collection(self):

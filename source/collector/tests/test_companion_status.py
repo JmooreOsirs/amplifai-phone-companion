@@ -20,6 +20,46 @@ IDENTITY = CompanionIdentity("macos", "arm64", "macos-arm64",
 
 
 class StatusTests(unittest.TestCase):
+    def native_observer(self):
+        self.server.stop()
+        identity = CompanionIdentity("windows", "x86_64", "windows-x64-test",
+                                     "ai.satoris.amplifai.phone.windows-candidate", "2026.10.26-rc24", "26102624")
+        self.observation = {"runId": "11111111-1111-4111-8111-111111111111",
+                            "approvalId": "22222222-2222-4222-8222-222222222222",
+                            "enrollmentId": "33333333-3333-4333-8333-333333333333",
+                            "expiresAt": "2026-10-26T20:00:00.000Z",
+                            "phase": "failed", "failureCode": "collection_failed"}
+        self.server = CompanionStatusServer(identity, lambda: self.state, self.check, port=0,
+            native_setup_v2=True, native_run_status=lambda: self.observation)
+        self.server.start()
+
+    def test_run_observation_requires_exact_opt_in_and_keeps_legacy_status_shape(self):
+        self.assertEqual(self.request(path="/v1/status?nativeRun=1")[0], 403)
+        self.native_observer()
+        old = json.loads(self.request()[2])
+        self.assertNotIn("nativeRunStatus", old)
+        status, _, body = self.request(path="/v1/status?nativeRun=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["nativeRunStatus"], self.observation)
+        self.assertEqual(set(json.loads(body)), set(old) | {"nativeRunStatus"})
+        self.assertEqual(self.checks, 0)
+        self.observation = None
+        self.assertIsNone(json.loads(self.request(path="/v1/status?nativeRun=1")[2])["nativeRunStatus"])
+
+    def test_run_observation_rejects_foreign_origins_extra_queries_bodies_and_private_fields(self):
+        self.native_observer()
+        for path in ("/v1/status?nativeRun=2", "/v1/status?nativeRun=1&extra=1",
+                     "/v1/status?nativeRun=1&nativeRun=1", "/v1/status?nativeRun=%31"):
+            self.assertEqual(self.request(path=path)[0], 403)
+        self.assertEqual(self.request(path="/v1/status?nativeRun=1", origin="https://foreign.example")[0], 403)
+        self.assertEqual(self.request(path="/v1/status?nativeRun=1", body=b"{}")[0], 400)
+        original = self.observation
+        for changed in ({"phase": "saved"}, {"failureCode": "private raw error"}, {"path": "private/path"},
+                        {"runId": "wrong"}, {"expiresAt": "2026-02-31T20:00:00.000Z"}, {"phase": "collecting"}):
+            self.observation = {**original, **changed}
+            self.assertEqual(self.request(path="/v1/status?nativeRun=1")[0], 503)
+            self.assertEqual(self.request()[0], 200)
+
     def setUp(self):
         self.state = {"busy": False, "updateState": "current",
                       "availableVersion": None, "availableBuild": None}

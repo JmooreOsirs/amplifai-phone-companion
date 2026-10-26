@@ -200,6 +200,23 @@ def scenarios():
     state.phase = "error"
     state.status = "Synthetic local source is unavailable. Keep this review open and check Details & recovery. " * 12
     yield "collection-error", run, state
+    for name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue"):
+        run, _ = started()
+        state = collecting()
+        state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 1211527184})
+        if name == "collection-stopped-clean":
+            run.cancel()
+            state.request_stop()
+        else:
+            run.fail()
+            state.handle({"kind": "error", "code": "selected_payload_length"})
+            state.cooperative_failure()
+        state.exited(0 if name == "collection-stopped-clean" else 1)
+        state.begin("inspect")
+        residue = [{"name": "session-" + "a" * 32, "bytes": 4096}] if name.endswith("residue") else []
+        state.handle({"kind": "residue", "sessions": residue})
+        state.exited(0)
+        yield name, run, state
     run = pending()
     scope = replace(run.claim.scope, email="synthetic." + "x" * 180 + "@example.test", course="Synthetic course " * 9)
     run.claim = replace(run.claim, scope=scope)

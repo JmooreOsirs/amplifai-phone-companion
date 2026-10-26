@@ -81,6 +81,7 @@
     "contacts_types_invalid",
     "validated_messages_database",
     "validated_messages_one_page_growth",
+    "validated_messages_two_page_growth",
     "copy_checksum_mismatch",
     "sidecar_present",
     "schema_unsupported",
@@ -116,7 +117,7 @@
     "A completed capture or bridge contains only diagnostics for its current missing/unavailable source, with reason matching unavailableReasons. Fatal Contacts evidence is local only because required Contacts still fail closed.",
     "All fields enter schema1 payload or schema2 manifest hash, per-category Save fingerprint, persisted source receipt and report readback. Never place personal source rows in diagnostics.",
     "unsupported_size_growth is diagnostic-only: proof statuses do not establish size reconciliation, SQLite integrity, or historical completeness. It never permits import of a larger encrypted Messages copy. Receivers must recognize this code before a changed companion is distributed.",
-    "validated_messages_one_page_growth records a previously accepted exact one-page encrypted Messages snapshot when later parsing makes that source unavailable. Normal successful admission produces no failure diagnostic. Receivers must recognize this code before the new producer is distributed; the fixed fields and unavailable-only semantics are unchanged.",
+    "validated_messages_one_page_growth records an accepted exact one-header-page encrypted Messages snapshot; validated_messages_two_page_growth records only an exact 8192-byte growth with 4096-byte header pages. Either appears when later parsing makes that source unavailable. Normal successful admission produces no failure diagnostic. Receivers must recognize these codes before the new producer is distributed; the fixed fields and unavailable-only semantics are unchanged.",
     "Older payloads may omit this field. Do not infer validation facts for older reports.",
     "Historical local diagnostics must be labeled previous run and never attached to a new capture or Save."
   ],

@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.23-rc23",
-      "build": "26102323",
-      "installerVersion": "1.0.23"
+      "version": "2026.10.26-rc24",
+      "build": "26102624",
+      "installerVersion": "1.0.24"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
@@ -31,5 +31,5 @@
     "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
   },
   "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json",
-  "windowsReconciliation": "RC23 exact package/source 243309ce7a21ea275bdea8bacc43f29ff0c0c4d8, successful build 40029755065 and guided source/frozen UI run 40032364440. All 19 production-module hashes and the GUI source digest match the qualified MSI. RC20 remains the verified dependency/source baseline; public RC22 is the installed-upgrade baseline and rollback. The 173 native references include 164 unchanged original paths and 9 exact wrapper copies of existing helper modules. Publication requires signed RC23 feed, actual RC22-to-RC23 frozen-helper handoff and public-byte verification. Mac fields remain historical; protected Mac control governs independently qualified RC35."
+  "windowsReconciliation": "RC24 candidate repairs terminal recovery and opts in to exact-run local advisory; adds only exact +8192 bytes at a 4096-byte Messages header page size with complete existing integrity and snapshot proof. RC23 exact source 243309ce7a21ea275bdea8bacc43f29ff0c0c4d8 and public MSI remain the installed upgrade baseline and rollback. RC20 remains the verified dependency source baseline. Changed Windows source/frozen rendering, encrypted-worker and 302304-row extraction, exact byte geometry, MSI upgrade, source closure, existing-key signature and signed frozen-helper handoff must pass before publication. Root independently reviews the boundary and website receiver. Mac fields remain historical; Mac and Android releases are unchanged."
 }

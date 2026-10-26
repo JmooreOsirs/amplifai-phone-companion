@@ -208,10 +208,15 @@ jobs:
         run: |
           python -m unittest test_native_setup test_setup_delivery test_native_run test_native_app test_sqlite_encrypted_size_compat test_sqlite_messages_size_compat test_windows_source_diagnostics test_source_diagnostics test_source_diagnostic_flow test_updater test_update_handoff test_session test_gui_guards test_video_parity test_companion_status test_windows_candidate test_windows_msi test_backup_stream test_journey test_pump_cadence -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiUnitTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify full-size one-page encrypted Messages extraction
+      - name: Qualify full-size two-page encrypted Messages extraction
         shell: pwsh
         run: |
-          python source/collector/tests/qualify_messages_snapshot.py 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiMessagesSnapshot.log')
+          python source/collector/tests/qualify_messages_snapshot.py --growth-pages 2 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiMessagesSnapshot.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify exact observed encrypted Messages byte geometry
+        shell: pwsh
+        run: |
+          python source/collector/tests/qualify_messages_growth_geometry.py 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiMessagesGeometry.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Prepare actual desktop for required package render gates
         shell: pwsh
@@ -239,7 +244,7 @@ jobs:
             python source/collector/windows/tests/visible_desktop.py --restore $mode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Freeze rc23 wrapper and matching shared helper
+      - name: Freeze rc24 wrapper and matching shared helper
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
@@ -257,7 +262,7 @@ jobs:
           $helper = Join-Path $candidate 'wrapper-dist\AmplifaiPhone\resources\phone-helper\AmplifaiPhoneHelper.exe'
           python source/collector/windows/tests/qualify_frozen_encrypted_worker.py --helper $helper 2>&1 | Tee-Object -FilePath (Join-Path $candidate 'frozen-encrypted-worker-receipt.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build rc23 per-user MSI with unchanged UpgradeCode
+      - name: Build rc24 per-user MSI with unchanged UpgradeCode
         shell: pwsh
         run: |
           $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
@@ -269,16 +274,16 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
           python source/script/build_windows_msi.py --package (Join-Path $candidate 'wrapper-dist\AmplifaiPhone') --receipt (Join-Path $candidate 'candidate-receipt.json') --output $installer --candle $candle --light $light
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify in-place released rc22 to rc23 upgrade under runner user
+      - name: Qualify in-place released rc23 to rc24 upgrade under runner user
         shell: pwsh
         run: |
           # These unattended commands qualify MSI replacement on the disposable runner only.
           # The app invokes only normal msiexec /i UI after explicit local approval.
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $baseline = Join-Path $installer 'AmplifaiPhone-rc22-unsigned.msi'
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.23-rc22-unsigned-test/AmplifaiPhone-rc22-unsigned.msi' -OutFile $baseline -TimeoutSec 180
-          if ((Get-Item $baseline).Length -ne 43764598 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'f4dac86029dbf51b0ecfd9bd1269bebd0e4848e4ce75839ec5019042220c5394') { throw 'Released rc22 MSI bytes differ from fixed baseline' }
-          $msi = Join-Path $installer 'AmplifaiPhone-rc23-unsigned.msi'
+          $baseline = Join-Path $installer 'AmplifaiPhone-rc23-unsigned.msi'
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.23-rc23-unsigned-test/AmplifaiPhone-rc23-unsigned.msi' -OutFile $baseline -TimeoutSec 180
+          if ((Get-Item $baseline).Length -ne 43764598 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'f3c83174d737effc07aeb01bbea1b3fe5f372e8ab74ed18f7a9de1a37d4319ae') { throw 'Released rc23 MSI bytes differ from fixed baseline' }
+          $msi = Join-Path $installer 'AmplifaiPhone-rc24-unsigned.msi'
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           $dataRoot = Join-Path $env:LOCALAPPDATA 'AMPLIFai Phone Candidate'
@@ -297,7 +302,7 @@ jobs:
             }
             python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json')
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $receipt = [ordered]@{status='runner-user-rc22-to-rc23-in-place-upgrade'; oldInstallerSha256='f4dac86029dbf51b0ecfd9bd1269bebd0e4848e4ce75839ec5019042220c5394'; version='1.0.23'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
+            $receipt = [ordered]@{status='runner-user-rc23-to-rc24-in-place-upgrade'; oldInstallerSha256='f3c83174d737effc07aeb01bbea1b3fe5f372e8ab74ed18f7a9de1a37d4319ae'; version='1.0.24'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
             $receipt | ConvertTo-Json | Set-Content (Join-Path $installer 'upgrade-receipt.json') -Encoding utf8
             Get-Content (Join-Path $installer 'upgrade-receipt.json')
           } finally {
@@ -322,12 +327,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc23-qualification
+          name: windows-rc24-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |
             ${{ runner.temp }}/AmplifaiUnitTests.log
             ${{ runner.temp }}/AmplifaiMessagesSnapshot.log
+            ${{ runner.temp }}/AmplifaiMessagesGeometry.log
             ${{ runner.temp }}/AmplifaiBuildDesktop.json
             ${{ runner.temp }}/AmplifaiDiagnosticRender/*.png
             ${{ runner.temp }}/AmplifaiDiagnosticRender/render-source-diagnostic-receipt.json
@@ -335,7 +341,7 @@ jobs:
             ${{ runner.temp }}/AmplifaiUpdateRender/render-update-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/candidate-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/frozen-encrypted-worker-receipt.json
-            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc23-unsigned.msi
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc24-unsigned.msi
             ${{ runner.temp }}/AmplifaiPhoneInstaller/msi-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/upgrade-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log

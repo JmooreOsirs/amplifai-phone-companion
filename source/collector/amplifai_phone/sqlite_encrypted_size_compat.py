@@ -50,9 +50,11 @@ SUCCESS = {
     "messages": "validated_messages_database",
 }
 ONE_PAGE_SUCCESS = "validated_messages_one_page_growth"
+TWO_PAGE_SUCCESS = "validated_messages_two_page_growth"
+GROWTH_SUCCESS = frozenset({ONE_PAGE_SUCCESS, TWO_PAGE_SUCCESS})
 OUTCOMES = contacts.OUTCOMES | messages.OUTCOMES | {
     "copy_checksum_mismatch", "sidecar_present", "schema_unsupported",
-    "validated_call_database", "unsupported_size_growth", ONE_PAGE_SUCCESS,
+    "validated_call_database", "unsupported_size_growth", *GROWTH_SUCCESS,
 }
 
 
@@ -71,7 +73,7 @@ class Validation:
         return (
             (any(self.scope == SCOPES[category] and self.code == SUCCESS[category]
                  for category in PATHS)
-             or (self.scope == SCOPES["messages"] and self.code == ONE_PAGE_SUCCESS
+             or (self.scope == SCOPES["messages"] and self.code in GROWTH_SUCCESS
                  and self.snapshot is not None and self.sidecars_absent is True
                  and self.producer_digest_present is True))
             and self.producer_checksum_matches is True
@@ -145,18 +147,26 @@ def _sidecars_absent(connection: sqlite3.Connection, backup_path: Path, destinat
     return True
 
 
-def _one_page_geometry(path: Path, actual: int, declared: int) -> bool:
+def _growth_geometry(path: Path, actual: int, declared: int) -> str | None:
     """Parent-side admission independent of the worker's success token."""
     with path.open("rb") as stream:
         header = stream.read(100)
     if len(header) != 100 or header[:16] != b"SQLite format 3\0":
-        return False
+        return None
     page = int.from_bytes(header[16:18], "big")
     page = 65536 if page == 1 else page
     pages = int.from_bytes(header[28:32], "big")
-    return (512 <= page <= 65536 and page & (page - 1) == 0
-            and declared > 0 and declared % page == 0 and actual - declared == page
-            and pages > 0 and pages * page == actual and header[24:28] == header[92:96])
+    if not (512 <= page <= 65536 and page & (page - 1) == 0
+            and declared > 0 and declared % page == 0
+            and pages > 0 and pages * page == actual and header[24:28] == header[92:96]):
+        return None
+    if actual - declared == page:
+        return ONE_PAGE_SUCCESS
+    # The additional admitted geometry is exactly 8192 bytes at a 4096-byte
+    # header page size, never a percentage or an arbitrary page-count tolerance.
+    if page == 4096 and actual - declared == 8192:
+        return TWO_PAGE_SUCCESS
+    return None
 
 
 @dataclass(frozen=True, repr=False)
@@ -321,9 +331,9 @@ def validate_encrypted_size_difference(
             return result("unavailable")
         if code in SUCCESS.values() and code != SUCCESS[category]:
             return result("unavailable")
-        if code == ONE_PAGE_SUCCESS and (
+        if code in GROWTH_SUCCESS and (
             category != "messages" or not growing or copy_match is not True
-            or not _one_page_geometry(destination, actual_size, entry.size)
+            or _growth_geometry(destination, actual_size, entry.size) != code
         ):
             return result("unavailable")
         # Ordinary success cannot authorize growth, even from a faulty worker.
@@ -336,7 +346,7 @@ def validate_encrypted_size_difference(
         sidecars_absent = _sidecars_absent(connection, Path(backup.path), destination, relative, workspace)
         if not sidecars_absent:
             return result("sidecar_present")
-        if code == ONE_PAGE_SUCCESS:
+        if code in GROWTH_SUCCESS:
             snapshot = ValidatedMessagesSnapshot(
                 destination, source, contacts._identity(before_copy),
                 contacts._identity(source_before), copied_digest, proof,
@@ -436,14 +446,15 @@ def _validate(request: object) -> tuple[str, bool | None]:
     if not matched:
         return "copy_checksum_mismatch", False
     if actual > declared:
-        if not _one_page_geometry(path, actual, declared):
+        growth_code = _growth_geometry(path, actual, declared)
+        if growth_code is None:
             return "unsupported_size_growth", True
         code = messages._validate({
             "path": str(path), "actual_size": actual,
             "manifest_size": declared, "digest": sha1.hexdigest(),
-        }, one_page_growth=True)
+        }, growth_pages=2 if growth_code == TWO_PAGE_SUCCESS else 1)
         if code == SUCCESS["messages"]:
-            code = ONE_PAGE_SUCCESS
+            code = growth_code
     elif category == "calls":
         code = _call_integrity(path, actual, declared, deadline)
     else:

@@ -8,21 +8,38 @@ class Journey:
     step: int
     heading: str
     detail: str
+    action: str | None = None
+
+
+def attention(state, native, step, heading, detail):
+    if state.running and (state.mode == "inspect" or state._stopping or state.phase == "error"):
+        action, next_step = "wait", "Keep this app open while the local helper stops and temporary data is checked."
+    elif not state.running and state.residue:
+        action, next_step = "clear", "Remove the marked temporary data before returning to your account."
+    elif not state.running and (state.needs_inspection or not state.inspected):
+        action, next_step = "inspect", "Check temporary data before returning to your account."
+    elif native is not None and native.current and (native.phase.endswith("_uncertain") or native.authority == "paused"):
+        action, next_step = "retry", "Retry confirmation. Your reviewed selection stays here."
+    else:
+        action, next_step = "return", "Return to your original account tab to continue this attempt. If that tab is closed, use Reopen account in Details & recovery."
+    return Journey("attention", step, heading, f"{detail}\n\n{next_step}", action)
 
 
 def journey(state, native):
     if state.saved_acknowledged or native is not None and native.completion is not None:
         return Journey("complete", 3, "Saved to your account", "The matching account-save receipt has arrived. Open your report when you’re ready.")
-    if native is not None and native.active and native.phase in ("cancelled", "refused", "handoff_expired"):
-        return Journey("attention", 3 if state._capture_received else 0, "Return to your account", native.message or "Use your original account tab to continue or recover this setup.")
+    if native is not None and native.active and native.phase in ("cancelled", "failed", "refused", "handoff_expired"):
+        step = 3 if state._capture_received else 1 if native.started else 0
+        heading = "Collection could not finish" if native.phase == "failed" else "Collection stopped" if native.phase == "cancelled" else "Return to your account"
+        return attention(state, native, step, heading, native.message)
     if native is not None and native.run is not None and not native.current:
-        return Journey("attention", 3 if state._capture_received else 0, "Collection approval expired", "Return to your account to check this collection. A new transfer cannot start with expired approval.")
+        return attention(state, native, 3 if state._capture_received else 1, "Collection approval expired", "A new transfer cannot start with expired approval.")
     if state.phase in ("error", "cancelling"):
-        return Journey("attention", 1, "Collection needs attention", state.status)
+        return attention(state, native, 1, "Collection needs attention", state.status)
     if state._capture_received:
         if native is not None and native.active:
             if native.phase.endswith("_uncertain") or native.authority == "paused" and native.pending is None:
-                return Journey("attention", 3, "Confirmation paused", native.message or "Your local review is retained. Retry confirmation or return to the approved account. No new transfer is authorized while confirmation is paused.")
+                return attention(state, native, 3, "Confirmation paused", "Your local review is retained. No new transfer is authorized while confirmation is paused.")
         if state.save_receipt_pending:
             return Journey("save", 3, "Waiting for save confirmation", "An account-save receipt is pending. Keep this app and the account tab open until the matching acknowledgment arrives.")
         if state._browser_received:
@@ -37,9 +54,9 @@ def journey(state, native):
     if state.running and state.mode == "connect":
         return Journey("collection", 1, "Collecting from your iPhone", "Your backup stays on this PC. After collection, you’ll choose contacts before continuing to your account.")
     if state.residue or state.needs_inspection and not state.running:
-        return Journey("attention", 0, "Check temporary data", state.status)
+        return attention(state, native, 0, "Check temporary data", state.status)
     if native is not None and native.active:
         if native.phase in ("prepared", "starting", "start_uncertain"):
-            return Journey("prepare", 1, "Connect and check your iPhone", "Connect your iPhone, unlock it and finish any Apple Devices backup before starting here.")
+            return Journey("prepare", 1, "Connect and check your iPhone", "Connect and unlock your iPhone, then accept its Trust prompt. Choose Start here: AMPLIFai creates a temporary backup on this PC, then lets you choose contacts. No manual backup is required.")
         return Journey("approval", 0, "Approve this phone collection", "Confirm the account, course and sources before approving this one collection.")
     return Journey("account", 0, "Start from your AMPLIFai account", "Open Phone in your signed-in account and choose Connect phone. This app will receive the account and course automatically.")

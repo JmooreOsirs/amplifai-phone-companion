@@ -1,6 +1,14 @@
 # Windows companion source candidate
 
-This wrapper presents the local iPhone collector on Windows. The published unsigned TEST baseline is RC22 (`2026.10.23-rc22`, build `26102322`, MSI `1.0.22`, native source `3064b4df4d489f96a35b619a8fdd03802fe3cb5e`). A runner-user install, released artifact, physical PC/iPhone test and authenticated account Save remain distinct evidence.
+This wrapper presents the local iPhone collector on Windows. The published unsigned TEST baseline and rollback is RC23 (`2026.10.23-rc23`, build `26102323`, MSI `1.0.23`, exact native source `243309ce7a21ea275bdea8bacc43f29ff0c0c4d8`). A runner-user install, released artifact, physical PC/iPhone test and authenticated account Save remain distinct evidence.
+
+## RC24 candidate — October 26
+
+Candidate `2026.10.26-rc24`, build `26102624`, MSI `1.0.24` preserves failed/stopped collection outcomes through helper exit and cleanup inspection, clears stale reading progress, and keeps cleanup and account confirmation separate. Recovery uses the existing brand primitives with one next action; the main path returns to the original account tab. AMPLIFai creates its own temporary backup after Start; a manual backup is not a prerequisite.
+
+The exact optional local observation route and its non-authoritative trust boundary are defined in [Desktop update contract](../../../docs/DESKTOP-UPDATE-CONTRACT.md). Default status responses stay compatible with already-open clients. Distribution requires the website receiver to recognize the new diagnostic enum first.
+
+Encrypted Messages compatibility adds only exact +8192-byte growth at a 4096-byte SQLite header page size. The original one-header-page rule remains; every producer/copy digest, header, schema, full integrity, sidecar and extraction snapshot check still applies. Synthetic qualification includes the reported 794714112/794722320/794722304 declared/raw/copied byte geometry, malformed cases, frozen workers and 302,304-row extraction. None establishes customer phone acceptance. Required Windows build, render, upgrade, source, signing and public hash gates remain open until their exact receipts exist.
 
 ## RC23 candidate — October 23
 
