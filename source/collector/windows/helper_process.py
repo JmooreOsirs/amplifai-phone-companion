@@ -65,11 +65,13 @@ class HelperProcess:
         self.thread: threading.Thread | None = None
         self._input_lock = threading.RLock()
 
-    def start(self, mode: str) -> None:
+    def start(self, mode: str, *, require_encrypted_backup: bool = False) -> None:
         if self.process is not None and self.process.poll() is None:
             raise RuntimeError("Owned helper is still running")
         if mode not in {"connect", "inspect", "clear-residue", "backup-encryption-status"}:
             raise ValueError("Invalid helper mode")
+        if type(require_encrypted_backup) is not bool or require_encrypted_backup and mode != "connect":
+            raise ValueError("Encrypted-backup requirement is only valid for collection")
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
@@ -77,7 +79,8 @@ class HelperProcess:
         # Public PyInstaller control; never mutate its private _PYI_* variables.
         environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         self.process = subprocess.Popen(
-            [*self.command, mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [*self.command, mode, *(["--require-encrypted-backup"] if require_encrypted_backup else [])],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", shell=False,
             close_fds=True, creationflags=flags,
             cwd=str(Path(self.command[0]).parent), env=environment,

@@ -597,6 +597,12 @@ class ManifestFixtureIsolationTest(unittest.TestCase):
 
 
 class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        guard = patch("amplifai_phone.workspace.default_sessions_root",
+                      side_effect=AssertionError("Interface tests require an explicit temporary sessions root"))
+        guard.start()
+        self.addCleanup(guard.stop)
+
     async def test_read_only_encryption_check_uses_existing_trust_and_never_starts_backup(self) -> None:
         import pymobiledevice3.lockdown
         import pymobiledevice3.services.mobilebackup2
@@ -922,12 +928,13 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
         import pymobiledevice3.usbmux
 
         with (
+            tempfile.TemporaryDirectory(prefix="amplifai-no-device-test-") as temporary,
             patch.object(
                 pymobiledevice3.usbmux, "list_devices", new=AsyncMock(return_value=[])
             ),
             self.assertRaisesRegex(RuntimeError, "exactly one"),
         ):
-            await collect_iphone(password_provider=lambda: "")
+            await collect_iphone(password_provider=lambda: "", sessions_root=Path(temporary) / "sessions")
 
     async def test_usb_precedes_existing_network_pairing(
         self,
@@ -1218,6 +1225,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
             ),
         ]
         with (
+            tempfile.TemporaryDirectory(prefix="amplifai-multiple-device-test-") as temporary,
             patch.object(
                 pymobiledevice3.usbmux,
                 "list_devices",
@@ -1228,7 +1236,7 @@ class IPhoneInterfaceTest(unittest.IsolatedAsyncioTestCase):
             ) as connect,
             self.assertRaisesRegex(RuntimeError, "exactly one"),
         ):
-            await collect_iphone(password_provider=lambda: "")
+            await collect_iphone(password_provider=lambda: "", sessions_root=Path(temporary) / "sessions")
         connect.assert_not_awaited()
 
 

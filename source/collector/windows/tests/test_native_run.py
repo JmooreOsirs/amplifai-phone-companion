@@ -63,6 +63,8 @@ def prepared():
 
 def started():
     machine, clock = prepared()
+    machine.check_backup_setting()
+    machine.checked_backup_setting(True)
     assert accept(machine, machine.start()) == "start"
     return machine, clock
 
@@ -185,6 +187,8 @@ class NativeRunTests(unittest.TestCase):
         self.assertIsNone(accept(run, run.approve()))
         self.assertFalse(run.started)
         self.assertEqual(run.phase, "prepared")
+        run.check_backup_setting()
+        run.checked_backup_setting(True)
         self.assertEqual(accept(run, run.start()), "start")
         with self.assertRaises(SetupProtocolError):
             run.start()
@@ -218,6 +222,8 @@ class NativeRunTests(unittest.TestCase):
 
     def test_start_loss_replays_same_operation_once_and_late_success_is_ignored(self):
         run, clock = prepared()
+        run.check_backup_setting()
+        run.checked_backup_setting(True)
         first = run.start()
         clock.advance(21)
         self.assertTrue(run.timeout())
@@ -241,6 +247,8 @@ class NativeRunTests(unittest.TestCase):
         run, _ = prepared()
         with self.assertRaises(SetupProtocolError):
             run.continue_review((1, 4))
+        run.check_backup_setting()
+        run.checked_backup_setting(True)
         accept(run, run.start())
         operation = run.continue_review((1, 4))
         run.complete(operation, Outcome("uncertain"))
@@ -305,6 +313,8 @@ class NativeRunTests(unittest.TestCase):
             run.complete(operation, Outcome("accepted", request_body(changed)))
             self.assertEqual(run.authority, "paused")
         run, _ = prepared()
+        run.check_backup_setting()
+        run.checked_backup_setting(True)
         operation = run.start()
         run.complete(operation, Outcome("accepted", b"{}"))
         self.assertFalse(run.started)

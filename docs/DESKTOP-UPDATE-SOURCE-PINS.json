@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.26-rc24",
-      "build": "26102624",
-      "installerVersion": "1.0.24"
+      "version": "2026.10.26-rc25",
+      "build": "26102625",
+      "installerVersion": "1.0.25"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
@@ -31,5 +31,5 @@
     "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
   },
   "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json",
-  "windowsReconciliation": "RC24 exact source/package 774ab26ba5be2af1726fd0303aabbfd5c07700bf; Windows build 40360291318 and guided 40360118128 passed. Source/frozen each 192 scenarios and 1538 checks match all 19 production modules and accepted native primitives. Verified source offer has 647 members and 174 retained dependency source archives. The handoff workflow pins exact candidate artifact and existing-key signed manifest, using released RC23 as the installed baseline. Normal handoff and public byte readback remain separate required release receipts. RC23 rollback and other platform releases remain unchanged."
+  "windowsReconciliation": "RC25 encryption preparation: exact package/source fa6dbae7a3aa2fdd0ddc10d23a2511b585de18e1; Windows build 40378676736. Accepted guided run 40374987612 used f76d373bbd20991fc950c80ca8e76426765e6700; the only later change isolates non-GUI collector tests, and all 27 GUI proof files match the package source. Source/frozen each passed 200 scenarios and 1610 checks with matching production modules, geometry and native styles. The verified source offer has 650 members and 174 retained dependency archives. The handoff workflow pins this exact candidate artifact and existing-key signed manifest against installed RC24. The final windows-qualification.json must bind completed normal-handoff evidence before publication; public byte readback and website activation remain separate receipts. RC24 remains the released rollback; Mac and Android release identities are unchanged."
 }

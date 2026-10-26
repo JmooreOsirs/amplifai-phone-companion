@@ -1254,6 +1254,9 @@ class Session:
             self.phase = "error"
             code = event.get("code")
             messages = {
+                "backup_encryption_disabled": "No backup started: this iPhone now reports encryption Off. In Apple Devices, select your iPhone > General > Backups > Encrypt local backup, then start a new collection. Or choose available data without confirmed call history.",
+                "backup_encryption_unknown": "No backup started: the iPhone's encryption setting could not be confirmed. Check the connection and Apple Devices backup setting, then start a new collection or choose available data without confirmed call history.",
+                "backup_encryption_changed": "The completed backup did not confirm encryption. No preview or account save was admitted. Check Encrypt local backup in Apple Devices before starting a new collection.",
                 "workspace_marker": "A private empty or marker-only root may remain. No phone data was written by this attempt. Collection is paused; this unverified root is not automatically removed.",
                 "workspace_unsafe": "Private storage could not be verified. Unverified directories are not repaired or automatically removed. Collection is stopped; cleanup is unconfirmed.",
                 "workspace_unavailable": "Private storage is unavailable. Collection completion is not assumed; check the package/runtime and inspect after the helper stops.",

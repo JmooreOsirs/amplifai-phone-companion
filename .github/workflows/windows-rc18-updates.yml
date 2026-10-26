@@ -206,7 +206,7 @@ jobs:
       - name: Qualify diagnostics retention, Windows DACLs, session gates and update verifier
         shell: pwsh
         run: |
-          python -m unittest test_native_setup test_setup_delivery test_native_run test_native_app test_sqlite_encrypted_size_compat test_sqlite_messages_size_compat test_windows_source_diagnostics test_source_diagnostics test_source_diagnostic_flow test_updater test_update_handoff test_session test_gui_guards test_video_parity test_companion_status test_windows_candidate test_windows_msi test_backup_stream test_journey test_pump_cadence -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiUnitTests.log')
+          python -m unittest test_encryption_preparation test_helper_boundary test_agent test_ios_backup.IPhoneInterfaceTest test_native_setup test_setup_delivery test_native_run test_native_app test_sqlite_encrypted_size_compat test_sqlite_messages_size_compat test_windows_source_diagnostics test_source_diagnostics test_source_diagnostic_flow test_updater test_update_handoff test_session test_gui_guards test_video_parity test_companion_status test_windows_candidate test_windows_msi test_backup_stream test_journey test_pump_cadence -v 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'AmplifaiUnitTests.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Qualify full-size two-page encrypted Messages extraction
         shell: pwsh
@@ -244,7 +244,7 @@ jobs:
             python source/collector/windows/tests/visible_desktop.py --restore $mode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Freeze rc24 wrapper and matching shared helper
+      - name: Freeze rc25 wrapper and matching shared helper
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
@@ -262,7 +262,7 @@ jobs:
           $helper = Join-Path $candidate 'wrapper-dist\AmplifaiPhone\resources\phone-helper\AmplifaiPhoneHelper.exe'
           python source/collector/windows/tests/qualify_frozen_encrypted_worker.py --helper $helper 2>&1 | Tee-Object -FilePath (Join-Path $candidate 'frozen-encrypted-worker-receipt.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build rc24 per-user MSI with unchanged UpgradeCode
+      - name: Build rc25 per-user MSI with unchanged UpgradeCode
         shell: pwsh
         run: |
           $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
@@ -274,16 +274,16 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
           python source/script/build_windows_msi.py --package (Join-Path $candidate 'wrapper-dist\AmplifaiPhone') --receipt (Join-Path $candidate 'candidate-receipt.json') --output $installer --candle $candle --light $light
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify in-place released rc23 to rc24 upgrade under runner user
+      - name: Qualify in-place released rc24 to rc25 upgrade under runner user
         shell: pwsh
         run: |
           # These unattended commands qualify MSI replacement on the disposable runner only.
           # The app invokes only normal msiexec /i UI after explicit local approval.
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $baseline = Join-Path $installer 'AmplifaiPhone-rc23-unsigned.msi'
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.23-rc23-unsigned-test/AmplifaiPhone-rc23-unsigned.msi' -OutFile $baseline -TimeoutSec 180
-          if ((Get-Item $baseline).Length -ne 43764598 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'f3c83174d737effc07aeb01bbea1b3fe5f372e8ab74ed18f7a9de1a37d4319ae') { throw 'Released rc23 MSI bytes differ from fixed baseline' }
-          $msi = Join-Path $installer 'AmplifaiPhone-rc24-unsigned.msi'
+          $baseline = Join-Path $installer 'AmplifaiPhone-rc24-unsigned.msi'
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.26-rc24-unsigned-test/AmplifaiPhone-rc24-unsigned.msi' -OutFile $baseline -TimeoutSec 180
+          if ((Get-Item $baseline).Length -ne 43772790 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'eba7fe8e6fb26e5c086f3c4aa0cc6c84db814f0f7077568ce0c1449f2a11a843') { throw 'Released rc24 MSI bytes differ from fixed baseline' }
+          $msi = Join-Path $installer 'AmplifaiPhone-rc25-unsigned.msi'
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           $dataRoot = Join-Path $env:LOCALAPPDATA 'AMPLIFai Phone Candidate'
@@ -302,7 +302,7 @@ jobs:
             }
             python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json')
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $receipt = [ordered]@{status='runner-user-rc23-to-rc24-in-place-upgrade'; oldInstallerSha256='f3c83174d737effc07aeb01bbea1b3fe5f372e8ab74ed18f7a9de1a37d4319ae'; version='1.0.24'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
+            $receipt = [ordered]@{status='runner-user-rc24-to-rc25-in-place-upgrade'; oldInstallerSha256='eba7fe8e6fb26e5c086f3c4aa0cc6c84db814f0f7077568ce0c1449f2a11a843'; version='1.0.25'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
             $receipt | ConvertTo-Json | Set-Content (Join-Path $installer 'upgrade-receipt.json') -Encoding utf8
             Get-Content (Join-Path $installer 'upgrade-receipt.json')
           } finally {
@@ -327,7 +327,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc24-qualification
+          name: windows-rc25-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |
@@ -341,7 +341,7 @@ jobs:
             ${{ runner.temp }}/AmplifaiUpdateRender/render-update-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/candidate-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/frozen-encrypted-worker-receipt.json
-            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc24-unsigned.msi
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc25-unsigned.msi
             ${{ runner.temp }}/AmplifaiPhoneInstaller/msi-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/upgrade-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log
@@ -393,30 +393,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Reuse the exact successful rc24 build and exact signed qualification bytes.
+          # Reuse the exact successful rc25 build and exact signed qualification bytes.
           # The normal frozen verifier independently validates the signed fixture.
           $repository = 'JmooreOsirs/amplifai-phone-companion'
-          $artifactId = 12669152531
+          $artifactId = 12678452073
           $artifact = gh api "repos/$repository/actions/artifacts/$artifactId" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $artifact.id -ne $artifactId -or $artifact.name -ne 'windows-rc24-qualification' -or $artifact.expired -ne $false -or $artifact.workflow_run.id -ne 40360291318 -or $artifact.size_in_bytes -ne 46277007 -or $artifact.digest -ne 'sha256:3db2a3042a2af767e53b1aa9c18b0e04a45be78e71294c4fd0da0cf8e33ed7fd') { throw 'Fixed rc24 build artifact metadata differs' }
-          $build = gh api "repos/$repository/actions/runs/40360291318" | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $build.head_sha -ne '774ab26ba5be2af1726fd0303aabbfd5c07700bf' -or $build.status -ne 'completed' -or $build.conclusion -ne 'success') { throw 'Fixed rc24 build qualification differs' }
+          if ($LASTEXITCODE -ne 0 -or $artifact.id -ne $artifactId -or $artifact.name -ne 'windows-rc25-qualification' -or $artifact.expired -ne $false -or $artifact.workflow_run.id -ne 40378676736 -or $artifact.size_in_bytes -ne 46312549 -or $artifact.digest -ne 'sha256:b40ae4f5e3891c76a4f1d8da1abf57a1eae10c2866781f3573e503a5c6c78ab3') { throw 'Fixed rc25 build artifact metadata differs' }
+          $build = gh api "repos/$repository/actions/runs/40378676736" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $build.head_sha -ne 'fa6dbae7a3aa2fdd0ddc10d23a2511b585de18e1' -or $build.status -ne 'completed' -or $build.conclusion -ne 'success') { throw 'Fixed rc25 build qualification differs' }
           $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
           New-Item -ItemType Directory -Path $fixture | Out-Null
           $archive = Join-Path $fixture 'qualified-build.zip'
           @'
           import subprocess, sys
           with open(sys.argv[1], 'xb') as target:
-              subprocess.run(['gh', 'api', 'repos/JmooreOsirs/amplifai-phone-companion/actions/artifacts/12669152531/zip'], stdout=target, check=True, timeout=180)
+              subprocess.run(['gh', 'api', 'repos/JmooreOsirs/amplifai-phone-companion/actions/artifacts/12678452073/zip'], stdout=target, check=True, timeout=180)
           '@ | python - $archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ((Get-Item $archive).Length -ne 46277007 -or (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3db2a3042a2af767e53b1aa9c18b0e04a45be78e71294c4fd0da0cf8e33ed7fd') { throw 'Fixed rc24 artifact ZIP bytes differ' }
+          if ((Get-Item $archive).Length -ne 46312549 -or (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'b40ae4f5e3891c76a4f1d8da1abf57a1eae10c2866781f3573e503a5c6c78ab3') { throw 'Fixed rc25 artifact ZIP bytes differ' }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [IO.Compression.ZipFile]::OpenRead($archive)
           try {
             $expected = @(
-              @{entry='AmplifaiPhoneInstaller/AmplifaiPhone-rc24-unsigned.msi'; name='AmplifaiPhone-rc24-unsigned.msi'; bytes=43772790; sha='eba7fe8e6fb26e5c086f3c4aa0cc6c84db814f0f7077568ce0c1449f2a11a843'},
-              @{entry='AmplifaiPhoneCandidate/candidate-receipt.json'; name='candidate-receipt.json'; bytes=1668371; sha='a19cd4fd7cfa0ed373b82d01e49fe1d4e7d1ce2e037de60d13ba40a97ffb4398'}
+              @{entry='AmplifaiPhoneInstaller/AmplifaiPhone-rc25-unsigned.msi'; name='AmplifaiPhone-rc25-unsigned.msi'; bytes=43776886; sha='69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d'},
+              @{entry='AmplifaiPhoneCandidate/candidate-receipt.json'; name='candidate-receipt.json'; bytes=1668371; sha='8dd40e7dae76fc96ba09f2c032f3774b8e6a48c2e89214877a4e442354f85cce'}
             )
             foreach ($record in $expected) {
               $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $record.entry })
@@ -431,28 +431,28 @@ jobs:
             }
           } finally { $zip.Dispose() }
           Remove-Item -LiteralPath $archive
-          $signed = 'source/collector/windows/tests/fixtures/release-qualification/rc24'
+          $signed = 'source/collector/windows/tests/fixtures/release-qualification/rc25'
           $signedFiles = @(
-            @{name='update-v1.json'; bytes=581; sha='5990309c6092490cd04bc158d7951246023a161784552e8d15ab68b8c3cee391'},
-            @{name='update-v1.json.sig'; bytes=89; sha='89e2563df1d853c0ca4ea08ef3293e26429da87d53b29ad0b21747c3fa4e790c'}
+            @{name='update-v1.json'; bytes=581; sha='f4b1286522a8b69667fd97c018244727d1a0259bdd80f6f3bf652de8b6734dd9'},
+            @{name='update-v1.json.sig'; bytes=89; sha='3ae8807d356883cd3288f9f1bf01027d0709a0de08460f478fb051e29cf553d3'}
           )
           foreach ($record in $signedFiles) {
             $source = Join-Path $signed $record.name
             if ((Get-Item $source).Length -ne $record.bytes -or (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant() -ne $record.sha) { throw 'Fixed signed qualification fixture differs' }
             Copy-Item -LiteralPath $source -Destination (Join-Path $fixture $record.name)
           }
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.23-rc23-unsigned-test/AmplifaiPhone-rc23-unsigned.msi' -OutFile (Join-Path $fixture 'AmplifaiPhone-rc23-unsigned.msi') -TimeoutSec 180
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.26-rc24-unsigned-test/AmplifaiPhone-rc24-unsigned.msi' -OutFile (Join-Path $fixture 'AmplifaiPhone-rc24-unsigned.msi') -TimeoutSec 180
       - name: Qualify copied frozen helper readiness and running-old-app replacement
         shell: pwsh
         run: |
           $fixture = Join-Path $env:RUNNER_TEMP 'AmplifaiHandoffFixture'
-          python source/script/qualify_windows_update_handoff.py --msi (Join-Path $fixture 'AmplifaiPhone-rc24-unsigned.msi') --baseline (Join-Path $fixture 'AmplifaiPhone-rc23-unsigned.msi') --manifest (Join-Path $fixture 'update-v1.json') --signature (Join-Path $fixture 'update-v1.json.sig') --candidate-receipt (Join-Path $fixture 'candidate-receipt.json') --output (Join-Path $fixture 'handoff-receipt.json')
+          python source/script/qualify_windows_update_handoff.py --msi (Join-Path $fixture 'AmplifaiPhone-rc25-unsigned.msi') --baseline (Join-Path $fixture 'AmplifaiPhone-rc24-unsigned.msi') --manifest (Join-Path $fixture 'update-v1.json') --signature (Join-Path $fixture 'update-v1.json.sig') --candidate-receipt (Join-Path $fixture 'candidate-receipt.json') --output (Join-Path $fixture 'handoff-receipt.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain actual frozen handoff receipt
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc24-handoff-qualification
+          name: windows-rc25-handoff-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |

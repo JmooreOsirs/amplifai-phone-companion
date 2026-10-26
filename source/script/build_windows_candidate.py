@@ -263,7 +263,7 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
         "python_version": platform.python_version(), "python_build": platform.python_build(),
         "python_implementation": platform.python_implementation(),
         "gui_source_sha256": source_digest,
-        "version": "2026.10.26-rc24", "build": "26102624",
+        "version": "2026.10.26-rc25", "build": "26102625",
         "channel": "windows-x64-test", "installer_trust": "unsigned-test",
         "native_setup_protocol": "phone-native-setup-v2",
         "entry_sha256": _sha256(source / ENTRY),

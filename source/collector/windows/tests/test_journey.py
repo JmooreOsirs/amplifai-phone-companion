@@ -86,6 +86,8 @@ class JourneyTests(unittest.TestCase):
 
     def test_uncertain_start_keeps_preparation_and_does_not_repeat_agreement(self):
         native, _ = prepared()
+        native.check_backup_setting()
+        native.checked_backup_setting(True)
         native.complete(native.start(), Outcome("uncertain"))
         self.assertEqual(journey(inspected(), native).stage, "prepare")
         self.assertFalse(native.started)

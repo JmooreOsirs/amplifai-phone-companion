@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from contextlib import contextmanager
+import _tkinter
 import faulthandler
 import hashlib
 import json
@@ -31,11 +33,41 @@ from test_native_run import started
 from test_native_setup import CLIENT
 from test_session import inspected
 
+
+class EventPumpGuard:
+    """Bound synthetic Tk drains while retaining the real event ordering."""
+    def __init__(self, root, *, timeout=10.0):
+        self.root, self.timeout = root, timeout
+        self.events = deque(maxlen=128)
+        self.event_count = 0
+        self.last_failure = None
+        root.bind_all("<Configure>", self.record, add="+")
+        root.update = lambda: self.drain(_tkinter.ALL_EVENTS, "update")
+        root.update_idletasks = lambda: self.drain(_tkinter.IDLE_EVENTS, "update_idletasks")
+
+    def record(self, event):
+        self.event_count += 1
+        self.events.append({"widget": str(event.widget), "width": event.width, "height": event.height})
+
+    def drain(self, flags, operation):
+        started = time.perf_counter()
+        processed = 0
+        while self.root.tk.dooneevent(flags | _tkinter.DONT_WAIT):
+            processed += 1
+            if time.perf_counter() - started >= self.timeout:
+                self.last_failure = {"operation": operation, "timeoutSeconds": self.timeout,
+                                     "processedEvents": processed, "configureEvents": self.event_count,
+                                     "recentConfigureEvents": list(self.events)}
+                raise RuntimeError(f"Tk {operation} did not settle within {self.timeout:g}s; "
+                                   f"processed {processed} events")
+
+
 VIEWPORTS = ((1180, 820, 4 / 3), (920, 749, 4 / 3), (680, 680, 4 / 3), (680, 680, 1.75))
 EXPECTED_STAGE = {
     "account-idle": "account", "approval-unchecked": "approval", "approval-checked": "approval",
     "approval-uncertain": "approval", "prepared": "prepare", "start-uncertain": "prepare",
     "backup-encrypted": "prepare", "backup-unencrypted": "prepare",
+    "backup-unknown": "prepare", "backup-checking": "prepare",
     "connecting": "collection", "collecting": "collection", "password": "collection", "processing": "collection",
     "contacts": "contacts", "contacts-empty": "contacts", "contacts-partial": "contacts",
     "contacts-select-all": "contacts", "reviewed-contacts": "contacts", "continue-uncertain": "attention",
@@ -201,6 +233,14 @@ def assert_actions(view, name):
         raise RuntimeError("Prepared run has no enabled Start action")
     if name == "prepared" and "No manual backup is required" not in view.native_scope.get():
         raise RuntimeError("Prepared screen hides automatic backup ownership before Start")
+    if name in ("backup-encrypted", "backup-unencrypted", "backup-unknown", "backup-checking"):
+        partial = name in ("backup-unencrypted", "backup-unknown")
+        if bool(view.native_available.winfo_ismapped()) != partial:
+            raise RuntimeError("Available-data action escaped the Off/Unknown preparation state")
+        if partial and (str(view.native_available.cget("state")) != "normal" or "without confirmed call history" not in view.native_status.get()):
+            raise RuntimeError("Partial-data action is disabled or missing its call-history limitation")
+        if name == "backup-checking" and str(view.native_start.cget("state")) != "disabled":
+            raise RuntimeError("A backup check permits a duplicate Start")
     if name == "contacts-empty" and str(view.review_button.cget("state")) != "disabled":
         raise RuntimeError("Empty selection exposes enabled Continue")
     if name in ("contacts", "reviewed-contacts"):
@@ -419,6 +459,9 @@ def failure_context(root, view):
     result = {}
     readers = {
         "clientSize": lambda: [root.winfo_width(), root.winfo_height()],
+        "eventPump": lambda: root.qualification_event_guard.last_failure,
+        "scheduledCallbacks": lambda: [list(root.tk.splitlist(root.tk.call("after", "info", job)))
+                                         for job in root.tk.splitlist(root.tk.call("after", "info"))],
         "keyboardTraversal": lambda: getattr(root, "qualification_keyboard_trace", []),
         "pumpMeasurements": lambda: getattr(root, "qualification_pump_measurements", {}),
         "tkFocusOK": lambda: str(root.tk.call("info", "body", "::tk::FocusOK")),
@@ -434,6 +477,10 @@ def failure_context(root, view):
         return chain
     readers["focusedWidgetAndAncestors"] = focus_chain
     if view is not None:
+        readers["stagePanels"] = lambda: {
+            name: {"panel": widget_diagnostic(root, panel),
+                   "content": widget_diagnostic(root, panel.content)}
+            for name, panel in view.stage_panels.items()}
         readers["scrollViewports"] = lambda: {
             name: widget_diagnostic(root, widget) for name, widget in
             (("details", view.details_canvas), ("contacts", view.contacts._canvas))}
@@ -522,6 +569,8 @@ def render(args, *, contacts_only=False, frozen_identity=None):
         created, root = check("viewport", "create-root", create_root)
         if not created:
             continue
+        if getattr(args, "trace_stalls", False):
+            root.qualification_event_guard = EventPumpGuard(root)
         root.report_callback_exception = lambda kind, value, trace: errors.append(f"{kind.__name__}: {value}")
 
         def run_viewport():
@@ -552,6 +601,8 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                         root.qualification_keyboard_trace = []
                         view.native_worker = SyntheticWorker()
                         view.native, view.state = native, state
+                        view.guide_step = 2 if name in ("backup-unencrypted", "backup-unknown") else 0
+                        view.render_guide()
                         view.native_checked.set(name == "approval-checked")
                         view.organizing = name == "group-organize-marked"
                         view._visible_workspace = "setup"
@@ -562,7 +613,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                             view.show_workspace("details")
                         root.update()
                     prepared, _ = check(name, "render", prepare)
-                    geometry, focus, scroll, groups = None, [], None, None
+                    geometry, focus, scroll, groups, guide = None, [], None, None, None
                     if prepared:
                         check(name, "stage", lambda: assert_stage(root, view, name))
                         check(name, "actions", lambda: assert_actions(view, name))
@@ -588,6 +639,32 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                         elif name == "approval-checked":
                             _, focus = check(name, "keyboard", lambda: keyboard_traversal(root,
                                 (view.native_agreement, view.native_approve, view.native_cancel), start=view.native_disclosure))
+                        elif name in ("backup-unencrypted", "backup-unknown"):
+                            _, focus = check(name, "preparation-keyboard", lambda: keyboard_traversal(root,
+                                (view.native_start, view.native_available, view.native_cancel, view.backup_check), start=view.native_start))
+                            def guide_evidence():
+                                proof = []
+                                for step in (2, 3):
+                                    view.guide_step = step
+                                    view.render_guide()
+                                    root.update()
+                                    view.details_canvas.yview_moveto(1)
+                                    root.update()
+                                    require_bounds(root, view.guide_text, "backup guide text")
+                                    for position in (0, 1):
+                                        view.guide_text.yview_moveto(position)
+                                        root.update()
+                                        index = "1.0" if position == 0 else "end-2c"
+                                        character = view.guide_text.bbox(index)
+                                        if not character or min(character[:2]) < 0 or character[0] + character[2] > view.guide_text.winfo_width() or character[1] + character[3] > view.guide_text.winfo_height():
+                                            raise RuntimeError("Backup guide text is not fully reachable")
+                                        shot = capture(root, args.output, f"guide-{width}x{height}-scale-{scaling:.2f}-{name}-step-{step + 1}-{position}")
+                                        proof.append({"step": step + 1, "position": position, "lastCharacterVisible": True, "screenshot": shot})
+                                view.guide_step = 2
+                                view.render_guide()
+                                view.guide_text.yview_moveto(0)
+                                return proof
+                            _, guide = check(name, "encryption-guide", guide_evidence)
                         elif panel == "collection":
                             required = [view.stop_button, view.collection_details_button]
                             if name == "password":
@@ -627,7 +704,8 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                         record.update(scenario=name, stage=journey(view.state, view.native).stage, panel=panel,
                                       geometry=geometry, tkScaling=float(root.tk.call("tk", "scaling")),
                                       keyboardTraversal=focus, scrollEvidence=scroll, selectedContacts=len(state.selected_ids),
-                                      accountSaveAcknowledged=state.saved_acknowledged, contactGroups=groups, qualified=passed)
+                                      accountSaveAcknowledged=state.saved_acknowledged, contactGroups=groups,
+                                      encryptionGuide=guide, qualified=passed)
                         records.append(record)
                 def resolve_styles():
                     return {"viewport": [width, height], "tkScaling": float(root.tk.call("tk", "scaling")),
