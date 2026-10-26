@@ -15,7 +15,6 @@ import importlib.metadata
 import json
 import os
 import plistlib
-import resource
 import shutil
 import socket
 import sqlite3
@@ -186,6 +185,8 @@ def legacy_workspace_class():
 
 
 async def transfer(files, parent: Path, *, legacy: bool) -> dict:
+    import resource
+
     left, right = socket.socketpair()
     left.setblocking(False)
     right.setblocking(False)
