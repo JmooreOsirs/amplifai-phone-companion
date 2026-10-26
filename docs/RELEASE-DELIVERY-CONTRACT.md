@@ -1,6 +1,18 @@
 # Native delivery and website promotion contracts
 
-## October 26 Windows RC24 qualification
+## October 26 Windows RC25 encryption preparation
+
+The immutable package/source candidate is `fa6dbae7a3aa2fdd0ddc10d23a2511b585de18e1`, version `2026.10.26-rc25`, build `26102625`, MSI `1.0.25`, on the existing unsigned Windows x64 Test channel. Start first checks encryption for the current approved run. On continues with the required-encryption collector guard; Off/Unknown offers Apple Devices guidance, recheck and an explicit available-data choice without confirmed call history. The server Start schema, consent, deadlines, selected review and per-source Save/ACK remain unchanged.
+
+Exact package/source `fa6dbae7a3aa2fdd0ddc10d23a2511b585de18e1` passed Windows build `40378676736`: 446 tests with 6 platform skips, full-size 302,304-message encrypted extraction, exact-byte negative cases, frozen-worker checks, installed inventory/protocol checks and RC24-to-RC25 upgrade with session preservation. Guided run `40374987612` at `f76d373bbd20991fc950c80ca8e76426765e6700` passed 200 scenarios and 1,610 checks per source/frozen mode. The package source differs only in isolated collector test workspaces; all 27 GUI proof files and all 19 production GUI modules remain identical. Root accepted the wide/narrow guide renders, source/frozen equivalence and native computed styles.
+
+The MSI is 43,776,886 bytes, SHA-256 `69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d`. The corresponding-source ZIP is 404,443,602 bytes, SHA-256 `dffd6226fbd50ae7eddbaedf730a3fe17beed1adc410f0aa13d736c06bbad280`. All 650 source members and 174 retained dependency archives passed readback; 173 native references matched the pinned baseline. Source coverage does not claim reproducible native binaries or legal clearance.
+
+The existing Ed25519 key signed the exact MSI and manifest. The qualification-only workflow pins those bytes against installed RC24. The final `windows-qualification.json` must bind the completed normal old-app close, parent-exit wait, standard installer UI, immutable guards, retained session, installed relaunch, same-logon delivery and cache cleanup evidence before publication. Root reviews that exact signed packet before public distribution and website-owner coordination. Ed25519 does not provide Authenticode publisher trust.
+
+RC24 is the released rollback. Mac and Android releases remain unchanged. Runner and synthetic evidence do not establish collection or Save on a physical customer PC, iPhone or account.
+
+## October 26 Windows RC24 qualification — retained history
 
 The immutable package/source candidate is `774ab26ba5be2af1726fd0303aabbfd5c07700bf`, version `2026.10.26-rc24`, build `26102624`, MSI `1.0.24`, on the existing unsigned Windows x64 Test channel. The canonical native executor remains on `codex/windows-rc24-terminal-recovery-oct26` at approved Astra / Max. Qualification-only changes bind completed evidence; they do not replace the source used for the package or corresponding-source offer.
 
