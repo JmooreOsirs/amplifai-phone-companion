@@ -199,6 +199,8 @@ def assert_actions(view, name):
             raise RuntimeError("Approval primary action does not respect the unchecked agreement")
     if name == "prepared" and str(view.native_start.cget("state")) != "normal":
         raise RuntimeError("Prepared run has no enabled Start action")
+    if name == "prepared" and "No manual backup is required" not in view.native_scope.get():
+        raise RuntimeError("Prepared screen hides automatic backup ownership before Start")
     if name == "contacts-empty" and str(view.review_button.cget("state")) != "disabled":
         raise RuntimeError("Empty selection exposes enabled Continue")
     if name in ("contacts", "reviewed-contacts"):

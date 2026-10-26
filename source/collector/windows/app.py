@@ -525,7 +525,9 @@ class PhoneWindow:
             return
         run = self.native
         scope = run.run.scope if run.run else run.claim.scope if run.claim else None
+        preparing = run.phase in ("prepared", "starting", "start_uncertain")
         self.native_scope.set("Account save confirmed. Open results returns to this report." if run.completion
+            else journey(self.state, run).detail if preparing
             else "Confirm the account, course and sources below." if scope else "Waiting for the authenticated setup destination.")
         labels = {"claiming": "Confirming your account setup…", "pending_approval": "Check the agreement, then approve this collection. Approval does not start collection.",
             "approving": "Confirming your agreement…", "prepared": "Approved. Choose Start when your iPhone is ready.",
@@ -558,7 +560,6 @@ class PhoneWindow:
         self.native_account_button.configure(text=account_label)
         self.open_account_button.configure(text=account_label)
         if hasattr(self, "native_heading"):
-            preparing = run.phase in ("prepared", "starting", "start_uncertain")
             self.native_heading.configure(text="Connect and check your iPhone" if preparing else "Approve this phone collection")
             self.setup_guide.grid() if preparing else self.setup_guide.grid_remove()
             self.native_text_host.grid_remove() if preparing else self.native_text_host.grid()

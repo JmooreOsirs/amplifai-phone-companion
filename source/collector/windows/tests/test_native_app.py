@@ -62,6 +62,18 @@ def tick(view, outcome=None):
 
 
 class NativeAppTests(unittest.TestCase):
+    def test_visible_pre_start_copy_explains_automatic_backup(self):
+        view, _ = native_window()
+        view.native, _ = prepared()
+        for phase in ("prepared", "starting", "start_uncertain"):
+            with self.subTest(phase=phase):
+                view.native.phase = phase
+                view.refresh_native()
+                visible = view.native_scope.set.call_args.args[0]
+                self.assertIn("AMPLIFai creates a temporary backup", visible)
+                self.assertIn("No manual backup is required", visible)
+                self.assertNotIn("Confirm the account", visible)
+
     def test_advisory_uses_exact_run_and_waits_for_exit_and_yields_to_save_receipt(self):
         view, _ = native_window()
         native, clock = started()
