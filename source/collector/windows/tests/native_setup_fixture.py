@@ -12,6 +12,7 @@ from test_native_app import SyntheticWorker, tick
 from test_native_run import Clock, accept, prepared, started
 from test_native_setup import CLIENT, LINK_TEXT
 from test_session import inspected
+from test_windows_source_diagnostics import diagnostic
 
 
 def pending():
@@ -209,6 +210,9 @@ def scenarios():
             state.request_stop()
         else:
             run.fail()
+            state.handle({"kind": "selected-payload-diagnostic", **diagnostic(
+                declaredBytes=794714112, rawBytes=794722320, copiedBytes=794722304,
+                validationCode="unsupported_size_growth", copyDigest="matched")})
             state.handle({"kind": "error", "code": "selected_payload_length"})
             state.cooperative_failure()
         state.exited(0 if name == "collection-stopped-clean" else 1)

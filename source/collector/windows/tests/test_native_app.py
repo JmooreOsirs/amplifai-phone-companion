@@ -108,6 +108,7 @@ class NativeAppTests(unittest.TestCase):
         self.assertNotIn("agreement", view.state.status)
         self.assertNotIn("Reading", view.state.transfer_status)
         self.assertEqual(journey(view.state, view.native).step, 1)
+        self.assertEqual(journey(view.state, view.native).heading, "Messages could not be validated")
         title = view.pump.__globals__["window_title"](view.state, view.native)
         self.assertIn("failed", title)
         self.assertNotIn("ready", title)
@@ -128,6 +129,9 @@ class NativeAppTests(unittest.TestCase):
         view.native, _ = started()
         view.state = source_window().state
         view.stop()
+        self.assertEqual(journey(view.state, view.native).heading, "Stopping collection")
+        self.assertEqual(journey(view.state, view.native).action, "wait")
+        self.assertIn("stopping collection", view.pump.__globals__["window_title"](view.state, view.native))
         view.events.put({"kind": "process-exit", "code": 0})
         view.pump()
         view.events.put({"kind": "residue", "sessions": []})

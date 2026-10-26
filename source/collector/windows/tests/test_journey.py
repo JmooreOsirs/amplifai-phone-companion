@@ -22,6 +22,17 @@ class JourneyTests(unittest.TestCase):
         state.residue = [{"marked": True}]
         self.assertEqual(journey(state, native).action, "clear")
 
+    def test_historical_messages_diagnostic_does_not_name_current_failure(self):
+        from test_windows_source_diagnostics import history
+        native, _ = started()
+        native.fail()
+        state = inspected()
+        state.collection_outcome = "failed"
+        state.source_diagnostic_history = history()
+        self.assertEqual(journey(state, native).heading, "Collection could not finish")
+        state.saved_acknowledged = True
+        self.assertEqual(journey(state, native).stage, "complete")
+
     def test_preparation_explains_app_owned_backup_without_manual_prerequisite(self):
         native, _ = prepared()
         text = journey(inspected(), native).detail

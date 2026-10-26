@@ -163,6 +163,8 @@ def build(view, logo):
     view.attention_detail = label(attention.content)
     view.attention_status = label(attention.content)
     view.attention_action = ttk.Button(attention.content, style="Primary.TButton")
+    view.attention_account = ttk.Button(attention.content, text="Account tab closed? Reopen account",
+                                       style="Quiet.TButton", command=view.open_account)
     recovery = view.stage_panels["details"] = card(outer)
     build_recovery(view, recovery.content)
     view.contact_workspace = surface(host, kind="panel", fill_content=True, padding=20)
@@ -409,6 +411,9 @@ def refresh(view, current):
         view.attention_action.pack(anchor="w", pady=(space(12), 0))
     else:
         view.attention_action.pack_forget()
+    safe_return = (current.action == "return" and view.native_active and not view.state.running
+                   and view.state.inspected and not view.state.needs_inspection and not view.state.residue)
+    view.attention_account.pack(anchor="w", pady=(space(12), 0)) if safe_return else view.attention_account.pack_forget()
     view.save_account_button.configure(text="Open report" if stage == "complete" else "Reopen account")
     retry = view.native_active and view.native.pending is None and view.native_worker.idle and (view.native.phase.endswith("_uncertain") or view.native.authority == "paused" and view.native.current)
     view.save_retry_button.pack(anchor="w") if retry else view.save_retry_button.pack_forget()

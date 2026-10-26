@@ -12,7 +12,8 @@ class Journey:
 
 
 def attention(state, native, step, heading, detail):
-    if state.running and (state.mode == "inspect" or state._stopping or state.phase == "error"):
+    if state.running and (state.mode == "inspect" or state._stopping or state.phase == "error"
+                          or native is not None and native.stop_requested):
         action, next_step = "wait", "Keep this app open while the local helper stops and temporary data is checked."
     elif not state.running and state.residue:
         action, next_step = "clear", "Remove the marked temporary data before returning to your account."
@@ -21,7 +22,7 @@ def attention(state, native, step, heading, detail):
     elif native is not None and native.current and (native.phase.endswith("_uncertain") or native.authority == "paused"):
         action, next_step = "retry", "Retry confirmation. Your reviewed selection stays here."
     else:
-        action, next_step = "return", "Return to your original account tab to continue this attempt. If that tab is closed, use Reopen account in Details & recovery."
+        action, next_step = "return", "Return to your original account tab to review this outcome. Start a new collection there if needed; it requires a new approval."
     return Journey("attention", step, heading, f"{detail}\n\n{next_step}", action)
 
 
@@ -31,6 +32,13 @@ def journey(state, native):
     if native is not None and native.active and native.phase in ("cancelled", "failed", "refused", "handoff_expired"):
         step = 3 if state._capture_received else 1 if native.started else 0
         heading = "Collection could not finish" if native.phase == "failed" else "Collection stopped" if native.phase == "cancelled" else "Return to your account"
+        if native.phase == "cancelled" and state.running and state.mode == "connect":
+            heading = "Stopping collection"
+        if native.phase == "failed" and native.started and state.collection_outcome == "failed" and any(
+                item["source"] == "messages" and item["reason"] in {
+                    "selected_payload_length", "selected_payload_crypto", "selected_payload_invalid", "source_integrity"}
+                for item in state.source_diagnostics):
+            heading = "Messages could not be validated"
         return attention(state, native, step, heading, native.message)
     if native is not None and native.run is not None and not native.current:
         return attention(state, native, 3 if state._capture_received else 1, "Collection approval expired", "A new transfer cannot start with expired approval.")

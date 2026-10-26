@@ -217,6 +217,8 @@ def assert_actions(view, name):
             raise RuntimeError("Terminal collection reverted to ready, approval or live read progress")
         if name.endswith("clean") and (view.attention_action.winfo_viewable() or "original account tab" not in view.attention_detail.cget("text")):
             raise RuntimeError("Clean terminal state lost the single original-account return")
+        if name.endswith("clean") and (not view.attention_account.winfo_viewable() or view.attention_account.cget("style") != "Quiet.TButton"):
+            raise RuntimeError("Clean terminal state lost its explicit closed-tab fallback")
         if name.endswith("residue") and (not view.attention_action.winfo_viewable() or view.attention_action.cget("text") != "Remove marked temporary data"):
             raise RuntimeError("Terminal residue state lost its cleanup action")
     if name.startswith("legacy-") and view.save_heading.cget("text") != "Connect your account":

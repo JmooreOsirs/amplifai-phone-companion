@@ -94,6 +94,8 @@ def fit_startup_window(window):
 
 def window_title(state: Session, native=None) -> str:
     outcome = native.phase if native is not None and native.active else state.collection_outcome
+    if outcome == "cancelled" and state.running and state.mode == "connect":
+        return WINDOW_TITLE + " · stopping collection"
     if outcome in ("failed", "cancelled", "stopped", "refused", "handoff_expired"):
         label = "collection failed" if outcome == "failed" else "stopped locally" if outcome in ("cancelled", "stopped") else "needs attention"
         return WINDOW_TITLE + " · " + label
