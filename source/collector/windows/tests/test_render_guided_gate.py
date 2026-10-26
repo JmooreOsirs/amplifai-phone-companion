@@ -9,9 +9,28 @@ import unittest
 from unittest.mock import Mock, patch
 
 import render_guided_journey as renderer
+from native_setup_fixture import pump_fixture_events
+from test_native_app import native_window
 
 
 class EventPumpGuardTests(unittest.TestCase):
+    def test_fixture_drains_production_events_without_leaving_a_recurring_timer(self):
+        view, _ = native_window()
+        view.state.approve(True)
+        view.state.begin("connect")
+        pending = {"layout": lambda: None}
+        def schedule(_delay, callback):
+            pending["pump"] = callback
+            return "pump"
+        view.window.after.side_effect = schedule
+        view.window.after_cancel.side_effect = lambda token: pending.pop(token)
+        view.events.put({"kind": "progress", "value": 42})
+        pump_fixture_events(view)
+        self.assertTrue(view.events.empty())
+        self.assertEqual(view.state.progress, 42)
+        self.assertIsNone(view._pump_after)
+        self.assertEqual(set(pending), {"layout"})
+
     def test_settled_events_keep_normal_and_idle_drains_distinct(self):
         root = Mock()
         guard = renderer.EventPumpGuard(root)

@@ -267,6 +267,16 @@ def require_full_text_scroll(evidence):
         raise RuntimeError("The final scope/error line is not fully reachable")
 
 
+def pump_fixture_events(view):
+    """Drain real callbacks without starting a live pump across static cases."""
+    try:
+        view.pump()
+    finally:
+        if view._pump_after is not None:
+            view.window.after_cancel(view._pump_after)
+            view._pump_after = None
+
+
 def exercise_controls(view):
     """Invoke production Tk callbacks with explicit synthetic transport/helper boundaries."""
     clock = Clock()
@@ -301,10 +311,10 @@ def exercise_controls(view):
     view.helper.start.assert_called_once_with(BACKUP_CHECK_MODE)
     view.events.put({"kind": BACKUP_CHECK_MODE, "backupEncrypted": True})
     view.events.put({"kind": "process-exit", "code": 0})
-    view.pump()
+    pump_fixture_events(view)
     view.events.put({"kind": "residue", "sessions": []})
     view.events.put({"kind": "process-exit", "code": 0})
-    view.pump()
+    pump_fixture_events(view)
     view.helper.start.reset_mock()
     first = view.native_worker.waiting.body
     tick(view, Outcome("uncertain"))
