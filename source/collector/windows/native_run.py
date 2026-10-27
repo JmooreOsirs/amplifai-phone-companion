@@ -423,7 +423,7 @@ class NativeRun:
         self.authority = "paused"
         self.phase = "failed"
         self.stop_requested = self.started
-        self.message = "This collection could not finish. Account Save is not confirmed. Source diagnostic details remain available here."
+        self.message = "This collection could not finish. Account Save is not confirmed. Open Details & recovery for available local diagnostics and cleanup status."
 
     def handoff_expired(self):
         self.pending = None

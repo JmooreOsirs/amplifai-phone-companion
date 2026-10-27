@@ -146,6 +146,61 @@ class NativeAppTests(unittest.TestCase):
         self.assertEqual(view.native.phase, "failed")
         self.assertNotIn("Stopped locally", view.native.message)
 
+    def test_processing_error_without_source_history_survives_automatic_inspection(self):
+        from journey import journey
+        for code in ("backup_control_invalid", "selected_contacts_integrity", "collection_failed"):
+            with self.subTest(code=code):
+                view, _ = native_window()
+                view.native, _ = started()
+                view.state = source_window().state
+                view.events.put({"kind": "transfer", "stage": "processing", "processedBytes": 1181116006})
+                view.events.put({"kind": "error", "code": code, "stage": "processing"})
+                view.events.put({"kind": "process-exit", "code": 1})
+                view.pump()
+                failure = view.state.collection_failure
+                self.assertEqual(view.state.mode, "inspect")
+                view.events.put({"kind": "residue", "sessions": []})
+                view.events.put({"kind": "process-exit", "code": 0})
+                view.pump()
+
+                self.assertEqual(view.state.collection_failure, failure)
+                self.assertEqual((failure.code, failure.stage, failure.helper_exit_code), (code, "processing", 1))
+                self.assertEqual(view.state.collection_outcome, "failed")
+                self.assertFalse(view.state.saved_acknowledged)
+                self.assertFalse(view.state.diagnostic_details)
+                self.assertIn(code, journey(view.state, view.native).detail)
+                self.assertIn("processing", journey(view.state, view.native).detail)
+                self.assertIn("no marked abandoned sessions", view.state.status)
+                self.assertNotIn("Source diagnostic details remain available", view.native.message)
+                view.show_readonly_details = Mock()
+                view.show_source_diagnostics()
+                details = view.show_readonly_details.call_args.args[2]
+                self.assertIn(code, details)
+                self.assertIn("processing", details)
+                self.assertIn("Helper exit code: 1", details)
+                self.assertEqual(view.native.phase, "failed")
+                self.assertFalse(view.state.can_connect)
+
+                advisory = view.pump.__globals__["native_run_status"](view.state, view.native)
+                self.assertEqual(advisory["failureCode"], "collection_failed")
+                if code != "collection_failed":
+                    self.assertNotIn(code, str(advisory))
+
+    def test_windows_render_fixture_includes_processing_failure_without_source_history(self):
+        from journey import journey
+        from native_setup_fixture import scenarios
+        scenario = [(native, state) for name, native, state in scenarios()
+                    if name == "collection-processing-failed-clean"]
+        self.assertEqual(len(scenario), 1)
+        native, state = scenario[0]
+        self.assertFalse(state.diagnostic_details)
+        self.assertEqual(state.collection_failure.stage, "processing")
+        self.assertEqual(state.collection_failure.code, "collection_failed")
+        self.assertEqual(journey(state, native).stage, "attention")
+        self.assertIn("processing", journey(state, native).detail)
+        self.assertFalse(state.needs_inspection)
+        self.assertFalse(state.saved_acknowledged)
+
     def test_explicit_stop_survives_inspection_without_restarting_approval(self):
         from journey import journey
         view, _ = native_window()

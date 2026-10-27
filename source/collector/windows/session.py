@@ -6,7 +6,8 @@ import hashlib
 import math
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import TextIO
 
 from amplifai_phone.source_diagnostics import (
@@ -31,10 +32,53 @@ UNAVAILABLE_REASONS = frozenset({
     "selected_payload_length", "selected_payload_crypto", "source_integrity",
     "unsupported_schema", "source_capacity", "source_invalid",
 })
+# Fixed producer codes only. Never retain a helper event, exception text, path,
+# contact identifier, password or token as a failure diagnostic.
+FAILURE_CODES = frozenset({
+    "cancelled", "workspace", "workspace_marker", "workspace_unsafe",
+    "workspace_unavailable", "workspace_cleanup", "workspace_low_space",
+    "backup_stalled", "backup_no_file_progress", "backup_time_limit",
+    "device_backup_failed", "backup_host_space", "connection_lost",
+    "backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed",
+    "collection_failed", "backup_control_invalid", "selected_payload_missing",
+    "selected_payload_invalid", "contacts_schema", "unsupported_schema",
+    "selected_payload_size", "selected_payload_identity", "selected_payload_file_type",
+    "selected_payload_length", "selected_payload_crypto", "selected_contacts_integrity",
+    "source_capacity_limit", "source_read_capacity_limit", "contacts_capacity_limit",
+    "backup_control_frame_limit", "backup_control_metadata_limit", "backup_control_path_limit",
+    "backup_password", "trust_required", "connection_timeout", "phone_connection",
+    "handoff_unconfirmed", "selection", "bridge_unavailable", "runtime_missing",
+    "protocol", "helper_communication_failed", "helper_stopped", "force_stopped",
+})
+FAILURE_STAGES = frozenset({"connecting", "backup", "processing", "review"})
 
 
 class ProtocolError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class FailureDiagnostic:
+    code: str
+    stage: str
+    occurred_at: str
+    operation: str
+    device_code: int | None = None
+    helper_exit_code: int | None = None
+
+    @property
+    def summary(self) -> str:
+        stage = self.stage if self.stage != "unknown" else "not reported"
+        return f"Error code: {self.code}. Helper-reported stage: {stage}."
+
+    @property
+    def detail_text(self) -> str:
+        lines = [self.summary, f"Observed at: {self.occurred_at} (UTC).", f"Operation: {self.operation}."]
+        if self.device_code is not None:
+            lines.append(f"Device error code: {self.device_code}.")
+        if self.helper_exit_code is not None:
+            lines.append(f"Helper exit code: {self.helper_exit_code}.")
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True)
@@ -196,8 +240,57 @@ class Session:
         self._retired_destination_ids: set[str] = set()
         self._browser_received = False
         self._failure_status = ""
+        # Bounded, in-memory facts retained while this app remains open. A later
+        # temporary-data inspection must not erase or replace collection failure.
+        self.collection_failure: FailureDiagnostic | None = None
+        self.operation_failure: FailureDiagnostic | None = None
         self.collection_outcome = ""
         self._completed = self._saved_exit = self._stopping = self._failed = False
+
+    @property
+    def failure_summary(self) -> str:
+        diagnostic = self.collection_failure or self.operation_failure
+        return diagnostic.summary if diagnostic is not None else ""
+
+    @property
+    def failure_detail_text(self) -> str:
+        parts = []
+        if self.collection_failure is not None:
+            parts.append("Collection failure retained in this open app:\n" + self.collection_failure.detail_text)
+        if self.operation_failure is not None:
+            label = "Subsequent operation failure" if self.collection_failure is not None else "Operation failure"
+            parts.append(label + ":\n" + self.operation_failure.detail_text)
+        return "\n\n".join(parts)
+
+    def _record_failure(self, event: dict) -> None:
+        code = event.get("code")
+        code = code if isinstance(code, str) and code in FAILURE_CODES else "unrecognized_error"
+        stage = event.get("stage")
+        stage = stage if isinstance(stage, str) and stage in FAILURE_STAGES else "unknown"
+        device_code = event.get("deviceCode")
+        if (code != "device_backup_failed" or type(device_code) is not int
+                or not -(2**31) <= device_code <= 2**32 - 1):
+            device_code = None
+        diagnostic = FailureDiagnostic(
+            code=code, stage=stage,
+            occurred_at=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            operation=self.mode, device_code=device_code,
+        )
+        # Keep the first failure of each operation. Follow-on errors and cleanup
+        # results cannot turn the original collection cause into a different one.
+        if self.mode == "connect":
+            if self.collection_failure is None:
+                self.collection_failure = diagnostic
+        elif self.operation_failure is None:
+            self.operation_failure = diagnostic
+
+    def _record_helper_exit(self, code: int) -> None:
+        attribute = "collection_failure" if self.mode == "connect" else "operation_failure"
+        diagnostic = getattr(self, attribute)
+        if diagnostic is None:
+            return
+        safe_code = code if -(2**31) <= code <= 2**32 - 1 else None
+        setattr(self, attribute, replace(diagnostic, helper_exit_code=safe_code))
 
     @property
     def can_update(self) -> bool:
@@ -341,6 +434,7 @@ class Session:
             self.backup_check_status = "Backup setting: checking the currently connected trusted iPhone…"
         if mode == "connect":
             self.collection_outcome = ""
+            self.collection_failure = None
             self.contacts = []
             self.total_contacts = 0
             self.contact_query = ""
@@ -374,6 +468,7 @@ class Session:
             self._clear_destination()
             self._saved_exit = self._capture_received = False
             self.review_discarded = False
+        self.operation_failure = None
         self.approval = None
         self._completed = self._stopping = self._failed = False
         self._polling = self._pairing = self._finishing = self._pairing_invalidated = False
@@ -880,6 +975,7 @@ class Session:
         return {"action": "disconnect"} if self.mode == "connect" and self._capture_received else None
 
     def cooperative_failure(self) -> None:
+        self._record_failure({"code": "helper_communication_failed"})
         self.request_stop()
         self._failed = True
         if not self._failure_status:
@@ -887,6 +983,7 @@ class Session:
         self.status = self._failure_status
 
     def force_stopped(self) -> None:
+        self._record_failure({"code": "force_stopped"})
         self.request_stop()
         self._failed = True
         self._failure_status = "Windows force stop requested; cleanup is unconfirmed. Check temporary data after the owned helper exits."
@@ -1252,6 +1349,7 @@ class Session:
             self._failed = True
             self.needs_inspection = True
             self.phase = "error"
+            self._record_failure(event)
             code = event.get("code")
             messages = {
                 "backup_encryption_disabled": "No backup started: this iPhone now reports encryption Off. In Apple Devices, select your iPhone > General > Backups > Encrypt local backup, then start a new collection. Or choose available data without confirmed call history.",
@@ -1270,6 +1368,10 @@ class Session:
     def exited(self, code: int) -> None:
         if type(code) is not int:
             raise ProtocolError("Invalid helper exit result")
+        if (not self._stopping and not self._failed
+                and (code != 0 or self.mode == "connect" and not (self._completed and self.saved_acknowledged))):
+            self._record_failure({"code": "helper_stopped"})
+        self._record_helper_exit(code)
         self.running = False
         self.approval = None
         self._clear_select_all()
