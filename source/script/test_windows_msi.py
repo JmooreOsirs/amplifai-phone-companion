@@ -11,7 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from build_windows_candidate import file_records
+from build_windows_candidate import (BUILD, CHANNEL, INSTALLER_VERSION, VERSION as CANDIDATE_VERSION,
+                                     checked_candidate_identity, file_records)
 from build_windows_msi import NS, PROTOCOL_KEY, UPGRADE_CODE, VERSION, author_xml, checked_records
 from verify_windows_install import verify_setup_protocol
 
@@ -39,6 +40,8 @@ class InstallerAuthoringTests(unittest.TestCase):
         digest = hashlib.sha256(json.dumps(records, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.receipt.write_text(json.dumps({
             "status": "disposable-windows-candidate-not-a-release",
+            "version": CANDIDATE_VERSION, "build": BUILD,
+            "installer_version": INSTALLER_VERSION, "channel": CHANNEL,
             "package_inventory_sha256": digest, "package_files": len(records),
             "package_bytes": sum(row["bytes"] for row in records), "files": records,
         }))
@@ -47,7 +50,7 @@ class InstallerAuthoringTests(unittest.TestCase):
         _, records = checked_records(self.package, self.receipt)
         tree = author_xml(records, self.package)
         ns = {"w": NS}
-        self.assertEqual(VERSION, "1.0.25")
+        self.assertEqual(VERSION, "1.0.26")
         self.assertEqual(tree.find(".//w:Product", ns).attrib["UpgradeCode"], UPGRADE_CODE)
         self.assertEqual(UPGRADE_CODE, "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871")
         self.assertIsNotNone(tree.find(".//w:MajorUpgrade", ns))
@@ -77,6 +80,42 @@ class InstallerAuthoringTests(unittest.TestCase):
         (self.package / "AmplifaiPhone.exe").write_bytes(b"changed")
         with self.assertRaisesRegex(ValueError, "does not match"):
             checked_records(self.package, self.receipt)
+
+    def test_old_or_mismatched_candidate_identity_fails_even_with_exact_payload(self) -> None:
+        original = json.loads(self.receipt.read_text())
+        for changes in (
+            {"version": "2026.10.26-rc25", "build": "26102625", "installer_version": "1.0.25"},
+            {"build": "26102625"}, {"installer_version": "1.0.25"},
+            {"channel": "different-test-channel"}, {"version": None},
+        ):
+            with self.subTest(changes=changes):
+                self.receipt.write_text(json.dumps({**original, **changes}))
+                with self.assertRaisesRegex(ValueError, "identity differs"):
+                    checked_records(self.package, self.receipt)
+
+    def test_build_identity_matches_runtime_without_executing_source(self) -> None:
+        from updater import BUILD as RUNTIME_BUILD, CHANNEL as RUNTIME_CHANNEL
+        from updater import INSTALLER_VERSION as RUNTIME_INSTALLER, VERSION as RUNTIME_VERSION
+        self.assertEqual((CANDIDATE_VERSION, BUILD, INSTALLER_VERSION, CHANNEL),
+                         (RUNTIME_VERSION, RUNTIME_BUILD, RUNTIME_INSTALLER, RUNTIME_CHANNEL))
+        path = self.root / "collector/windows/updater.py"
+        path.parent.mkdir(parents=True)
+        pins = (f"VERSION = {CANDIDATE_VERSION!r}\nBUILD = {BUILD!r}\n"
+                f"INSTALLER_VERSION = {INSTALLER_VERSION!r}\nCHANNEL = {CHANNEL!r}\n")
+        path.write_text(pins + "raise RuntimeError('fictional source must not execute')\n")
+        self.assertEqual(checked_candidate_identity(self.root), {
+            "version": CANDIDATE_VERSION, "build": BUILD,
+            "installer_version": INSTALLER_VERSION, "channel": CHANNEL,
+        })
+        for malformed in (pins.replace(BUILD, "26102625"),
+                          pins + f"BUILD = {BUILD!r}\n", pins + "BUILD = str(26102726)\n",
+                          pins + f"BUILD: str = {BUILD!r}\n", pins + "BUILD += '0'\n",
+                          pins + f"BUILD, OTHER = ({BUILD!r}, 'unused')\n",
+                          pins.replace("VERSION =", "VERSION = OTHER =", 1)):
+            with self.subTest(malformed=malformed):
+                path.write_text(malformed)
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    checked_candidate_identity(self.root)
 
     def test_setup_protocol_is_per_user_and_quotes_the_installed_launcher_and_uri(self) -> None:
         _, records = checked_records(self.package, self.receipt)

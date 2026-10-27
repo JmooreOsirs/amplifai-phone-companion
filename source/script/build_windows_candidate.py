@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -13,6 +14,11 @@ import struct
 import subprocess
 import sys
 from pathlib import Path
+
+VERSION = "2026.10.27-rc26"
+BUILD = "26102726"
+INSTALLER_VERSION = "1.0.26"
+CHANNEL = "windows-x64-test"
 
 GUI_FILES = (
     "collector/windows/app.py",
@@ -93,6 +99,35 @@ def gui_digest(source: Path) -> str:
 
 def legal_records(root: Path) -> dict[str, str]:
     return {relative: _sha256(_source_file(root, relative)) for relative in LEGAL_FILES}
+
+
+def checked_candidate_identity(source: Path) -> dict[str, str]:
+    """Bind the build receipt to literal runtime pins without executing source."""
+    expected = {"VERSION": VERSION, "BUILD": BUILD,
+                "INSTALLER_VERSION": INSTALLER_VERSION, "CHANNEL": CHANNEL}
+    values = {}
+    tree = ast.parse(_source_file(source, "collector/windows/updater.py").read_bytes())
+    for node in tree.body:
+        if isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            if isinstance(node.target, ast.Name) and node.target.id in expected:
+                raise ValueError("runtime candidate identity is ambiguous")
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) and any(
+                    isinstance(item, ast.Name) and item.id in expected for item in ast.walk(target)):
+                raise ValueError("runtime candidate identity is ambiguous")
+            if isinstance(target, ast.Name) and target.id in expected:
+                if target.id in values or len(node.targets) != 1:
+                    raise ValueError("runtime candidate identity is ambiguous")
+                try:
+                    values[target.id] = ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    raise ValueError("runtime candidate identity must be literal") from None
+    if values != expected:
+        raise ValueError("runtime candidate identity differs from build identity")
+    return {"version": VERSION, "build": BUILD,
+            "installer_version": INSTALLER_VERSION, "channel": CHANNEL}
 
 
 def clean_child_environment() -> dict[str, str]:
@@ -193,6 +228,7 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
     _checked(source, directory=True)
     _checked(python, directory=False)
     _checked(output.parent, directory=True)
+    identity = checked_candidate_identity(source)
     logo = _source_file(source, LOGO)
     font = _source_file(source, FONT)
     if _sha256(font) != EXPECTED_FONT_SHA256:
@@ -263,8 +299,7 @@ def build_candidate(*, source: Path, python: Path, output: Path, legal_root: Pat
         "python_version": platform.python_version(), "python_build": platform.python_build(),
         "python_implementation": platform.python_implementation(),
         "gui_source_sha256": source_digest,
-        "version": "2026.10.26-rc25", "build": "26102625",
-        "channel": "windows-x64-test", "installer_trust": "unsigned-test",
+        **identity, "installer_trust": "unsigned-test",
         "native_setup_protocol": "phone-native-setup-v2",
         "entry_sha256": _sha256(source / ENTRY),
         "lock_sha256": EXPECTED_LOCK_SHA256,

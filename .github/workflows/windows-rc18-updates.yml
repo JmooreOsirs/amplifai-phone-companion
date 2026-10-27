@@ -244,7 +244,7 @@ jobs:
             python source/collector/windows/tests/visible_desktop.py --restore $mode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Freeze rc25 wrapper and matching shared helper
+      - name: Freeze rc26 wrapper and matching shared helper
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
@@ -262,7 +262,7 @@ jobs:
           $helper = Join-Path $candidate 'wrapper-dist\AmplifaiPhone\resources\phone-helper\AmplifaiPhoneHelper.exe'
           python source/collector/windows/tests/qualify_frozen_encrypted_worker.py --helper $helper 2>&1 | Tee-Object -FilePath (Join-Path $candidate 'frozen-encrypted-worker-receipt.json')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build rc25 per-user MSI with unchanged UpgradeCode
+      - name: Build rc26 per-user MSI with unchanged UpgradeCode
         shell: pwsh
         run: |
           $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
@@ -274,16 +274,16 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
           python source/script/build_windows_msi.py --package (Join-Path $candidate 'wrapper-dist\AmplifaiPhone') --receipt (Join-Path $candidate 'candidate-receipt.json') --output $installer --candle $candle --light $light
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Qualify in-place released rc24 to rc25 upgrade under runner user
+      - name: Qualify in-place released rc25 to rc26 upgrade under runner user
         shell: pwsh
         run: |
           # These unattended commands qualify MSI replacement on the disposable runner only.
           # The app invokes only normal msiexec /i UI after explicit local approval.
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $baseline = Join-Path $installer 'AmplifaiPhone-rc24-unsigned.msi'
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.26-rc24-unsigned-test/AmplifaiPhone-rc24-unsigned.msi' -OutFile $baseline -TimeoutSec 180
-          if ((Get-Item $baseline).Length -ne 43772790 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'eba7fe8e6fb26e5c086f3c4aa0cc6c84db814f0f7077568ce0c1449f2a11a843') { throw 'Released rc24 MSI bytes differ from fixed baseline' }
-          $msi = Join-Path $installer 'AmplifaiPhone-rc25-unsigned.msi'
+          $baseline = Join-Path $installer 'AmplifaiPhone-rc25-unsigned.msi'
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.26-rc25-unsigned-test/AmplifaiPhone-rc25-unsigned.msi' -OutFile $baseline -TimeoutSec 180
+          if ((Get-Item $baseline).Length -ne 43776886 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d') { throw 'Released rc25 MSI bytes differ from fixed baseline' }
+          $msi = Join-Path $installer 'AmplifaiPhone-rc26-unsigned.msi'
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           $dataRoot = Join-Path $env:LOCALAPPDATA 'AMPLIFai Phone Candidate'
@@ -302,7 +302,7 @@ jobs:
             }
             python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json')
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $receipt = [ordered]@{status='runner-user-rc24-to-rc25-in-place-upgrade'; oldInstallerSha256='eba7fe8e6fb26e5c086f3c4aa0cc6c84db814f0f7077568ce0c1449f2a11a843'; version='1.0.25'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
+            $receipt = [ordered]@{status='runner-user-rc25-to-rc26-in-place-upgrade'; oldInstallerSha256='69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d'; version='1.0.26'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
             $receipt | ConvertTo-Json | Set-Content (Join-Path $installer 'upgrade-receipt.json') -Encoding utf8
             Get-Content (Join-Path $installer 'upgrade-receipt.json')
           } finally {
@@ -327,7 +327,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc25-qualification
+          name: windows-rc26-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |
@@ -341,7 +341,7 @@ jobs:
             ${{ runner.temp }}/AmplifaiUpdateRender/render-update-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/candidate-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneCandidate/frozen-encrypted-worker-receipt.json
-            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc25-unsigned.msi
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc26-unsigned.msi
             ${{ runner.temp }}/AmplifaiPhoneInstaller/msi-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/upgrade-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log
