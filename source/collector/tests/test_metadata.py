@@ -100,6 +100,34 @@ class MetadataTest(unittest.TestCase):
             [7],
         )
 
+    def test_incomplete_call_direction_flags_do_not_become_missed_calls(self) -> None:
+        when = cocoa("2026-09-01T12:00:00+00:00")
+        cases = [
+            (1, 1, "outgoing"), (1, 0, "outgoing"), (1, None, "outgoing"),
+            (0, 1, "incoming"), (0, 0, "missed"),
+            (None, None, "unknown"), (None, 0, "unknown"),
+            (None, 1, "unknown"), (0, None, "unknown"),
+            (2, 0, "unknown"), (0, 2, "unknown"),
+            ("unrecognized", 0, "unknown"), (0, "unrecognized", "unknown"),
+        ]
+        path = self.make_calls("incomplete-call-directions.db", [
+            (when, 20, "+12025550123", originated, answered)
+            for originated, answered, _ in cases
+        ])
+        for disk_backed in (False, True):
+            with self.subTest(disk_backed=disk_backed):
+                store = RecordStore(self.root / "direction-records.sqlite3") if disk_backed else None
+                try:
+                    result = read_calls(path, self.since, store=store)
+                    self.assertEqual((result.rows_seen, result.excluded), (len(cases), 0))
+                    self.assertEqual([item.direction for item in result.records],
+                                     [expected for _, _, expected in cases])
+                    self.assertEqual([item.source_id for item in result.records],
+                                     list(range(1, len(cases) + 1)))
+                finally:
+                    if store is not None:
+                        store.close()
+
     def test_shadowed_noninteger_row_identity_is_not_imported(self) -> None:
         contacts = self.make_db("shadowed-contact-rowid.db", [
             "CREATE TABLE ABPerson (ROWID TEXT PRIMARY KEY, First TEXT, Last TEXT)",

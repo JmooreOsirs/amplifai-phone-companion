@@ -1,4 +1,4 @@
-"""RC20 source boundary: real NativeRun + loopback BridgeServer, synthetic authority/data.
+"""Native source boundary: real NativeRun + loopback BridgeServer, synthetic authority/data.
 
 No Tk, helper subprocess, device, hosted service, or account Save is exercised.
 """
@@ -165,8 +165,16 @@ class NativeBridgeBoundaryTest(unittest.TestCase):
         self.assertFalse(self.native.started)
         with self.assertRaises(SetupProtocolError):
             self.native.continue_review((1,))
+        with self.assertRaises(SetupProtocolError):
+            self.native.start()
+        # RC25 requires the current prepared run's read-only encryption check
+        # before Start. Keep that gate in the end-to-end authority/bridge case,
+        # rather than bypassing it with a stale pre-RC25 fixture.
+        self.native.check_backup_setting()
+        self.native.checked_backup_setting(True)
         self.retry_lost(self.native.start(), "start_uncertain", "start")
         self.assertTrue(self.native.started)
+        self.assertEqual(self.native.call_history_preparation, "confirmedEncryptedBackup")
 
         selection = (1,)
         continued = self.native.continue_review(selection)
