@@ -205,9 +205,11 @@ gh workflow run windows-rc18-updates.yml \
 
 Despite its historical filename, this is the active **Windows source and package
 qualification** workflow. `phase=guided-ui` is the full source/frozen UI gate if
-needed for a changed presentation. **Do not dispatch `phase=handoff` for RC27:**
-that historical path remains pinned to an earlier release. Do not use its outputs
-as RC27 evidence or publish them over another release.
+needed for a changed presentation. At qualified product source `71ff8ff`, the
+historical `phase=handoff` path still pins RC25. The later release-only commit
+on this PR pins the exact RC27 artifact and existing-key signed manifest against
+released RC25. Dispatch handoff only from that reviewed release-control commit;
+verify its exact run/head and RC27 MSI hash before treating its receipt as RC27 evidence.
 
 The package job sets Windows `PYTHONPATH` with semicolons, freezes the normal
 candidate, qualifies the encrypted worker, then invokes:
@@ -362,3 +364,14 @@ These were observed separately and are not repaired by the Unicode change:
 Treat those as a separate coherent navigation change. Preserve one-run collection
 approval, exact client/account/course binding and explicit destination/Save
 confirmation; removing security checks is not a valid shortcut for repeated setup.
+
+
+## RC27 public release continuation
+
+Jeff approved publication of the completed working RC27 candidate. The sole native executor uses `codex/windows-iphone-reliability` in the isolated RC27 release worktree and preserves its active project model/effort/Fast settings. Product/MSI source stays `71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23`; initial PR head `2521524` changed only this handoff and the Windows README. Qualification-only controls and final merge have separate identities.
+
+The next finite milestone is the exact signed RC25-to-RC27 normal frozen update handoff. Completion requires protected green merge, independent root release acceptance, unchanged accepted assets, anonymous public-byte readback and website-owner pointer/feed activation. No application rebuild or broad UI rerun is required while the qualified bytes stay unchanged.
+
+Corresponding source: `AMPLIFai-Phone-Windows-Corresponding-Source-rc27-unsigned-test.zip`, 404485827 bytes, SHA-256 `5f74ab8b3a68c877bd252c536126cd38ba85dbe3bdc610b2e6e85d7a24c8d9f3`. All 660 members, 174 retained dependency source archives and 173 native references passed custody/readback. The offer retains exact source, full candidate/MSI/upgrade evidence and the frozen Unicode protocol proof. The existing Ed25519 distribution key signed the unchanged 43,780,982-byte MSI and canonical manifest; Authenticode trust is not claimed.
+
+Released RC25 remains rollback. Scoring/navigation work, other platforms, SQL/config, private capture, customer reset/consent/Save or installed-device actions, extra spending and Brian messaging are excluded. Jeff's working-build report supports release acceptance; it does not prove the discarded historical exception or supply a new forensic SMS finding.

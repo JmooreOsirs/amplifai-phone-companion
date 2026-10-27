@@ -1,5 +1,15 @@
 # Native delivery and website promotion contracts
 
+## October 27 Windows RC27 Unicode release
+
+Exact package/source `71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23` is Windows `2026.10.27-rc27`, build `26102727`, MSI `1.0.27`. The helper and its parent enforce strict UTF-8 input/output; safe first-failure enums survive cleanup and unknown call direction remains unknown. A matching fictional Unicode case reproduces the old CP1252 failure and passes under the repair. The discarded original exception remains unproved.
+
+Package run `40543732081` passed 510 tests with six platform skips, encrypted Messages geometry/frozen worker, all six frozen protocol cases and eight production-module custody checks, plus RC25-to-RC26-to-RC27 upgrade/session preservation. GUI run `40543737212` passed 204 scenarios and 1,638 checks per source/frozen mode. All 27 source proofs, matching geometry/styles and unchanged MSI identity bind to the exact product source. Later `2521524` changes only the handoff and Windows README.
+
+The MSI is 43780982 bytes, SHA-256 `3a142a311a968664eb928dbca936fa615c6dde69b33391bf0b38bca1101bd4e3`. The source offer is 404485827 bytes, SHA-256 `5f74ab8b3a68c877bd252c536126cd38ba85dbe3bdc610b2e6e85d7a24c8d9f3`; all 660 members, 174 retained dependency archives and 173 native references passed readback/custody. Existing-key MSI and canonical-manifest Ed25519 signatures are verified. The final qualification snapshot must bind the completed signed normal RC25-to-RC27 handoff before publication. Root reviews the exact immutable packet; public asset-body checks and website activation remain separate receipts.
+
+Released RC25 stays rollback. Windows remains unsigned Test, with no Authenticode claim or new physical PC/iPhone/account Save proof.
+
 ## October 26 Windows RC25 encryption preparation
 
 The immutable package/source candidate is `fa6dbae7a3aa2fdd0ddc10d23a2511b585de18e1`, version `2026.10.26-rc25`, build `26102625`, MSI `1.0.25`, on the existing unsigned Windows x64 Test channel. Start first checks encryption for the current approved run. On continues with the required-encryption collector guard; Off/Unknown offers Apple Devices guidance, recheck and an explicit available-data choice without confirmed call history. The server Start schema, consent, deadlines, selected review and per-source Save/ACK remain unchanged.
