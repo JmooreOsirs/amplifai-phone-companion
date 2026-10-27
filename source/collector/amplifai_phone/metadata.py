@@ -366,13 +366,17 @@ def read_calls(
             if phone is None:
                 invalid_address += 1
                 continue
-            outgoing = row["ZORIGINATED"] == 1
+            originated, answered = row["ZORIGINATED"], row["ZANSWERED"]
+            # Absent or unrecognized source flags are not evidence of a missed
+            # call. Keep those rows, but do not invent their direction/status.
             direction = (
                 "outgoing"
-                if outgoing
+                if originated == 1
                 else "incoming"
-                if row["ZANSWERED"] == 1
+                if originated == 0 and answered == 1
                 else "missed"
+                if originated == 0 and answered == 0
+                else "unknown"
             )
             duration = row["ZDURATION"]
             duration_seconds = (

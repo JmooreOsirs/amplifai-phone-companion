@@ -76,6 +76,7 @@ EXPECTED_STAGE = {
     "authority-paused": "attention", "authority-refused": "attention", "authority-cancelled": "attention",
     "authority-expired": "attention", "handoff-expired": "attention",
     "collection-failed-clean": "attention", "collection-stopped-clean": "attention", "collection-failed-residue": "attention",
+    "collection-processing-failed-clean": "attention",
     "legacy-awaiting-destination": "save", "legacy-pending-destination": "save",
     "group-main": "contacts", "group-review": "contacts", "group-all": "contacts",
     "group-empty-review": "contacts", "group-empty-search": "contacts", "group-next-page": "contacts",
@@ -254,7 +255,8 @@ def assert_actions(view, name):
         raise RuntimeError("Uncertain Start re-asked approval or hid retry")
     if name == "authority-paused" and not view.attention_action.winfo_viewable():
         raise RuntimeError("Paused retained review lost confirmation recovery")
-    if name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue"):
+    if name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue",
+                "collection-processing-failed-clean"):
         if "ready" in view.window.title() or view.journey.current != 1 or view.state.transfer_status:
             raise RuntimeError("Terminal collection reverted to ready, approval or live read progress")
         if name.endswith("clean") and (view.attention_action.winfo_viewable() or "original account tab" not in view.attention_detail.cget("text")):
@@ -263,6 +265,12 @@ def assert_actions(view, name):
             raise RuntimeError("Clean terminal state lost its explicit closed-tab fallback")
         if name.endswith("residue") and (not view.attention_action.winfo_viewable() or view.attention_action.cget("text") != "Remove marked temporary data"):
             raise RuntimeError("Terminal residue state lost its cleanup action")
+    if name == "collection-processing-failed-clean":
+        if (view.state.diagnostic_details or "collection_failed" not in view.attention_detail.cget("text")
+                or "processing" not in view.attention_detail.cget("text")
+                or str(view.diagnostic_details_button.cget("state")) != "normal"
+                or view.diagnostic_details_button.cget("text") != "Failure diagnostic details"):
+            raise RuntimeError("Processing failure lost local diagnostics after a clean inspection without source history")
     if name.startswith("legacy-") and view.save_heading.cget("text") != "Connect your account":
         raise RuntimeError("Legacy local handoff incorrectly claims an approved account connection")
     if name == "pending-receipt" and view.state.saved_acknowledged:

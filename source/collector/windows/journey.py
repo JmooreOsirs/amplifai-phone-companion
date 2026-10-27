@@ -39,11 +39,17 @@ def journey(state, native):
                     "selected_payload_length", "selected_payload_crypto", "selected_payload_invalid", "source_integrity"}
                 for item in state.source_diagnostics):
             heading = "Messages could not be validated"
-        return attention(state, native, step, heading, native.message)
+        detail = native.message
+        if native.phase == "failed" and state.failure_summary:
+            detail += "\n\n" + state.failure_summary
+        return attention(state, native, step, heading, detail)
     if native is not None and native.run is not None and not native.current:
         return attention(state, native, 3 if state._capture_received else 1, "Collection approval expired", "A new transfer cannot start with expired approval.")
     if state.phase in ("error", "cancelling"):
-        return attention(state, native, 1, "Collection needs attention", state.status)
+        detail = state.status
+        if state.phase == "error" and state.failure_summary:
+            detail += "\n\n" + state.failure_summary
+        return attention(state, native, 1, "Collection needs attention", detail)
     if state._capture_received:
         if native is not None and native.active:
             if native.phase.endswith("_uncertain") or native.authority == "paused" and native.pending is None:

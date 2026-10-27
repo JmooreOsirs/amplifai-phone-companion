@@ -42,6 +42,21 @@ class HelperBoundaryTests(unittest.TestCase):
                                   {"kind": "process-exit", "code": 130}])
         process.terminate.assert_not_called()
 
+    def test_invalid_utf8_pipe_closes_input_without_forwarding_private_bytes(self):
+        events = []
+        process = Mock()
+        process.stdout = io.TextIOWrapper(io.BytesIO(b'{"kind":"private-\xff"}\n'), encoding="utf-8", errors="strict")
+        process.stdin = io.StringIO()
+        process.wait.return_value = 1
+        helper = helper_process.HelperProcess([sys.executable], events.append)
+        helper._read(process)
+        self.assertTrue(process.stdin.closed)
+        self.assertEqual(events, [{"kind": "error", "code": "protocol", "cleanupRequired": True,
+                                   "exceptionClass": "unicode_decode"},
+                                  {"kind": "process-exit", "code": 1}])
+        self.assertNotIn("private", repr(events))
+        process.terminate.assert_not_called()
+
     def test_actual_malformed_synthetic_helper_observes_stdin_eof_and_exits(self):
         events = []
         fixture = str(Path(__file__).with_name("fake_helper.py"))
@@ -53,7 +68,7 @@ class HelperBoundaryTests(unittest.TestCase):
 
     def test_launch_is_private_and_isolated_from_cwd_and_parent_frozen_runtime(self):
         helper = helper_process.HelperProcess([sys.executable], lambda _event: None)
-        with (patch.dict(os.environ, {"PYTHONPATH": "untrusted-modules"}),
+        with (patch.dict(os.environ, {"PYTHONPATH": "untrusted-modules", "PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}),
               patch.object(helper_process.subprocess, "Popen") as spawn,
               patch.object(helper_process.threading, "Thread")):
             helper.start("inspect")
@@ -61,6 +76,10 @@ class HelperBoundaryTests(unittest.TestCase):
         self.assertEqual(args[0], [sys.executable, "inspect"])
         self.assertEqual(options["cwd"], str(Path(sys.executable).parent))
         self.assertEqual(options["env"]["PYINSTALLER_RESET_ENVIRONMENT"], "1")
+        self.assertEqual(options["env"]["PYTHONIOENCODING"], "utf-8:strict")
+        self.assertEqual(options["env"]["PYTHONUTF8"], "1")
+        self.assertEqual(options["encoding"], "utf-8")
+        self.assertEqual(options["errors"], "strict")
         self.assertNotIn("PYTHONPATH", options["env"])
         self.assertFalse(options["shell"])
         self.assertTrue(options["close_fds"])

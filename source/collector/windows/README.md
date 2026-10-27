@@ -1,5 +1,9 @@
 # Windows companion source candidate
 
+## October 27 RC27 Unicode correction
+
+The [Windows iPhone failure and UTF-8 handoff](../../../docs/handoffs/2026-10-27-windows-iphone-unicode/HANDOFF.md) records the RC25/RC26 failure evidence, synthetic reproduction, protocol correction, exact qualification commands, release identities and remaining acceptance gates. RC27 source and frozen Windows protocol/package checks pass, with a distinct verified candidate artifact; full guided source/frozen UI qualification and exact live RC27 website admission also pass. Physical phone collection and confirmed account Save remain manual acceptance gates. This dated Windows RC27 is separate from the older native-integration document's RC27 label.
+
 ## RC25 encryption preparation
 
 Start collection first reads the connected iPhone's backup encryption setting. The result is bound to that approved native run. After a successful On check and clean local inspection, the same current server run must admit Start; the helper receives `--require-encrypted-backup`. Its existing preflight rechecks the actual phone and its post-backup guard rejects a backup that does not confirm encryption. Read-only rechecks do not start collection.

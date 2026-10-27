@@ -76,12 +76,16 @@ class HelperProcess:
         environment = os.environ.copy()
         environment.pop("PYTHONPATH", None)
         environment.pop("PYTHONHOME", None)
+        # The parent's encoding below only decodes its pipe handles. Pin the
+        # child too; its entrypoint also configures actual frozen stdio streams.
+        environment["PYTHONIOENCODING"] = "utf-8:strict"
+        environment["PYTHONUTF8"] = "1"
         # Public PyInstaller control; never mutate its private _PYI_* variables.
         environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         self.process = subprocess.Popen(
             [*self.command, mode, *(["--require-encrypted-backup"] if require_encrypted_backup else [])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, encoding="utf-8", shell=False,
+            stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="strict", shell=False,
             close_fds=True, creationflags=flags,
             cwd=str(Path(self.command[0]).parent), env=environment,
         )
@@ -100,8 +104,13 @@ class HelperProcess:
                 if not isinstance(packet, dict) or packet.get("kind") == "process-exit":
                     raise ValueError("Invalid helper packet")
                 self.emit(packet)
-        except (ValueError, OSError, RecursionError):
-            self.emit({"kind": "error", "code": "protocol", "cleanupRequired": True})
+        except (ValueError, OSError, RecursionError) as error:
+            # One fixed category is useful for a failed UTF-8 boundary. Never
+            # retain decoder bytes, the exception message, or dependency names.
+            failure = {"kind": "error", "code": "protocol", "cleanupRequired": True}
+            if isinstance(error, UnicodeDecodeError):
+                failure["exceptionClass"] = "unicode_decode"
+            self.emit(failure)
             self._close_input(process)
             # EOF is cooperative, not an immediate capture interruption. Drain
             # without parsing/displaying further private output until real exit.

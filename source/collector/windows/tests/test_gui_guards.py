@@ -73,6 +73,29 @@ def source_window():
 
 
 class GuiGuardsTests(unittest.TestCase):
+    def test_failure_details_button_is_enabled_without_source_history_after_inspection(self):
+        window = source_window()
+        for name in ("approve", "connect", "agreement", "decline_button", "contacts", "review_button", "change_selection_button",
+                     "search_entry", "search_button", "previous_button", "next_button", "select_all_button",
+                     "cancel_select_all_button", "clear_all_button", "pair_button", "password_button",
+                     "inspect", "clear", "stop_button", "force_button", "progress", "copy_code_button",
+                     "status", "transfer_status", "coverage_status", "pair_code", "destination_status"):
+            setattr(window, name, Mock())
+        window.checked.get.return_value = False
+        window.state.handle({"kind": "error", "code": "collection_failed", "stage": "processing"})
+        window.state.exited(1)
+        window.state.begin("inspect")
+        window.state.handle({"kind": "residue", "sessions": []})
+        window.state.exited(0)
+        type(window).refresh(window)
+        self.assertEqual(window.state.diagnostic_details, "")
+        window.diagnostic_details_button.configure.assert_called_with(
+            text="Failure diagnostic details", state="normal")
+        window.show_readonly_details = Mock()
+        window.show_source_diagnostics()
+        self.assertIn("collection_failed", window.show_readonly_details.call_args.args[2])
+        self.assertIn("processing", window.show_readonly_details.call_args.args[2])
+
     def test_all_page_controls_expose_exact_progress_without_early_selection(self):
         window = source_window()
         for name in ("approve", "connect", "agreement", "decline_button", "contacts", "review_button", "change_selection_button",

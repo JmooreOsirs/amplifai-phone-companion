@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.26-rc25",
-      "build": "26102625",
-      "installerVersion": "1.0.25"
+      "version": "2026.10.27-rc27",
+      "build": "26102727",
+      "installerVersion": "1.0.27"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
@@ -31,5 +31,5 @@
     "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
   },
   "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json",
-  "windowsReconciliation": "RC25 encryption preparation: exact package/source fa6dbae7a3aa2fdd0ddc10d23a2511b585de18e1; Windows build 40378676736. Accepted guided run 40374987612 used f76d373bbd20991fc950c80ca8e76426765e6700; the only later change isolates non-GUI collector tests, and all 27 GUI proof files match the package source. Source/frozen each passed 200 scenarios and 1610 checks with matching production modules, geometry and native styles. The verified source offer has 650 members and 174 retained dependency archives. The handoff workflow pins this exact candidate artifact and existing-key signed manifest against installed RC24. The final windows-qualification.json must bind completed normal-handoff evidence before publication; public byte readback and website activation remain separate receipts. RC24 remains the released rollback; Mac and Android release identities are unchanged."
+  "windowsReconciliation": "RC27 exact package/source 71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23 fixes strict UTF-8 helper input/output and retains bounded failure diagnostics and unknown call direction. Windows package run 40543732081 and source/frozen GUI run 40543737212 succeeded on that source; 204 paired GUI stages and 27 proof files bind to the MSI. Later 2521524 changes only handoff/README documentation. The exact corresponding-source offer retains 174 dependency archives, 173 native references and frozen Unicode protocol custody. The release qualification commit pins the accepted MSI, artifact and existing-key signed manifest for a normal released-RC25-to-RC27 handoff. Final qualification, protected merge, public body readback and website pointer/feed activation require their exact receipts. Published RC25 remains rollback. This release does not establish the historical private SMS exception or a new physical device/account Save result."
 }

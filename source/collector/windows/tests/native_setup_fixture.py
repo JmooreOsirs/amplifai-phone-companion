@@ -211,7 +211,8 @@ def scenarios():
     state.phase = "error"
     state.status = "Synthetic local source is unavailable. Keep this review open and check Details & recovery. " * 12
     yield "collection-error", run, state
-    for name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue"):
+    for name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue",
+                 "collection-processing-failed-clean"):
         run, _ = started()
         state = collecting()
         state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 1211527184})
@@ -220,10 +221,15 @@ def scenarios():
             state.request_stop()
         else:
             run.fail()
-            state.handle({"kind": "selected-payload-diagnostic", **diagnostic(
-                declaredBytes=794714112, rawBytes=794722320, copiedBytes=794722304,
-                validationCode="unsupported_size_growth", copyDigest="matched")})
-            state.handle({"kind": "error", "code": "selected_payload_length"})
+            if name == "collection-processing-failed-clean":
+                # Synthetic reporting failure only; this does not claim to
+                # reproduce the cause of a real encrypted-backup read failure.
+                state.handle({"kind": "error", "code": "collection_failed", "stage": "processing"})
+            else:
+                state.handle({"kind": "selected-payload-diagnostic", **diagnostic(
+                    declaredBytes=794714112, rawBytes=794722320, copiedBytes=794722304,
+                    validationCode="unsupported_size_growth", copyDigest="matched")})
+                state.handle({"kind": "error", "code": "selected_payload_length"})
             state.cooperative_failure()
         state.exited(0 if name == "collection-stopped-clean" else 1)
         state.begin("inspect")

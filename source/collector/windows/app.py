@@ -760,9 +760,11 @@ class PhoneWindow:
         self.show_readonly_details("Contact source details", item["name"] or "Unnamed contact", contact_source_details(item), height=7)
 
     def show_source_diagnostics(self) -> None:
-        if self.state.diagnostic_details:
-            self.show_readonly_details("Source diagnostic details", "Current collection and previous runs",
-                                       self.state.diagnostic_details, height=18, scrollable=True)
+        details = "\n\n".join(part for part in (
+            self.state.failure_detail_text, self.state.diagnostic_details) if part)
+        if details:
+            self.show_readonly_details("Collection diagnostic details", "Local failure and source details",
+                                       details, height=18, scrollable=True)
 
     def show_readonly_details(self, title: str, heading: str, text: str, *, height: int, scrollable: bool = False) -> None:
         self.close_source_details()
@@ -1178,7 +1180,9 @@ class PhoneWindow:
         self.status.set(state.status)
         self.transfer_status.set(state.transfer_status)
         self.coverage_status.set(state.coverage_status)
-        self.diagnostic_details_button.configure(state="normal" if state.diagnostic_details else "disabled")
+        self.diagnostic_details_button.configure(
+            text="Failure diagnostic details" if state.failure_detail_text else "Source diagnostic details",
+            state="normal" if state.failure_detail_text or state.diagnostic_details else "disabled")
         self.backup_setting.set(state.backup_check_status)
         self.backup_check.configure(state="normal" if state.can_check_backup_setting and getattr(self, "status_owned", True) and getattr(self, "update_state", "") != "installing" else "disabled")
         self.activity_stage.set(state.activity_stage)
