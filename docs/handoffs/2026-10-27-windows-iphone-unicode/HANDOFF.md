@@ -13,13 +13,13 @@ contents, device identifier, password, token, or private recording link.
 | Item | Verified status at this handoff |
 |---|---|
 | Public repository / branch | `JmooreOsirs/amplifai-phone-companion`, `codex/windows-iphone-reliability` |
-| Review | [Draft PR #49](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/49), open and unmerged; public head remains `b94e6f4` (RC26) |
+| Review | [Draft PR #49](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/49), open and unmerged; qualified RC27 source `71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23` is published; later handoff-only updates do not alter its production code |
 | Local repair commit | `a6779fccaf921d294e3c29b7dd2c077e31848c50` — explicit UTF-8 protocol and RC27 qualification |
 | RC27 identity | App `2026.10.27-rc27`, build `26102727`, MSI `1.0.27`, `AmplifaiPhone-rc27-unsigned.msi` |
-| RC27 publication / Windows CI | Pending; no RC27 CI run, frozen Windows pass, installer artifact or installer checksum is established yet |
+| RC27 publication / Windows CI | Published. [Package run 40543732081](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40543732081) passed; frozen protocol receipts, MSI and upgrade independently verified. [Guided UI run 40543737212](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40543737212) passed; 204 source/frozen stage pairs, 408 PNG hashes and 27 source-proof files independently verified |
 | Local checks | Aggregate: 510 run, 499 passed, 11 platform skips. Release controls: 42 passed. Final diagnostics/harness checks: 18 passed. Diff check passed |
 | Physical acceptance | RC26 failed as described below. RC27 physical collection, selection, account Save and report reopening are unverified |
-| Website admission | Live website was verified at backend commit `ac99dfccdd361875f56ea5aa23ee7f5e0cf2ba12`, admitting exact RC26. RC27 requires its own narrow compatibility change and deployment approval |
+| Website admission | READY production deployment `dpl_A4Cbd5jJ1j9iGydv7hMDqARAvcde`, backend `2990e5caf8c90cfaed97e24a645d267878b99aff`, admits exact RC27; 15 served-code admission cases passed and feeds/download metadata are preserved |
 
 The RC27 candidate is a focused collection/protocol repair. It does not change
 the public download or signed update feed, remove collection/destination approval,
@@ -168,9 +168,13 @@ fictional contact/password input. The isolated frozen launcher supplies the
 Unicode contact/input proof with matching production code. Neither proves a
 customer-installed executable's physical transfer or account Save.
 
-As of this handoff, the local harness cases pass, but **the actual Windows frozen
-run is pending**. Do not replace that distinction with “packaged Windows passed”
-until the receipts from the following job have been inspected.
+The actual frozen Windows qualification passed in package run `40543732081` at
+source `71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23`. Independent artifact inspection
+confirmed all six cases, eight source/packaged/frozen module hashes, the ordinary
+packaged runtime-check, and owned cleanup. The legacy Unicode control failed at
+`capture_packet` with `unicode_encode`; the corrected Unicode case succeeded
+with unchanged fictional input/output. This remains synthetic protocol proof,
+not physical phone or account-Save acceptance.
 
 ## Exact commands and qualification workflow
 
@@ -228,8 +232,10 @@ sentinel across replacement and uninstall and checks installed files/protocol
 registration. It does not run the installer on the customer's PC. UpgradeCode
 remains `0C4BE78C-C5E1-4EA9-841B-4D8D93F45871`.
 
-## Known RC26 evidence and immutable artifact identity
+## Verified qualification evidence and immutable artifact identity
 
+- [RC27 package run 40543732081](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40543732081): successful at exact `71ff8ff`; 510 Windows tests, 504 passed, 6 skipped. All six frozen protocol cases, eight production-module custody checks, encrypted worker and RC25 → RC26 → RC27 upgrade passed. The prior RC26 MSI hash was checked before installation; the session sentinel survived replacement and uninstall.
+- [RC27 guided UI run 40543737212](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40543737212): successful at exact `71ff8ff`; 193 native/UI state tests ran, 192 passed and one platform case skipped. All 204 source/frozen stage pairs have matching geometry, computed styles, identity and lifecycle. Independent verification checked all 408 PNG hashes, all 27 source-proof files and GUI digest `3d209c4b77dd47e4bdce56d67be1ecc48beec031675a0b7b3bdda243da2f5d58` against the package. Small/high-DPI failure frames were visually reviewed; zero scenario failures. UI artifact `12753911272` ZIP SHA-256 is `9ecf159ad3c3b5216816d1aabcf89f62b40d52c63f7e47e5c28588372ac51006`. This proves synthetic layout/code custody; physical DPI/installed-phone/account acceptance remain separate.
 - [RC26 package run 40511748092](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40511748092): successful at exact `b94e6f4`; 494 Windows tests, 488 passed, 6 skipped; encrypted worker and RC25 → RC26 runner upgrade passed.
 - [RC26 guided UI run 40511685930](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40511685930): successful; 204 matching source/frozen screenshot pairs, including diagnostic failure states. This is RC26 evidence, not an RC27 frozen Unicode result.
 - [RC26 artifact 12738323362](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40511748092/artifacts/12738323362), name `windows-rc26-qualification`; retention expiry recorded as `2026-11-03T13:44:35Z`. It requires signed-in repository read access and may expire. Do not assume a historical Actions URL is permanent distribution.
@@ -239,19 +245,23 @@ remains `0C4BE78C-C5E1-4EA9-841B-4D8D93F45871`.
 | Released RC25 MSI baseline | 43,776,886 | `69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d` |
 | RC26 artifact ZIP | 46,312,841 | `9f7f23609dcee3b409e82f4b93e4f43b86cd7fe4f6baacdf83a16212f71aac9f` |
 | RC26 MSI | 43,776,886 | `22bd2529e316ad5e56f1fe26faab6fe078dc0a5707dd30e62467edd8afedaf91` |
-| RC27 MSI | Not built/verified yet | Pending Windows qualification; do not invent or reuse a prior hash |
+| RC27 artifact ZIP | 47,556,922 | `714216433d188dd7dfdc699795bf86fb7c6449ab702249cb5462cd6b9a2bd31a` |
+| RC27 MSI | 43,780,982 | `3a142a311a968664eb928dbca936fa615c6dde69b33391bf0b38bca1101bd4e3` |
 
 The RC26 ZIP's installer path is
 `AmplifaiPhoneInstaller/AmplifaiPhone-rc26-unsigned.msi`; the other folders contain
-qualification results. The planned RC27 artifact is `windows-rc27-qualification`
-with `AmplifaiPhoneInstaller/AmplifaiPhone-rc27-unsigned.msi`. Verify its actual
-contents, identity, byte count and checksum after CI; planned names are not proof
-that an artifact was created.
+qualification results. The verified [RC27 artifact `12753190104`](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40543732081/artifacts/12753190104) is `windows-rc27-qualification`,
+with installer `AmplifaiPhoneInstaller/AmplifaiPhone-rc27-unsigned.msi`, MSI 1.0.27,
+app 2026.10.27-rc27/build26102727. Its recorded expiry is `2026-11-03T16:50:41Z`.
+The download link was verified in the signed-in GitHub artifact listing; repository
+read access is required. ZIP and actual MSI hashes were independently computed
+and matched metadata/receipts. Rebuild from qualified source if an artifact expires;
+never replace immutable artifacts or claim an expired link is durable distribution.
 
 ## Website compatibility, release isolation and rollback
 
 The website's exact-client allowlist is in backend
-`src/lib/release/phone-platform-setup.ts`. The last verified live deployment at
+`src/lib/release/phone-platform-setup.ts`. The earlier RC26 live deployment at
 `https://amplifai.satoris.ai` used backend commit
 `ac99dfccdd361875f56ea5aa23ee7f5e0cf2ba12`, based on
 `41618496abe5baf612a169488f25d0857f55ac7d`. Its runtime change added only the
@@ -259,14 +269,25 @@ exact Windows RC26 tuple. Read-only served-code checks accepted exact RC26 and
 existing RC25/Android identities and rejected mixed identity fields. Related
 source tests had 139 passes; no live phone upload was part of that verification.
 
-RC27 must receive a separate narrow admission change for app version
-`2026.10.27-rc27` / build `26102727`, retaining bundle
+The approved RC27 admission change is now live at `https://amplifai.satoris.ai`:
+backend commit `2990e5caf8c90cfaed97e24a645d267878b99aff`, READY production deployment
+`dpl_A4Cbd5jJ1j9iGydv7hMDqARAvcde`. The runtime diff from `ac99dfc` is exactly
+three lines appending app `2026.10.27-rc27` / build `26102727`, with bundle
 `ai.satoris.amplifai.phone.windows-candidate`, `windows-x64-test` channel and
-Windows x64 platform identity. Preserve RC26 and all earlier supported clients,
-Android, shared courses, public download links and signed feeds. Test discovery,
-create/deep-link binding and mixed-identity rejection before an approved deployment;
-verify the exact deployed commit and served admission afterward without uploading
-phone data.
+Windows x64 identity. The five test-file changes cover exact/pairwise identity,
+discovery/capability mismatch, create/retry/deep-link lifecycle, existing download
+metadata and status custody. All 147 related tests across eight files passed;
+changed-file lint and diff checks passed, and the hosted production build is READY.
+
+Post-deployment read-only verification confirmed the canonical domain resolves to
+that exact deployment/commit. The served pin list matches exact deployed source.
+An extracted pure admission predicate passed 15 cases: RC27, RC26, RC25 and Android
+are admitted; mixed identities and field drift are rejected. The offline check
+executed no chunk/module/bootstrap/import callbacks and made zero network calls.
+Anonymous GETs verified both public feed hosts and signatures remain byte-identical
+to `ac99dfc`; public download metadata remains RC25. No account action, setup POST,
+phone upload, schema change or data mutation was used for verification. This proves
+compatibility admission, not a signed-in physical collection or account Save.
 
 The public Windows download/feed still advertise released RC25. RC26/RC27 are
 distinct diagnostic candidates. Keep update signing keys, channel, public key,
@@ -275,8 +296,8 @@ feed URL and release controls unchanged. Admission is not a production app relea
 If an RC27 admission deployment must be rolled back, return to the verified RC26
 compatibility baseline `ac99dfc` or narrowly revert the RC27 tuple while preserving
 the RC26 entry. Recheck existing identities and feed bytes. A later main-branch
-backend deployment must not accidentally discard the separate RC26 admission
-change. Do not remove existing support as an incidental rollback.
+backend deployment must not accidentally discard the separate RC26 and RC27 admission
+changes. Neither compatibility branch has been merged as part of this work. Do not remove existing support as an incidental rollback.
 
 For the app, do not overwrite an old artifact or force a lower MSI version over
 an active run. Version ordering and downgrade refusal remain protective behavior.
@@ -286,7 +307,10 @@ session rules; never delete original Apple/phone data as a rollback step.
 
 ## Physical manual test criteria and remaining work
 
-Before requesting another full phone transfer:
+The software/artifact/admission gates below are complete for the exact identities
+recorded above. Physical collection and durable account Save remain the next
+manual acceptance step. For any future candidate, re-establish these gates before
+requesting another full phone transfer:
 
 1. Publish the reviewed candidate branch and record exact remote commit and CI URL.
 2. Require terminal Windows success, six frozen protocol cases with matching code
