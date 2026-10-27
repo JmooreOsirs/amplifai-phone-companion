@@ -641,7 +641,8 @@ class AgentProtocolTest(unittest.TestCase):
         self.assertEqual(run_connect(source, sink, fake_collector), 1)
         self.assertEqual(
             json.loads(sink.getvalue().splitlines()[-1]),
-            {"kind": "error", "code": "collection_failed", "stage": "review"},
+            {"kind": "error", "code": "collection_failed", "stage": "review",
+             "exceptionClass": "type", "reviewStep": "commands"},
         )
         self.assertNotIn("private person", sink.getvalue())
 

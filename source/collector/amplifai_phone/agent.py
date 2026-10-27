@@ -32,6 +32,7 @@ from .backup_watchdog import (
 from .bridge import BridgeError, BridgeServer
 from .call_accounting import CallAccountingHistory, call_accounting, validate_call_accounting
 from .capture_runtime import run_local_capture
+from .helper_protocol import configure_protocol_streams
 from .ios_backup import (
     BackupEncryptionPreflightError, IPhoneCapture, capture_source_diagnostics, collect_iphone,
     inspect_backup_encryption,
@@ -235,6 +236,22 @@ def _error_event(exc: BaseException) -> dict[str, object]:
     return event
 
 
+def _exception_class(exc: BaseException) -> str:
+    """Return fixed, non-sensitive categories, never a dependency class/message.
+
+    Unknown failures must not reveal an exception's value, private path, phone
+    contents, credential, dynamically named class, or traceback.
+    """
+    for category, kind in (
+        ("unicode_encode", UnicodeEncodeError), ("unicode_decode", UnicodeDecodeError),
+        ("value", ValueError), ("type", TypeError), ("os", OSError),
+        ("runtime", RuntimeError),
+    ):
+        if isinstance(exc, kind):
+            return category
+    return "other"
+
+
 def run_connect(
     source: TextIO,
     sink: TextIO,
@@ -243,8 +260,10 @@ def run_connect(
     *, diagnostic_history: DiagnosticHistory | None = None,
     call_accounting_history: CallAccountingHistory | None = None,
 ) -> int:
+    configure_protocol_streams(source, sink)
     _emit(sink, {"kind": "state", "state": "connecting"})
     capture_stage = "connecting"
+    review_step: str | None = None
     attempt_id = str(uuid4())
     diagnostics: dict[tuple[str, str], dict[str, object]] = {}
     diagnostic_storage_failures: set[str] = set()
@@ -342,15 +361,21 @@ def run_connect(
             collector_options["require_encrypted_backup"] = True
         capture = run_local_capture(collector(**collector_options))
         capture_stage = "review"
+        review_step = "diagnostics"
         captured_diagnostics = capture_source_diagnostics(capture)
+        review_step = "call_accounting"
         retain_call_accounting()
+        review_step = "source_diagnostics"
         for record in captured_diagnostics:
             payload_diagnostic(record)
+        review_step = "contact_page"
+        contact_page = _contact_page(capture.contacts.records, "", 0)
+        review_step = "capture_packet"
         _emit(
             sink,
             {
                 "kind": "capture",
-                **_contact_page(capture.contacts.records, "", 0),
+                **contact_page,
                 "availableCalls": len(capture.calls.records),
                 "availableMessages": len(capture.messages.records),
                 "since": capture.since,
@@ -360,6 +385,7 @@ def run_connect(
                 **({"sourceDiagnostics": captured_diagnostics} if captured_diagnostics else {}),
             },
         )
+        review_step = "commands"
         while True:
             command = _command(source)
             action = command.get("action")
@@ -559,6 +585,10 @@ def run_connect(
         return 130
     except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001 - do not expose device errors
         event = _error_event(exc)
+        if event["code"] == "collection_failed":
+            event["exceptionClass"] = _exception_class(exc)
+            if capture_stage == "review" and review_step is not None:
+                event["reviewStep"] = review_step
         if event["code"] in {
             "connection_lost", "device_backup_failed", "backup_host_space",
             "backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed",
@@ -591,6 +621,7 @@ def run_connect(
 
 def run_admin(mode: str, sink: TextIO, root: Path | None = None, *,
               diagnostic_history: DiagnosticHistory | None = None) -> int:
+    configure_protocol_streams(None, sink)
     try:
         if mode == "inspect":
             history = []
@@ -654,6 +685,7 @@ def run_admin(mode: str, sink: TextIO, root: Path | None = None, *,
 
 
 def main() -> int:
+    configure_protocol_streams(sys.stdin, sys.stdout)
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode", choices=("connect", "inspect", "clear-residue", "runtime-check", "backup-encryption-status")

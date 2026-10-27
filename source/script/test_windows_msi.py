@@ -50,7 +50,7 @@ class InstallerAuthoringTests(unittest.TestCase):
         _, records = checked_records(self.package, self.receipt)
         tree = author_xml(records, self.package)
         ns = {"w": NS}
-        self.assertEqual(VERSION, "1.0.26")
+        self.assertEqual(VERSION, "1.0.27")
         self.assertEqual(tree.find(".//w:Product", ns).attrib["UpgradeCode"], UPGRADE_CODE)
         self.assertEqual(UPGRADE_CODE, "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871")
         self.assertIsNotNone(tree.find(".//w:MajorUpgrade", ns))
@@ -108,7 +108,7 @@ class InstallerAuthoringTests(unittest.TestCase):
             "installer_version": INSTALLER_VERSION, "channel": CHANNEL,
         })
         for malformed in (pins.replace(BUILD, "26102625"),
-                          pins + f"BUILD = {BUILD!r}\n", pins + "BUILD = str(26102726)\n",
+                          pins + f"BUILD = {BUILD!r}\n", pins + "BUILD = str(26102727)\n",
                           pins + f"BUILD: str = {BUILD!r}\n", pins + "BUILD += '0'\n",
                           pins + f"BUILD, OTHER = ({BUILD!r}, 'unused')\n",
                           pins.replace("VERSION =", "VERSION = OTHER =", 1)):

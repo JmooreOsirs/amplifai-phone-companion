@@ -51,6 +51,12 @@ FAILURE_CODES = frozenset({
     "protocol", "helper_communication_failed", "helper_stopped", "force_stopped",
 })
 FAILURE_STAGES = frozenset({"connecting", "backup", "processing", "review"})
+FAILURE_EXCEPTION_CLASSES = frozenset({
+    "unicode_encode", "unicode_decode", "value", "type", "os", "runtime", "other",
+})
+FAILURE_REVIEW_STEPS = frozenset({
+    "diagnostics", "call_accounting", "source_diagnostics", "contact_page", "capture_packet", "commands",
+})
 
 
 class ProtocolError(ValueError):
@@ -65,6 +71,8 @@ class FailureDiagnostic:
     operation: str
     device_code: int | None = None
     helper_exit_code: int | None = None
+    exception_class: str | None = None
+    review_step: str | None = None
 
     @property
     def summary(self) -> str:
@@ -74,6 +82,10 @@ class FailureDiagnostic:
     @property
     def detail_text(self) -> str:
         lines = [self.summary, f"Observed at: {self.occurred_at} (UTC).", f"Operation: {self.operation}."]
+        if self.review_step is not None:
+            lines.append(f"Review operation: {self.review_step}.")
+        if self.exception_class is not None:
+            lines.append(f"Failure class: {self.exception_class}.")
         if self.device_code is not None:
             lines.append(f"Device error code: {self.device_code}.")
         if self.helper_exit_code is not None:
@@ -271,10 +283,19 @@ class Session:
         if (code != "device_backup_failed" or type(device_code) is not int
                 or not -(2**31) <= device_code <= 2**32 - 1):
             device_code = None
+        exception_class = event.get("exceptionClass")
+        if (not isinstance(exception_class, str) or exception_class not in FAILURE_EXCEPTION_CLASSES
+                or not (code == "collection_failed" or code == "protocol" and exception_class == "unicode_decode")):
+            exception_class = None
+        review_step = event.get("reviewStep")
+        if (code != "collection_failed" or stage != "review" or not isinstance(review_step, str)
+                or review_step not in FAILURE_REVIEW_STEPS):
+            review_step = None
         diagnostic = FailureDiagnostic(
             code=code, stage=stage,
             occurred_at=datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             operation=self.mode, device_code=device_code,
+            exception_class=exception_class, review_step=review_step,
         )
         # Keep the first failure of each operation. Follow-on errors and cleanup
         # results cannot turn the original collection cause into a different one.

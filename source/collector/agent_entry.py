@@ -4,6 +4,9 @@ import sys
 
 
 def main():
+    from amplifai_phone.helper_protocol import configure_protocol_streams
+
+    configure_protocol_streams(sys.stdin, sys.stdout)
     if sys.argv[1:2] == ['install-verified-update']:
         if sys.platform != 'win32':
             return 2

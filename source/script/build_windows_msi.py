@@ -173,7 +173,7 @@ def build(package: Path, receipt_path: Path, output: Path, candle: Path, light: 
     xml_path = output / "AmplifaiPhone.wxs"
     author_xml(records, package).write(xml_path, encoding="utf-8", xml_declaration=True)
     object_path = output / "AmplifaiPhone.wixobj"
-    msi_path = output / "AmplifaiPhone-rc26-unsigned.msi"
+    msi_path = output / "AmplifaiPhone-rc27-unsigned.msi"
     for command, label in (
         ([str(candle), "-nologo", "-arch", "x64", "-out", str(object_path), str(xml_path)], "compile"),
         ([str(light), "-nologo", "-out", str(msi_path), str(object_path)], "link"),

@@ -6,7 +6,8 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from session import BACKUP_CHECK_MODE, FAILURE_CODES, FAILURE_STAGES, ProtocolError, Session
+from session import (BACKUP_CHECK_MODE, FAILURE_CODES, FAILURE_STAGES,
+                     FAILURE_EXCEPTION_CLASSES, FAILURE_REVIEW_STEPS, ProtocolError, Session)
 
 
 def inspected() -> Session:
@@ -131,14 +132,59 @@ class FailureDiagnosticTests(unittest.TestCase):
                 state.handle({"kind": "error", "code": code, "stage": sentinel,
                               "message": sentinel, "password": sentinel,
                               "path": sentinel, "token": sentinel, "deviceCode": sentinel,
+                              "exceptionClass": sentinel, "reviewStep": sentinel,
                               "occurred_at": sentinel})
                 record = asdict(state.collection_failure)
                 self.assertEqual(record["code"], "unrecognized_error")
                 self.assertEqual(record["stage"], "unknown")
                 self.assertIsNone(record["device_code"])
-                self.assertEqual(set(record), {"code", "stage", "occurred_at", "operation", "device_code", "helper_exit_code"})
+                self.assertEqual(set(record), {"code", "stage", "occurred_at", "operation", "device_code",
+                                               "helper_exit_code", "exception_class", "review_step"})
+                self.assertIsNone(record["exception_class"])
+                self.assertIsNone(record["review_step"])
                 self.assertNotIn(sentinel, repr(record) + state.failure_detail_text + state.failure_summary)
                 self.assertLess(len(state.failure_detail_text), 400)
+
+    def test_review_failure_class_and_operation_survive_cleanup_without_sensitive_text(self):
+        state = collecting()
+        state.handle({"kind": "error", "code": "collection_failed", "stage": "review",
+                      "exceptionClass": "unicode_encode", "reviewStep": "capture_packet",
+                      "message": "FICTIONAL_PRIVATE_CONTACT", "traceback": "FICTIONAL_PRIVATE_PATH"})
+        state.exited(1)
+        original = state.collection_failure
+        state.begin("inspect")
+        state.handle({"kind": "residue", "sessions": []})
+        state.exited(0)
+        self.assertIs(state.collection_failure, original)
+        self.assertEqual((original.exception_class, original.review_step), ("unicode_encode", "capture_packet"))
+        self.assertIn("Failure class: unicode_encode", state.failure_detail_text)
+        self.assertIn("Review operation: capture_packet", state.failure_detail_text)
+        self.assertNotIn("FICTIONAL_PRIVATE", state.failure_detail_text)
+
+    def test_failure_classification_accepts_only_fixed_enums_at_their_valid_boundary(self):
+        for field, values in (("exceptionClass", FAILURE_EXCEPTION_CLASSES), ("reviewStep", FAILURE_REVIEW_STEPS)):
+            for value in values:
+                state = collecting()
+                state.handle({"kind": "error", "code": "collection_failed", "stage": "review", field: value})
+                attribute = "exception_class" if field == "exceptionClass" else "review_step"
+                self.assertEqual(getattr(state.collection_failure, attribute), value)
+            for value in (None, False, 12, [], {}, "FICTIONAL_PRIVATE", "x" * 100_000):
+                state = collecting()
+                state.handle({"kind": "error", "code": "collection_failed", "stage": "review", field: value})
+                self.assertIsNone(getattr(state.collection_failure, attribute))
+        state = collecting()
+        state.handle({"kind": "error", "code": "protocol", "stage": "review",
+                      "exceptionClass": "unicode_encode", "reviewStep": "capture_packet"})
+        self.assertIsNone(state.collection_failure.exception_class)
+        self.assertIsNone(state.collection_failure.review_step)
+        state = collecting()
+        state.handle({"kind": "error", "code": "protocol", "exceptionClass": "unicode_decode",
+                      "message": "FICTIONAL_PRIVATE_BYTES"})
+        self.assertEqual(state.collection_failure.exception_class, "unicode_decode")
+        self.assertNotIn("FICTIONAL_PRIVATE_BYTES", state.failure_detail_text)
+        state = collecting()
+        state.handle({"kind": "error", "code": "collection_failed", "stage": "processing", "reviewStep": "capture_packet"})
+        self.assertIsNone(state.collection_failure.review_step)
 
     def test_known_code_drops_raw_extra_fields_and_unreported_stage_is_not_inferred(self):
         state = collecting()
