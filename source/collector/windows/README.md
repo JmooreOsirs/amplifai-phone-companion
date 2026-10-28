@@ -2,7 +2,7 @@
 
 ## October 28 Save continuity work
 
-The [Windows/iPhone Save continuity handoff](../../../docs/handoffs/2026-10-28-windows-save-continuity/HANDOFF.md) records the merged RC27 base, preserved signed-update pins, real-run acceptance limits, continuation timing defect, Windows page-recovery policy and post-Save report-state correction. These are local source changes pending their own candidate qualification; the published RC27 package is unchanged.
+The [Windows/iPhone Save continuity handoff](../../../docs/handoffs/2026-10-28-windows-save-continuity/HANDOFF.md) records the merged RC27 base, preserved signed-update pins, continuation timing defect, page-recovery policy, stable post-Save report state and verified RC28 artifact. RC28 package, frozen protocol, RC27-to-RC28 upgrade and guided source/frozen UI checks pass at source4caa24f. Jeff merged the website fix; a fresh physical test remains separate. Published RC27 package/update feeds are unchanged.
 
 ## October 27 RC27 Unicode correction
 

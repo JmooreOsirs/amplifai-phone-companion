@@ -1,7 +1,9 @@
 # Windows/iPhone Save continuity — 2026-10-28
 
-Status: local implementation and synthetic qualification complete. This is not a
-published installer, production deployment, or new physical-device pass.
+Status: RC28 package/upgrade, source controls and guided source/frozen Windows UI
+qualification all passed at exact source4caa24f. Both artifact sets were independently
+verified. Jeff merged/deployed the website fix; the read-only observation is below.
+No agent production release/deployment or new physical-device pass is claimed.
 
 ## Start here
 
@@ -186,16 +188,19 @@ The existing local website dependency tree has missing CRM packages; an untouche
 new errors. Do not install dependencies or claim a clean repository-wide typecheck
 without evidence. Keep environment limitations explicit.
 
-## Release boundary and next steps
+## Release boundary and initial candidate plan
 
-This approval covers local source changes and synthetic tests. It does not cover
-public publication, CI dispatch, merge, production deployment, PC installation,
-phone backup or real-account upload.
+The original implementation phase covered local source changes and synthetic
+tests. Publication of both fix branches and Windows candidate qualification was
+subsequently approved on 2026-10-28. The latest instruction assigns deployment to
+Jeff. No agent merge, production app release, production deployment, PC installation,
+phone backup or real-account upload is part of this handoff.
 
-After review, a new Windows candidate must have a distinct version/build/MSI
+During the local-only phase, the planned Windows candidate needed a distinct version/build/MSI
 identity and Windows frozen/UI/upgrade qualification. Read-only metadata inspection
 found Windows `2026.10.28-rc28` / build`26102828` / MSI`1.0.28` unused at the time;
-this is a proposal, not a reservation or built artifact. Recheck before assigning.
+this was initially a proposal. The subsequently assigned and qualified candidate
+is recorded in the publication follow-up below.
 
 Publication scope should name the public companion branch/source, private website
 branch and Windows CI. Production website behavior deployment and exact candidate
@@ -207,3 +212,95 @@ Software tests cannot establish actual default-browser activation, wrong-profile
 recovery, physical iPhone collection, consumer MSI upgrade or a new real-account
 Save. Preserve those as later acceptance checks instead of calling a local source
 test a consumer-ready installer.
+
+## Published RC28 candidate and deployment handoff
+
+- [Companion draft PR50](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/50):
+  native correction `dc598c43d7db89935515b89f241ea52655a6bf22`, candidate preparation
+  `4caa24fdeb9a88d440eb9dc0e7b3b899e588beae`. Qualification uses exact source4caa24f.
+- [Private website draft PR45](https://github.com/JmooreOsirs/amplifai-database-engine/pull/45):
+  the Save/report fix was rebased onto newer main
+  `35146ec8654bf765d96589a5a670fd22dd20922c`, preserving the merged Final-report work.
+  Rebased fix `65eb7adc266465445e96401f0cf519dc1b168294`; exact RC28 admission
+  `eedd3e941b19fc8627f1a90a5ccfce862356d491`.
+- RC28 identity: `2026.10.28-rc28`, build`26102828`, MSI`1.0.28`, unchanged
+  Windows test channel, bundle ID and UpgradeCode. Existing RC27 download/feed
+  bytes and Jeff's exact RC27 signed handoff inputs remain unchanged.
+- Website runtime admission adds only the exact RC28 tuple alongside existing
+  Windows/Android pins. With the new admission and current35146ec base, the local
+  related aggregate passed **1,014 tests,2 skips**; focused admission tests127/127
+  passed. Full TypeScript diagnostics remain the same26 as untouched35146ec.
+  Existing Vercel integration automatically built successful PR previews; none
+  was promoted to production by this work.
+
+### Exact Windows package qualification
+
+[Package run40720333063](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40720333063)
+passed at4caa24f, completed2026-10-28 16:02:07 UTC:
+
+- **520 Windows source tests:514 passed,6 platform skips**.
+- Full-size encrypted Messages extraction and exact byte geometry passed.
+- Actual frozen encrypted worker and the six-case CP1252/Unicode protocol proof
+  passed. The isolated test launcher remains excluded from the MSI.
+- MSI build, installed inventory, protocol registration and exact released
+  RC27-to-RC28 in-place upgrade passed on the disposable Windows runner. The
+  session-data sentinel survived upgrade and uninstall. This is not a consumer
+  installation or physical-phone pass.
+- [Source release controls40720204427](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40720204427)
+  passed at the same source, including native model/hidden AppKit/bridge checks
+  and release controls.
+- [Guided source/frozen UI40720338664](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40720338664)
+  passed, completed2026-10-28 16:20:53 UTC. The state-boundary set ran203tests:
+  202passed,1platformskip. All208main source/frozen screen pairs matched their
+  compared geometry, resolved styles, lifecycle and selected semantic fields.
+  Independent readback verified480PNG hashes (416main screenshots plus64nested
+  guide images),27source-proof files and the package's matching GUI source hash;
+  zero comparison failures. Critical preparing/opened/pending/saved frames were
+  visually reviewed. At680x680 with1.75scaling, optional missing-tab recovery lies
+  partly below the initial fold; scrolling is expected and keyboard checks confirm
+  it becomes fully visible when focused. Do not claim every control fits unscrolled.
+  [UI artifact12832222692](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40720338664/artifacts/12832222692)
+  is17,101,615bytes, SHA256
+  `9b758be3f6ad3085773917020cd86fca81dfa16c29fb2b220142ea7476f95f0c`.
+
+[Verified Actions ZIP](https://github.com/JmooreOsirs/amplifai-phone-companion/actions/runs/40720333063/artifacts/12831142246),
+artifact`12831142246`, `windows-rc28-qualification`, expires2026-11-04 16:01:57 UTC:
+
+- ZIP:46,327,715 bytes; SHA256
+  `b96a43ecf9d421058bdae7d70b1b27f5fb1266fbbade04a20f739cbc4f0d0c02`.
+- Installer inside ZIP: `AmplifaiPhoneInstaller/AmplifaiPhone-rc28-unsigned.msi`.
+  Size43,785,078 bytes; SHA256
+  `d78576276c9031fbfd39b9c980ea23c66b471609a863e6f85277d9eee1041768`.
+- Independent readback verified safe ZIP extraction, actual ZIP/MSI bytes, package
+  inventory,19 production GUI source hashes,8 production source/canonical-code
+  hashes, helper hash and receipt crosslinks. MSI version is corroborated by the
+  actual Windows install log and receipts; no MSI/helper was executed locally.
+
+### Jeff's release boundary
+
+Jeff received the PR links privately with an explicit instruction to deploy only
+after remaining qualification gates pass. No recipient details or conversation
+contents belong in this public note. No further handoff text is required merely
+because CI finishes; PR status/notes carry the qualification results.
+
+GitHub readback identifies Jeff (`JmooreOsirs`) as the merger of website PR45 at
+2026-10-28 16:21:43 UTC, after guided UI passed. Merge source:
+`a2ca89abe51684fcbeb4cbcb9ea1b179a89a9bda`. This preserves intervening main work,
+including the enrollment-save visibility correction in PR46. A subsequent
+read-only Vercel check resolved `amplifai.satoris.ai` to READY production deployment
+`dpl_GZn8rCr5awhApmyd2dJ1DYpKVeJJ` at exacta2ca89a. No deployment/promotion API
+was called by this work. Metadata readiness is not authenticated account/phone
+acceptance; no new real collection or account upload was performed.
+
+Deploy the reviewed website behavior and exact admission after qualification,
+preserving current-main unrelated changes. Do not roll back to historical7d65918e
+or2990e5c and thereby remove later work. Record the actual predeployment source and
+deployment ID, then roll back only the scoped change or that exact prior deployment
+if needed. Keep all existing client pins, public downloads and signed feeds.
+
+Candidate artifact delivery does not require publishing an RC28 production app
+release or changing update feeds. An RC28 candidate may refuse the still-older
+RC27 signed feed; this is a downgrade refusal, not permission to weaken verification
+or switch the production feed. Historical `phase=handoff` remains pinned to RC27:
+do not dispatch it from RC28 source. Any production RC28 release requires its own
+corresponding source/signing/handoff/public-byte verification.
