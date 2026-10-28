@@ -71,7 +71,7 @@ EXPECTED_STAGE = {
     "connecting": "collection", "collecting": "collection", "password": "collection", "processing": "collection",
     "contacts": "contacts", "contacts-empty": "contacts", "contacts-partial": "contacts",
     "contacts-select-all": "contacts", "reviewed-contacts": "contacts", "continue-uncertain": "attention",
-    "bind-uncertain": "attention", "bound": "save", "preview-received": "save", "pending-receipt": "save",
+    "bind-uncertain": "attention", "bound": "save", "browser-opened": "save", "preview-received": "save", "pending-receipt": "save",
     "saved": "complete", "recovery": "contacts", "collection-error": "attention", "long-scope-error": "approval",
     "authority-paused": "attention", "authority-refused": "attention", "authority-cancelled": "attention",
     "authority-expired": "attention", "handoff-expired": "attention",
@@ -275,6 +275,21 @@ def assert_actions(view, name):
         raise RuntimeError("Legacy local handoff incorrectly claims an approved account connection")
     if name == "pending-receipt" and view.state.saved_acknowledged:
         raise RuntimeError("Pending receipt was presented as an account Save")
+    if name in ("group-continue-pending", "group-bind-pending", "preview-received", "pending-receipt"):
+        if str(view.save_account_button.cget("state")) != "disabled":
+            raise RuntimeError("Preparation or in-progress account Save exposes another browser continuation")
+    if name == "bound" and (str(view.save_account_button.cget("state")) != "normal"
+                            or view.save_account_button.cget("text") != "Open account"):
+        raise RuntimeError("A ready reviewed handoff lost its explicit browser fallback")
+    if name == "browser-opened":
+        if (str(view.save_account_button.cget("state")) != "disabled"
+                or view.save_account_button.cget("text") != "Account tab opened"
+                or not view.save_reopen_button.winfo_ismapped()
+                or str(view.save_reopen_button.cget("state")) != "normal"
+                or view.save_reopen_button.cget("style") != "Quiet.TButton"):
+            raise RuntimeError("OS-accepted browser launch lost its separate missing-tab recovery")
+    elif view.save_reopen_button.winfo_ismapped():
+        raise RuntimeError("Missing-tab recovery escaped its ready, unreceived continuation")
     if name == "saved" and view.save_account_button.cget("text") != "Open report":
         raise RuntimeError("Saved receipt has no bound report action")
     if name == "collecting" and ("backup transfer only" not in view.progress_caption.get()
@@ -609,6 +624,11 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                         root.qualification_keyboard_trace = []
                         view.native_worker = SyntheticWorker()
                         view.native, view.state = native, state
+                        view._browser_continue_request = view._browser_continue_context = view._browser_continue_opened = None
+                        view._browser_continue_opening = False
+                        view._browser_recovery_deadline = 0.0
+                        if name == "browser-opened":
+                            view._browser_continue_opened = view.browser_continue_key
                         view.guide_step = 2 if name in ("backup-unencrypted", "backup-unknown") else 0
                         view.render_guide()
                         view.native_checked.set(name == "approval-checked")
@@ -685,6 +705,9 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                                 return {"before": before, "after": list(view.details_canvas.yview()),
                                         "lastExplanation": require_bounds(root, view.collection_next, "collection next step")}
                             _, scroll = check(name, "collection-scroll", collection_scroll)
+                        elif name == "browser-opened":
+                            _, focus = check(name, "continuation-recovery-keyboard", lambda: keyboard_traversal(root,
+                                (view.save_reopen_button,), start=view.recovery_toggle))
                         if name == "long-scope-error":
                             def disclosure_scroll():
                                 content = view.native_disclosure.get("1.0", "end-1c")

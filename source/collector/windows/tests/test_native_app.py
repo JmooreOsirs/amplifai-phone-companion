@@ -1,5 +1,7 @@
 """Headless native setup callbacks. Synthetic authority never reaches a network."""
 import queue
+from dataclasses import replace
+from webbrowser import Error as BrowserError
 import hashlib
 import unittest
 from unittest.mock import Mock, patch
@@ -595,6 +597,218 @@ class NativeAppTests(unittest.TestCase):
         self.assertEqual(view.native_retry.configure.call_args.kwargs["state"], "normal")
         view.native_action(view.native.retry)
         self.assertEqual(view.native_worker.waiting.action, "status_continue")
+
+
+def preparing_view():
+    view, packet = NativeAppTests().pending_continue()
+    view.events.put(packet)
+    view.pump()
+    tick(view)  # Accepted status_continue -> exact local pair request.
+    view.events.put({"kind": "pairing", "pairCode": "1234567890", "port": 48751,
+                     "expiresInSeconds": 300, "handoffId": BINDING, "payloadSha256": "a" * 64})
+    view.pump()  # status_bind is still pending; no return URL exists.
+    return view
+
+
+class BrowserContinuationTests(unittest.TestCase):
+    def test_original_continue_waits_for_binding_and_opens_exact_return_once(self):
+        view = preparing_view()
+        request = view._browser_continue_request
+        browser = Mock()
+        browser.open.return_value = True
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            for _ in range(3):
+                view.reopen_account()  # The previously exposed early button.
+                view.pair()
+                view.drain_browser_continue()
+            browser.open.assert_not_called()
+            self.assertIs(view._browser_continue_request, request)
+            tick(view)  # status_bind -> bind, still not ready.
+            browser.open.assert_not_called()
+            tick(view)  # Accepted bind -> one queued browser return.
+            expected = view.native.continue_url
+            self.assertTrue(view.can_return_to_browser)
+            self.assertFalse(view.can_open_browser_continuation)
+            for _ in range(3):
+                view.reopen_account()
+                view.pair()
+                view.handle_native_result("bound")
+                view.pump()
+            browser.open.assert_called_once_with(expected)
+        self.assertIn("continue=reviewed", expected)
+        self.assertNotIn("phoneRunControl", expected)
+        self.assertEqual([op.action for op in view.native_worker.operations].count("bind"), 1)
+        self.assertIsNone(view._browser_continue_request)
+        self.assertFalse(view.state.saved_acknowledged)
+
+    def test_uncertain_bind_retains_intent_and_requires_exact_confirmation_retry(self):
+        view = preparing_view()
+        browser = Mock()
+        browser.open.return_value = True
+        request = view._browser_continue_request
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            tick(view)
+            first_bind = view.native_worker.waiting
+            tick(view, Outcome("uncertain"))
+            for _ in range(2):
+                view.reopen_account()
+                view.pump()
+            self.assertIs(view._browser_continue_request, request)
+            browser.open.assert_not_called()
+            view.native_action(view.native.retry)
+            tick(view)
+            self.assertEqual(view.native_worker.waiting.body, first_bind.body)
+            tick(view)
+            browser.open.assert_called_once_with(view.native.continue_url)
+
+    def test_failed_browser_launch_is_explicit_retry_not_automatic_loop(self):
+        for result in (False, OSError("fictional browser unavailable"), BrowserError("fictional browser unavailable")):
+            with self.subTest(result=type(result).__name__):
+                view = preparing_view()
+                browser = Mock()
+                browser.open.side_effect = [result, True]
+                with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+                    tick(view)
+                    tick(view)
+                    self.assertEqual(browser.open.call_count, 1)
+                    self.assertIsNone(view._browser_continue_request)
+                    self.assertTrue(view.can_open_browser_continuation)
+                    self.assertIn("did not open", view.native.message)
+                    for _ in range(3):
+                        view.pump()
+                    self.assertEqual(browser.open.call_count, 1)
+                    view.reopen_account()
+                    view.reopen_account()
+                    self.assertEqual(browser.open.call_count, 2)
+                    self.assertFalse(view.can_open_browser_continuation)
+                    self.assertEqual(browser.open.call_args_list[0], browser.open.call_args_list[1])
+
+    def test_reentrant_browser_callbacks_cannot_launch_parallel_returns(self):
+        view = preparing_view()
+        browser = Mock()
+        def opened(_url):
+            view.reopen_account()
+            view.drain_browser_continue()
+            return True
+        browser.open.side_effect = opened
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            tick(view)
+            tick(view)
+        browser.open.assert_called_once_with(view.native.continue_url)
+
+    def test_existing_account_destination_does_not_open_a_redundant_return_tab(self):
+        view = preparing_view()
+        browser = Mock()
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            tick(view)
+            NativeAppTests().destination(view)
+            tick(view)
+            self.assertIsNone(view._browser_continue_request)
+            self.assertEqual(view.native_worker.waiting.action, "status_verify")
+            tick(view)
+            tick(view)
+            view.pump()
+            browser.open.assert_not_called()
+            self.assertIs(view.state.destination_requested_approval, True)
+
+    def test_wrong_account_destination_stays_paused_and_never_approves_or_opens(self):
+        view = preparing_view()
+        browser = Mock()
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            tick(view)
+            NativeAppTests().destination(view, email="other@example.test")
+            tick(view)
+            self.assertEqual(view.native.authority, "paused")
+            self.assertIsNone(view.state.destination_requested_approval)
+            self.assertIn("Return to the account and course approved", view.native.message)
+            view.reopen_account()
+            self.assertFalse(view.recover_browser_continuation())
+            browser.open.assert_not_called()
+
+    def test_os_accepted_launch_can_be_explicitly_recovered_without_duplicate_clicks(self):
+        view = preparing_view()
+        browser = Mock()
+        browser.open.return_value = True
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            tick(view)
+            tick(view)
+            expected = view.native.continue_url
+            self.assertFalse(view.state._browser_received)
+            self.assertTrue(view.recover_browser_continuation())
+            self.assertFalse(view.recover_browser_continuation())  # Double-click suppression.
+            self.assertEqual(browser.open.call_count, 2)
+            view.pump()
+            self.assertEqual(browser.open.call_count, 2)
+            self.assertTrue(all(call.args == (expected,) for call in browser.open.call_args_list))
+            view.state.save_receipt_pending = True
+            self.assertFalse(view.recover_browser_continuation())
+            view.reopen_account()
+            self.assertEqual(browser.open.call_count, 2)
+
+    def test_stale_or_finished_review_cannot_launch_or_fall_back_to_management(self):
+        for fault in ("review", "selection", "handoff", "cancel", "expire", "stopped",
+                      "received", "receipt", "saved", "failed", "run"):
+            with self.subTest(fault=fault):
+                view = preparing_view()
+                browser = Mock()
+                with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+                    tick(view)  # Server bind is in flight.
+                    if fault == "review":
+                        view.state._pending_review_id = "different-review"
+                    elif fault == "selection":
+                        view.state.selected_ids = {2}
+                    elif fault == "handoff":
+                        view.state.handoff_id = "different-handoff"
+                    elif fault == "cancel":
+                        view.native.cancel()
+                    elif fault == "expire":
+                        view.native.run_deadline = -1
+                    elif fault == "stopped":
+                        view.state._stopping = True
+                    elif fault == "received":
+                        view.state._browser_received = True
+                    elif fault == "receipt":
+                        view.state.save_receipt_pending = True
+                    elif fault == "saved":
+                        view.state.saved_acknowledged = True
+                    elif fault == "failed":
+                        view.state.phase = "error"
+                    else:
+                        view.native.run = replace(view.native.run, run_id="77777777-7777-4777-8777-777777777777")
+                    tick(view)
+                    self.assertIsNone(view._browser_continue_request)
+                    view.reopen_account()
+                    browser.open.assert_not_called()
+
+    def test_current_authority_is_required_for_explicit_browser_recovery(self):
+        view = NativeAppTests().bound_view()
+        browser = Mock()
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            for authority in ("paused", "refreshing"):
+                view.native.authority = authority
+                self.assertFalse(view.can_open_browser_continuation)
+                view.reopen_account()
+            browser.open.assert_not_called()
+            view.native.authority = "current"
+            view.reopen_account()
+            browser.open.assert_called_once_with(view.native.continue_url)
+
+    def test_pending_receipt_save_button_never_opens_management_but_report_still_opens(self):
+        view = NativeAppTests().bound_view()
+        view.state.save_receipt_pending = True
+        browser = Mock()
+        with patch.dict(view.reopen_account.__globals__, webbrowser=browser):
+            view.reopen_account()
+            browser.open.assert_not_called()
+            # Separate management recovery remains available, preserving its label/scope.
+            view.open_account()
+            self.assertIn("phoneRunControl", browser.open.call_args.args[0])
+            browser.reset_mock()
+            view.native.record_saved(BINDING)
+            view.state.saved_acknowledged = True
+            view.reopen_account()
+            browser.open.assert_called_once_with(view.native.completion.url)
+            self.assertNotIn("continue=", browser.open.call_args.args[0])
 
 
 if __name__ == "__main__":

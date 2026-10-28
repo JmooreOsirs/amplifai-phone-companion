@@ -50,7 +50,7 @@ class InstallerAuthoringTests(unittest.TestCase):
         _, records = checked_records(self.package, self.receipt)
         tree = author_xml(records, self.package)
         ns = {"w": NS}
-        self.assertEqual(VERSION, "1.0.27")
+        self.assertEqual(VERSION, "1.0.28")
         self.assertEqual(tree.find(".//w:Product", ns).attrib["UpgradeCode"], UPGRADE_CODE)
         self.assertEqual(UPGRADE_CODE, "0C4BE78C-C5E1-4EA9-841B-4D8D93F45871")
         self.assertIsNotNone(tree.find(".//w:MajorUpgrade", ns))
@@ -84,6 +84,7 @@ class InstallerAuthoringTests(unittest.TestCase):
     def test_old_or_mismatched_candidate_identity_fails_even_with_exact_payload(self) -> None:
         original = json.loads(self.receipt.read_text())
         for changes in (
+            {"version": "2026.10.27-rc27", "build": "26102727", "installer_version": "1.0.27"},
             {"version": "2026.10.26-rc25", "build": "26102625", "installer_version": "1.0.25"},
             {"build": "26102625"}, {"installer_version": "1.0.25"},
             {"channel": "different-test-channel"}, {"version": None},
@@ -108,7 +109,7 @@ class InstallerAuthoringTests(unittest.TestCase):
             "installer_version": INSTALLER_VERSION, "channel": CHANNEL,
         })
         for malformed in (pins.replace(BUILD, "26102625"),
-                          pins + f"BUILD = {BUILD!r}\n", pins + "BUILD = str(26102727)\n",
+                          pins + f"BUILD = {BUILD!r}\n", pins + f"BUILD = str({BUILD})\n",
                           pins + f"BUILD: str = {BUILD!r}\n", pins + "BUILD += '0'\n",
                           pins + f"BUILD, OTHER = ({BUILD!r}, 'unused')\n",
                           pins.replace("VERSION =", "VERSION = OTHER =", 1)):

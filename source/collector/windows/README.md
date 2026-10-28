@@ -1,5 +1,9 @@
 # Windows companion source candidate
 
+## October 28 Save continuity work
+
+The [Windows/iPhone Save continuity handoff](../../../docs/handoffs/2026-10-28-windows-save-continuity/HANDOFF.md) records the merged RC27 base, preserved signed-update pins, continuation timing defect, page-recovery policy, stable post-Save report state and verified RC28 artifact. RC28 package, frozen protocol, RC27-to-RC28 upgrade and guided source/frozen UI checks pass at source4caa24f. Jeff merged the website fix; a fresh physical test remains separate. Published RC27 package/update feeds are unchanged.
+
 ## October 27 RC27 Unicode correction
 
 The [Windows iPhone failure and UTF-8 handoff](../../../docs/handoffs/2026-10-27-windows-iphone-unicode/HANDOFF.md) records the RC25/RC26 failure evidence, synthetic reproduction, protocol correction, exact qualification commands, release identities and remaining acceptance gates. RC27 source and frozen Windows protocol/package checks pass, with a distinct verified candidate artifact; full guided source/frozen UI qualification and exact live RC27 website admission also pass. Physical phone collection and confirmed account Save remain manual acceptance gates. This dated Windows RC27 is separate from the older native-integration document's RC27 label.

@@ -247,7 +247,7 @@ jobs:
             python source/collector/windows/tests/visible_desktop.py --restore $mode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - name: Freeze rc27 wrapper and matching shared helper
+      - name: Freeze rc28 wrapper and matching shared helper
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
@@ -276,7 +276,7 @@ jobs:
           python source/collector/windows/tests/frozen_protocol_fixture.py --source source --helper $helper --output $output
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Content (Join-Path $output 'frozen-protocol-receipt.json')
-      - name: Build rc27 per-user MSI with unchanged UpgradeCode
+      - name: Build rc28 per-user MSI with unchanged UpgradeCode
         shell: pwsh
         run: |
           $wixBin = 'C:\Program Files (x86)\WiX Toolset v3.14\bin'
@@ -288,25 +288,16 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
           python source/script/build_windows_msi.py --package (Join-Path $candidate 'wrapper-dist\AmplifaiPhone') --receipt (Join-Path $candidate 'candidate-receipt.json') --output $installer --candle $candle --light $light
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Retrieve exact prior RC26 candidate for runner upgrade qualification
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: windows-rc26-qualification
-          run-id: 40511748092
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/AmplifaiRC26Baseline
-      - name: Qualify released rc25 through installed rc26 to rc27 upgrade under runner user
+      - name: Qualify released RC27 to RC28 upgrade under runner user
         shell: pwsh
         run: |
           # These unattended commands qualify MSI replacement on the disposable runner only.
           # The app invokes only normal msiexec /i UI after explicit local approval.
           $installer = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneInstaller'
-          $baseline = Join-Path $installer 'AmplifaiPhone-rc25-unsigned.msi'
-          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.26-rc25-unsigned-test/AmplifaiPhone-rc25-unsigned.msi' -OutFile $baseline -TimeoutSec 180
-          if ((Get-Item $baseline).Length -ne 43776886 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d') { throw 'Released rc25 MSI bytes differ from fixed baseline' }
-          $rc26 = Join-Path $env:RUNNER_TEMP 'AmplifaiRC26Baseline\AmplifaiPhoneInstaller\AmplifaiPhone-rc26-unsigned.msi'
-          if ((Get-Item $rc26).Length -ne 43776886 -or (Get-FileHash $rc26 -Algorithm SHA256).Hash.ToLowerInvariant() -ne '22bd2529e316ad5e56f1fe26faab6fe078dc0a5707dd30e62467edd8afedaf91') { throw 'Prior qualified rc26 MSI differs from exact artifact' }
-          $msi = Join-Path $installer 'AmplifaiPhone-rc27-unsigned.msi'
+          $baseline = Join-Path $installer 'AmplifaiPhone-rc27-unsigned.msi'
+          Invoke-WebRequest -Uri 'https://github.com/JmooreOsirs/amplifai-phone-companion/releases/download/windows-2026.10.27-rc27-unsigned-test/AmplifaiPhone-rc27-unsigned.msi' -OutFile $baseline -TimeoutSec 180
+          if ((Get-Item $baseline).Length -ne 43780982 -or (Get-FileHash $baseline -Algorithm SHA256).Hash.ToLowerInvariant() -ne '3a142a311a968664eb928dbca936fa615c6dde69b33391bf0b38bca1101bd4e3') { throw 'Released RC27 MSI bytes differ from fixed baseline' }
+          $msi = Join-Path $installer 'AmplifaiPhone-rc28-unsigned.msi'
           $candidate = Join-Path $env:RUNNER_TEMP 'AmplifaiPhoneCandidate'
           $installed = Join-Path $env:LOCALAPPDATA 'AMPLIFaiPhone'
           $dataRoot = Join-Path $env:LOCALAPPDATA 'AMPLIFai Phone Candidate'
@@ -317,7 +308,7 @@ jobs:
           [IO.File]::WriteAllText($sentinel, 'runner-only update data preservation')
           $sentinelHash = (Get-FileHash $sentinel -Algorithm SHA256).Hash
           try {
-            foreach ($package in @($baseline, $rc26, $msi)) {
+            foreach ($package in @($baseline, $msi)) {
               $log = Join-Path $installer ((Split-Path $package -Leaf) + '.install.log')
               $operation = Start-Process -FilePath msiexec.exe -ArgumentList "/i `"$package`" /qn /norestart /L*V `"$log`"" -Wait -PassThru
               if ($operation.ExitCode -ne 0) { throw "Runner MSI installation failed: $($operation.ExitCode)" }
@@ -325,7 +316,7 @@ jobs:
             }
             python source/script/verify_windows_install.py --install $installed --receipt (Join-Path $candidate 'candidate-receipt.json')
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            $receipt = [ordered]@{status='runner-user-rc25-to-rc26-to-rc27-in-place-upgrade'; rc26InstallerSha256='22bd2529e316ad5e56f1fe26faab6fe078dc0a5707dd30e62467edd8afedaf91'; rc26ArtifactId=12738323362; oldInstallerSha256='69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d'; version='1.0.27'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
+            $receipt = [ordered]@{status='runner-user-rc27-to-rc28-in-place-upgrade'; oldInstallerSha256='3a142a311a968664eb928dbca936fa615c6dde69b33391bf0b38bca1101bd4e3'; baselineVersion='1.0.27'; version='1.0.28'; candidateVersion='2026.10.28-rc28'; candidateBuild='26102828'; upgradeCode='0C4BE78C-C5E1-4EA9-841B-4D8D93F45871'; sessionSentinelPreserved=$true; normalConsumerUiProved=$false; physicalPhoneOrAccountProved=$false}
             $receipt | ConvertTo-Json | Set-Content (Join-Path $installer 'upgrade-receipt.json') -Encoding utf8
             Get-Content (Join-Path $installer 'upgrade-receipt.json')
           } finally {
@@ -350,7 +341,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: windows-rc27-qualification
+          name: windows-rc28-qualification
           retention-days: 7
           if-no-files-found: warn
           path: |
@@ -367,7 +358,7 @@ jobs:
             ${{ runner.temp }}/AmplifaiProtocolQualification/protocol-manifest.json
             ${{ runner.temp }}/AmplifaiProtocolQualification/frozen-protocol-receipt.json
             ${{ runner.temp }}/AmplifaiProtocolQualification/freeze.log
-            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc27-unsigned.msi
+            ${{ runner.temp }}/AmplifaiPhoneInstaller/AmplifaiPhone-rc28-unsigned.msi
             ${{ runner.temp }}/AmplifaiPhoneInstaller/msi-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/upgrade-receipt.json
             ${{ runner.temp }}/AmplifaiPhoneInstaller/*.log
