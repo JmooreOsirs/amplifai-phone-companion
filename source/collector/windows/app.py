@@ -9,6 +9,7 @@ import threading
 import time
 import tkinter as tk
 import webbrowser
+from webbrowser import Error as BrowserError
 from datetime import timezone
 from pathlib import Path
 from typing import NamedTuple
@@ -173,6 +174,12 @@ class PendingContinue(NamedTuple):
     acknowledged: bool = False
 
 
+class PendingBrowserContinue(NamedTuple):
+    run_id: str
+    review_id: str
+    selection: tuple[int, ...]
+
+
 class PhoneWindow:
     def __init__(self, window: tk.Tk, helper: Path, logo: Path, *, delivery=None) -> None:
         self.window, self.state = window, Session()
@@ -183,6 +190,11 @@ class PhoneWindow:
         self.delivery = delivery
         self._native_authority_sent = None
         self._pending_continue = None
+        self._browser_continue_request = None
+        self._browser_continue_context = None
+        self._browser_continue_opened = None
+        self._browser_continue_opening = False
+        self._browser_recovery_deadline = 0.0
         self.native_checked = tk.BooleanVar(value=False)
         self.native_scope = tk.StringVar(value="Waiting for the authenticated setup destination.")
         self.native_status = tk.StringVar()
@@ -259,10 +271,29 @@ class PhoneWindow:
 
     @property
     def can_return_to_browser(self):
+        context = getattr(self, "_browser_continue_context", None)
         return (self.native_active and self.native.continue_url is not None
+                and (context is None or context == PendingBrowserContinue(
+                    self.native.run.run_id, self.state._pending_review_id, self.state.selection))
+                and self.native.authority == "current" and self.native.pending is None
                 and self.state.handoff_id == self.native.handoff_id
+                and self.native.continued_selection == self.state.selection
+                and self.state.selection == tuple(sorted(self.state.selected_ids))
+                and self.state.running and self.state.reviewed and self.state.phase == "reviewing"
                 and not self.state._browser_received and not self.state.save_receipt_pending
-                and not self.state.saved_acknowledged and not self.state._stopping)
+                and not self.state.saved_acknowledged and not self.state._stopping and not self.state._finishing)
+
+    @property
+    def browser_continue_key(self):
+        if self.can_return_to_browser:
+            return (self.native.run.run_id, self.native.handoff_id, self.native.continued_selection)
+        return None
+
+    @property
+    def can_open_browser_continuation(self):
+        key = self.browser_continue_key
+        return (key is not None and key != getattr(self, "_browser_continue_opened", None)
+                and not getattr(self, "_browser_continue_opening", False))
 
     def open_account(self):
         url = self.native.account_url if self.native_active else WEBSITE_ORIGIN + "/phone/account?week=phone"
@@ -274,21 +305,45 @@ class PhoneWindow:
             self.native.message = "The browser did not open. Return to your original account tab."
             self.refresh()
 
-    def continue_in_browser(self):
-        if not self.can_return_to_browser:
-            return
+    def continue_in_browser(self, *, recovery=False):
+        if (not self.can_return_to_browser or getattr(self, "_browser_continue_opening", False)
+                or (not recovery and not self.can_open_browser_continuation)):
+            return False
+        key, url = self.browser_continue_key, self.native.continue_url
+        # Consume the automatic request before opening: browser launch can reenter
+        # the UI, and repeated clicks/callbacks must not create parallel Saves.
+        self._browser_continue_request = None
+        self._browser_continue_opening = True
         try:
-            opened = webbrowser.open(self.native.continue_url)
-        except OSError:
+            opened = bool(webbrowser.open(url))
+        except (OSError, BrowserError):
             opened = False
-        self.native.message = ("Return to your account tab to finish saving. Browser recovery may open another tab or profile. Keep this review open until the save receipt arrives."
-            if opened else "The browser did not open. Return to your original account tab to finish saving. Keep this review open until the save receipt arrives.")
+        finally:
+            self._browser_continue_opening = False
+        if opened:
+            self._browser_continue_opened = key
+        self.native.message = ("Your account tab was opened to finish saving this reviewed selection. Keep this review open until the save receipt arrives."
+            if opened else "The browser did not open. Use the account-opening action to retry, or return to your original account tab. Keep this review open until the save receipt arrives.")
         self.refresh()
+        return opened
+
+    def recover_browser_continuation(self):
+        # OS acceptance is not a browser receipt: a different profile or a closed
+        # tab still needs explicit recovery. This never opens management controls.
+        if (not self.can_return_to_browser or getattr(self, "_browser_continue_opening", False)
+                or self.browser_continue_key != getattr(self, "_browser_continue_opened", None)
+                or self.native.monotonic() < getattr(self, "_browser_recovery_deadline", 0.0)):
+            return False
+        self._browser_recovery_deadline = self.native.monotonic() + 1.0
+        return self.continue_in_browser(recovery=True)
 
     def reopen_account(self):
-        if self.can_return_to_browser:
-            self.continue_in_browser()
-        else:
+        if self.native_active:
+            if self.native.completion is not None:
+                self.open_account()
+            else:
+                self.continue_in_browser()
+        else:  # Compatible local pairing has no native run-management route.
             self.open_account()
 
     def receive_setup(self, uri):
@@ -307,6 +362,8 @@ class PhoneWindow:
                     or not ((self.state.can_update and not self.native_busy) or inspecting)):
                 return "busy"
             self.native = NativeRun(ClientIdentity(VERSION, BUILD))
+            self._browser_continue_request = self._browser_continue_context = self._browser_continue_opened = None
+            self._browser_recovery_deadline = 0.0
             self.state.approve(False)
             self.native_checked.set(False)
             self._native_authority_sent = None
@@ -383,6 +440,7 @@ class PhoneWindow:
             self.stop()
             return
         self._pending_continue = None
+        self._browser_continue_request = None
         self._native_backup_check = None
         self.native.cancel()
         self.native_checked.set(False)
@@ -429,7 +487,7 @@ class PhoneWindow:
                 self.native.cancel()
         elif result == "bound":
             self.native_destination()
-            self.native.message = "Return to your original account tab to finish saving. If it is missing, choose Continue in browser. Keep this review open until the save receipt arrives."
+            self.native.message = "Your reviewed selection is ready for the approved account. Continue in your account tab or choose Open account. Keep this review open until the save receipt arrives."
         elif result == "destination_verified":
             if (self.native.current and self.state.can_decide_destination
                     and self.native.handoff_id == self.state.handoff_id
@@ -450,6 +508,7 @@ class PhoneWindow:
             self.handle_native_result(self.native.complete(operation, outcome))
         self.native.timeout()
         self.drain_pending_continue()
+        self.drain_browser_continue()
         if (self.native.current and self.native.phase in ("collecting", "bound")
                 and self.native.authority == "current" and self.native.pending is None
                 and self.native_worker.idle and self.native.monotonic() >= self.native.next_refresh):
@@ -679,7 +738,9 @@ class PhoneWindow:
             elif self.native.phase == "bound" and self.native.authority == "paused":
                 status = "Confirmation paused. Return to the approved account tab or open Details & recovery."
             elif self.native.phase == "bound" and not self.state._browser_received:
-                status = "Return to your original account tab. If it is missing, choose Continue in browser. Keep this review open."
+                status = ("Continue in the opened account tab. If it is missing, choose Account tab missing? Open again. Keep this review open."
+                          if self.browser_continue_key == getattr(self, "_browser_continue_opened", None) and self.can_return_to_browser else
+                          "Your reviewed selection is ready. Choose Open account or continue in your account tab. Keep this review open.")
         if self.native_active and getattr(self, "compact_layout", False) and self.state._capture_received:
             if self.state.selecting_all:
                 status = "Checking contacts. Your choices are kept."
@@ -854,6 +915,7 @@ class PhoneWindow:
 
     def cooperative_failure(self, *, clear_password: bool = True) -> None:
         self._pending_continue = None
+        self._browser_continue_request = None
         if self.native_active and self.state.mode != BACKUP_CHECK_MODE:
             self.native.fail()
         self.state.cooperative_failure()
@@ -1088,7 +1150,7 @@ class PhoneWindow:
                 or self.native.pending is not None or not self.native_worker.idle):
             return
         try:
-            operation = self.native.continue_review(pending.selection)
+            operation = self.request_native_continue(pending.selection)
             self.dispatch_native(operation)
             # NativeRun now owns the same immutable selection, including any
             # uncertain submission/reply and its explicit identical retry.
@@ -1096,6 +1158,38 @@ class PhoneWindow:
         except SetupProtocolError as error:
             self.native.message = str(error)
             self._pending_continue = None
+
+    def request_native_continue(self, selection):
+        request = PendingBrowserContinue(self.native.run.run_id, self.state._pending_review_id, selection)
+        existing = getattr(self, "_browser_continue_request", None)
+        if existing is not None and existing != request:
+            raise SetupProtocolError("The pending browser continuation belongs to another review")
+        operation = self.native.continue_review(selection)
+        self._browser_continue_request = request
+        self._browser_continue_context = request
+        return operation
+
+    def drain_browser_continue(self):
+        request = getattr(self, "_browser_continue_request", None)
+        if request is None:
+            return
+        if (not self.native_active or not self.native.current or self.native.run.run_id != request.run_id
+                or self.state._pending_review_id != request.review_id
+                or self.state.selection != request.selection
+                or tuple(sorted(self.state.selected_ids)) != request.selection
+                or self.native.continued_selection != request.selection
+                or (self.native.handoff_id and self.state.handoff_id != self.native.handoff_id)
+                or not self.state.running or self.state._stopping or self.state._finishing
+                or self.state.phase in ("error", "cancelling")
+                or self.state.destination_intent_id or self.state._browser_received
+                or self.state.save_receipt_pending or self.state.saved_acknowledged):
+            self._browser_continue_request = None
+            return
+        # Uncertain authority/bind replies retain the exact request. Existing
+        # explicit confirmation retry must succeed before this may open a tab.
+        if self.can_return_to_browser:
+            self._browser_continue_request = None
+            self.continue_in_browser()
 
     def change_selection(self) -> None:
         if not self.state.can_change_selection or self.native_selection_locked:
@@ -1114,7 +1208,7 @@ class PhoneWindow:
             elif self.can_return_to_browser:
                 self.continue_in_browser()
             elif self.state.can_pair:
-                self.native_action(lambda: self.native.continue_review(tuple(sorted(self.state.selected_ids))))
+                self.native_action(lambda: self.request_native_continue(tuple(sorted(self.state.selected_ids))))
             return
         replacing = " A successful new pairing replaces the current browser pairing." if self.state.handoff_id else ""
         if messagebox.askyesno("Connect the signed-in account?", "Create an exact-origin local pairing for " + WEBSITE_ORIGIN + "? Choose Connect on the signed-in account page, then confirm its server-verified destination here. Only the reviewed preview transfers. Each source requires separate account Save approval." + replacing):
@@ -1133,6 +1227,7 @@ class PhoneWindow:
             if not messagebox.askyesno("Discard local phone review?", "Request stop discards the local reviewed import after the helper exits. Account parts may already be saved, while their final browser receipt may still be pending. Keep this window open and finish in the browser if you want to complete that save. Stop anyway?"):
                 return
         self._pending_continue = None
+        self._browser_continue_request = None
         self._native_backup_check = None
         if self.native_active:
             self.native.cancel()
@@ -1226,9 +1321,10 @@ class PhoneWindow:
                                     if state.destination_intent_id else "Connect from your signed-in account after reviewing contacts.")
         if self.native_active:
             can_continue = (state.can_pair and self.native.current and self.native.phase in ("collecting", "continue_uncertain"))
-            return_to_browser = self.can_return_to_browser
+            return_to_browser = self.can_open_browser_continuation
+            browser_opened = self.can_return_to_browser and not return_to_browser
             ready = self.native.pending is None and self.native_worker.idle
-            self.pair_button.configure(text="Open results" if self.native.completion else "Continue in browser" if return_to_browser else "Continue",
+            self.pair_button.configure(text="Open results" if self.native.completion else "Account tab opened" if browser_opened else "Continue in browser" if return_to_browser else "Continue",
                 state="normal" if self.native.completion or ready and (can_continue or return_to_browser) else "disabled")
             if self.native_selection_locked:
                 for widget in (self.contacts, self.review_button, self.change_selection_button, self.search_entry,

@@ -60,7 +60,7 @@ def journey(state, native):
             return Journey("save", 3, "Waiting for account save", "Your account received the preview. Keep both windows open until the matching account-save acknowledgment arrives.")
         if native is not None and native.continued_selection is not None:
             if native.phase == "bound":
-                return Journey("save", 3, "Continue in your account", "Your reviewed selection is connected to the approved account. Return to the original account tab to finish.")
+                return Journey("save", 3, "Continue in your account", "Your reviewed selection is connected to the approved account. Saving continues in your account tab; keep both windows open.")
             return Journey("save", 3, "Preparing your reviewed selection", "Confirming the selected contacts and account connection. Account save is not confirmed yet.")
         if state.handoff_id:
             return Journey("save", 3, "Connect your account", "Your local review is ready. Connect the signed-in account, confirm its destination and review the preview before saving. A temporary code is available in Details & recovery.")

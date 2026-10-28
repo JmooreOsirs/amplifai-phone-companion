@@ -166,7 +166,7 @@ def scenarios():
     state = review_state()
     run.complete(run.continue_review(tuple(sorted(state.selected_ids))), Outcome("uncertain"))
     yield "continue-uncertain", run, state
-    for name in ("bind-uncertain", "bound", "preview-received", "pending-receipt", "saved"):
+    for name in ("bind-uncertain", "bound", "browser-opened", "preview-received", "pending-receipt", "saved"):
         run, _ = started()
         state = selected_review()
         accept(run, run.continue_review(tuple(sorted(state.selected_ids))))

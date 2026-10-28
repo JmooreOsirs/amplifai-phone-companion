@@ -153,8 +153,10 @@ def build(view, logo):
     label(save.content, variable=view.workspace_coverage)
     label(save.content, variable=view.workspace_status)
     view.save_status_label = label(save.content, variable=view.native_status)
-    view.save_account_button = ttk.Button(save.content, text="Reopen account", style="Primary.TButton", command=view.reopen_account)
+    view.save_account_button = ttk.Button(save.content, text="Open account", style="Primary.TButton", command=view.reopen_account)
     view.save_account_button.pack(anchor="w", pady=(space(12), space(12)))
+    view.save_reopen_button = ttk.Button(save.content, text="Account tab missing? Open again", style="Quiet.TButton",
+                                        command=view.recover_browser_continuation)
     view.save_retry_button = ttk.Button(save.content, text="Retry confirmation", command=lambda: view.native_action(view.native.retry))
     view.save_retry_button.pack(anchor="w")
     view.save_detail = label(save.content)
@@ -414,7 +416,18 @@ def refresh(view, current):
     safe_return = (current.action == "return" and view.native_active and not view.state.running
                    and view.state.inspected and not view.state.needs_inspection and not view.state.residue)
     view.attention_account.pack(anchor="w", pady=(space(12), 0)) if safe_return else view.attention_account.pack_forget()
-    view.save_account_button.configure(text="Open report" if stage == "complete" else "Reopen account")
+    can_continue = view.can_open_browser_continuation if view.native_active else True
+    opened = view.can_return_to_browser and not can_continue
+    awaiting_save = view.state._browser_received or view.state.save_receipt_pending
+    view.save_account_button.configure(
+        text="Open report" if stage == "complete" else "Saving in your account" if awaiting_save else
+             "Account tab opened" if opened else "Open account" if can_continue else "Preparing account…",
+        state="normal" if stage == "complete" or can_continue else "disabled")
+    if opened and not awaiting_save and stage != "complete":
+        view.save_reopen_button.configure(state="disabled" if view.native.monotonic() < getattr(view, "_browser_recovery_deadline", 0.0) else "normal")
+        view.save_reopen_button.pack(anchor="w", pady=(0, space(12)), before=view.save_detail)
+    else:
+        view.save_reopen_button.pack_forget()
     retry = view.native_active and view.native.pending is None and view.native_worker.idle and (view.native.phase.endswith("_uncertain") or view.native.authority == "paused" and view.native.current)
     view.save_retry_button.pack(anchor="w") if retry else view.save_retry_button.pack_forget()
     view.recovery_retry_button.pack(anchor="w", pady=(0, space(12)), before=view.diagnostic_details_button) if retry else view.recovery_retry_button.pack_forget()
