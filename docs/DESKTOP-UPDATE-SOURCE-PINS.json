@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.27-rc27",
-      "build": "26102727",
-      "installerVersion": "1.0.27"
+      "version": "2026.10.28-rc28",
+      "build": "26102828",
+      "installerVersion": "1.0.28"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
@@ -31,5 +31,5 @@
     "cherryPick": "530ab9f2859a4e67e7d4a4b8803361d4cd4f0ffc"
   },
   "diagnosticContract": "docs/SOURCE-DIAGNOSTIC-CONTRACT-v1.json",
-  "windowsReconciliation": "RC27 exact package/source 71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23 fixes strict UTF-8 helper input/output and retains bounded failure diagnostics and unknown call direction. Windows package run 40543732081 and source/frozen GUI run 40543737212 succeeded on that source; 204 paired GUI stages and 27 proof files bind to the MSI. Later 2521524 changes only handoff/README documentation. The exact corresponding-source offer retains 174 dependency archives, 173 native references and frozen Unicode protocol custody. The release qualification commit pins the accepted MSI, artifact and existing-key signed manifest for a normal released-RC25-to-RC27 handoff. Final qualification, protected merge, public body readback and website pointer/feed activation require their exact receipts. Published RC25 remains rollback. This release does not establish the historical private SMS exception or a new physical device/account Save result."
+  "windowsReconciliation": "RC27 exact package/source 71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23 fixes strict UTF-8 helper input/output and retains bounded failure diagnostics and unknown call direction. Windows package run 40543732081 and source/frozen GUI run 40543737212 succeeded on that source; 204 paired GUI stages and 27 proof files bind to the MSI. Later 2521524 changes only handoff/README documentation. The exact corresponding-source offer retains 174 dependency archives, 173 native references and frozen Unicode protocol custody. The release qualification commit pins the accepted MSI, artifact and existing-key signed manifest for a normal released-RC25-to-RC27 handoff. Final qualification, protected merge, public body readback and website pointer/feed activation require their exact receipts. Published RC25 remains rollback. This release does not establish the historical private SMS exception or a new physical device/account Save result. RC28 (2026-10-28, Jeff: the production Windows app must be RC28): exact source 4caa24fdeb9a88d440eb9dc0e7b3b899e588beae, qualification merge 871e344 (PR #50), package/frozen/upgrade 40720333063, guided UI 40720338664, release controls 40720204427; published RC27 MSI upgrades to RC28 in place with the session preserved. Same RC20 Windows baseline."
 }
