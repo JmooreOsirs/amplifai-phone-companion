@@ -14,6 +14,12 @@ from test_native_setup import CLIENT, LINK_TEXT
 from test_session import inspected
 from test_windows_source_diagnostics import diagnostic
 
+CRYPTO_UNAVAILABLE_SCENARIOS = {
+    "contacts-calls-crypto": ("calls",),
+    "contacts-messages-crypto": ("messages",),
+    "contacts-both-crypto": ("calls", "messages"),
+}
+
 
 def pending():
     clock = Clock()
@@ -159,6 +165,18 @@ def scenarios():
         state = captured(empty=name == "contacts-empty", partial=name == "contacts-partial")
         if name == "contacts-select-all":
             state.select_all_contacts()
+        yield name, run, state
+    for name, missing in CRYPTO_UNAVAILABLE_SCENARIOS.items():
+        run, _ = started()
+        state = collecting()
+        state.handle({"kind": "capture", "contacts": [{"id": 1, "name": "Fictional contact",
+                      "phoneCount": 1, "phoneEnds": ["0101"]}], "query": "", "cursor": 0,
+                      "nextCursor": None, "totalContacts": 1,
+                      "availableCalls": 0 if "calls" in missing else 1,
+                      "availableMessages": 0 if "messages" in missing else 1,
+                      "missing": list(missing), "backupEncrypted": True,
+                      "unavailableReasons": {source: "selected_payload_crypto" for source in missing}})
+        state.update_visible_selection([1])
         yield name, run, state
     run, _ = started()
     yield "reviewed-contacts", run, review_state()

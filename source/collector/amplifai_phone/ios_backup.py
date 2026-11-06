@@ -359,15 +359,21 @@ def parse_selected_backup(
             Keybag.from_manifest(manifest, password) if manifest.is_encrypted else None
         )
         manifest_path = extracted / "manifest.sqlite3"
-        copy_backup_file(
-            backup_path / "Manifest.db",
-            manifest_path,
-            keybag=keybag,
-            encryption_key=manifest.manifest_key if manifest.is_encrypted else b"",
-            workspace=workspace,
-            bound_callback=bound_callback,
-            progress_callback=processed_bytes,
-        )
+        try:
+            copy_backup_file(
+                backup_path / "Manifest.db",
+                manifest_path,
+                keybag=keybag,
+                encryption_key=manifest.manifest_key if manifest.is_encrypted else b"",
+                workspace=workspace,
+                bound_callback=bound_callback,
+                progress_callback=processed_bytes,
+            )
+        except SelectedPayloadIntegrityError:
+            # The manifest is required control data, not an optional source.
+            # Its failure must abort safely without blaming the password or
+            # returning a partial capture based on an untrusted manifest.
+            raise BackupControlInvalid("Backup manifest could not be decrypted safely") from None
         manifest_db = ManifestDbSqlite3(manifest_path)
         try:
             backup = Backup(

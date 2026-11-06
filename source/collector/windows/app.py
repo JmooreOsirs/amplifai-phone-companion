@@ -746,6 +746,10 @@ class PhoneWindow:
                 status = "Checking contacts. Your choices are kept."
             elif self.state.total_contacts == 0:
                 status = "No contacts are available in this collection."
+        if self.state._capture_received and self.state.missing:
+            unavailable = " · ".join(f"{source.title()} unavailable" for source in ("calls", "messages")
+                                     if source in self.state.missing)
+            status = f"{unavailable}. {status}"
         self.workspace_coverage.set(coverage)
         self.workspace_status.set(status)
         if hasattr(self, "contact_selected"):
