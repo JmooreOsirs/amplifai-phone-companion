@@ -15,6 +15,8 @@ from unittest.mock import Mock
 from amplifai_phone.agent import run_connect
 from amplifai_phone.ios_backup import parse_selected_backup
 from session import ProtocolError
+from native_run import Outcome
+from native_setup_fixture import review_state
 from synthetic_encrypted_backup_fixture import SYNTHETIC_PASSWORD, fixture
 from test_gui_guards import source_window
 from test_native_app import native_window
@@ -81,12 +83,18 @@ class DecryptionReviewUiTests(unittest.TestCase):
                     view = contact_view(state, compact=compact)
                     type(view).refresh_workspace(view)
                     visible = view.workspace_status.set.call_args.args[0]
+                    expected_compact = " and ".join(source.title() if index == 0 else source
+                                                    for index, source in enumerate(missing)) + " unavailable"
+                    if compact:
+                        self.assertEqual(visible, expected_compact)
                     for source in missing:
-                        self.assertIn(source.title() + " unavailable", visible)
+                        if not compact:
+                            self.assertIn(source.title() + " unavailable", visible)
                         self.assertNotIn(source.title() + ": 0 readable", visible)
                         self.assertIn(source.title() + " unavailable: encrypted source could not be validated",
                                       state.coverage_status)
-                    self.assertIn("Continue", visible)
+                    if not compact:
+                        self.assertIn("Continue", visible)
                 self.assertNotIn(SYNTHETIC_PASSWORD, repr(vars(state)))
 
     def test_required_crypto_failure_has_no_review_or_automatic_retry(self):
@@ -137,9 +145,35 @@ class DecryptionReviewUiTests(unittest.TestCase):
         self.assertNotIn("0 matching", state.status)
         type(view).refresh_workspace(view)
         visible = view.workspace_status.set.call_args.args[0]
+        self.assertEqual(visible, "Calls and messages unavailable")
+        self.assertFalse(state.saved_acknowledged)
+
+    def test_large_review_keeps_only_the_bounded_warning_in_compact_continue_copy(self):
+        for missing, expected in ((["calls"], "Calls unavailable"),
+                                  (["messages"], "Messages unavailable"),
+                                  (["calls", "messages"], "Calls and messages unavailable")):
+            with self.subTest(missing=missing):
+                state = review_state(missing=missing, unavailable_reason="selected_payload_crypto")
+                self.assertEqual(state.total_contacts, 1_205)
+                self.assertEqual(len(state.selected_ids), 1_205)
+                self.assertTrue(state.reviewed)
+                view = contact_view(state, compact=True)
+                type(view).refresh_workspace(view)
+                self.assertEqual(view.workspace_status.set.call_args.args[0], expected)
+                view.pair_button.grid.assert_called_once()
+                self.assertFalse(state.saved_acknowledged)
+
+    def test_compact_warning_does_not_replace_guarded_confirmation_recovery(self):
+        state = review_state(missing=["calls", "messages"], unavailable_reason="selected_payload_crypto")
+        view = contact_view(state, compact=True)
+        operation = view.native.continue_review(tuple(sorted(state.selected_ids)))
+        view.native.complete(operation, Outcome("uncertain"))
+        type(view).refresh_workspace(view)
+        visible = view.workspace_status.set.call_args.args[0]
         self.assertIn("Calls unavailable", visible)
         self.assertIn("Messages unavailable", visible)
-        self.assertFalse(state.saved_acknowledged)
+        self.assertIn("Confirmation unavailable", visible)
+        self.assertIn("Details & recovery", visible)
 
     def test_clean_inspection_and_new_approval_retry_has_only_new_coverage(self):
         state = source_window().state

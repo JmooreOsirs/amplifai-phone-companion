@@ -1,8 +1,10 @@
 # Windows encrypted-backup decryption qualification candidate
 
-Status: local source candidate. No Windows replacement MSI has been built or
-qualified, and no release, feed, admission, website, account or customer PC was
-changed. This does not establish the cause of the reported RC28 failure.
+Status: unreleased source candidate under Windows qualification. The first
+revision built and passed frozen decryption/MSI upgrade tests, but the guided UI
+gate found a compact-layout regression. This revision corrects it and requires
+matching Windows requalification. No release, feed, admission, website, account
+or customer PC was changed. This does not establish the reported RC28 cause.
 
 ## Source and preservation
 
@@ -49,7 +51,8 @@ or activated by these local edits.
 ## Local evidence (Mac, CPython 3.12.14)
 
 - Focused repair suite: **143/143 passed**.
-- Final workflow source aggregate: **546 run; 535 passed, 11 platform skips**.
+- Final workflow source aggregate after compact correction: **548 run;
+  537 passed, 11 platform skips**.
   It includes the existing selected-file, native-flow, session, updater, MSI and
   bridge checks plus the new decryption, visible-coverage and fixture checks.
 - Release controls: **42/42 passed** with warnings treated as errors.
@@ -59,7 +62,7 @@ or activated by these local edits.
   wrong-password-to-valid retry. Five representative unmodified RC28 negative
   controls fail these assertions. These are source executions, not frozen proof.
 - New visible-coverage test first exposed seven failing optional-source subcases.
-  The final UI/model focus passed **151/151**. Actual Darwin Tk source geometry
+  The expanded UI/model focus passed **153/153**. Actual Darwin Tk source geometry
   passed **12 cases**: Calls, Messages and both unavailable across four viewport/
   scaling combinations. No customer window, phone or account was used.
 - Independent review found no material blocker; independent final harness/UI
@@ -83,7 +86,33 @@ Local loopback tests require permission to bind localhost. The Mac runtime's cor
 crypto packages match the repair environment, but this is not the complete
 hash-locked Windows runtime or Windows DACL qualification.
 
-## Pending Windows qualification
+## Windows execution and compact-layout correction
+
+The explicitly authorized isolated push and artifact-only dispatches succeeded.
+First revision `5c8f6a5faab13c8dcfee28431749c2e014ef540e`:
+
+- Build run42299666945 passed:546 Windows source tests (540passed,6expected
+  platform skips), both large Messages gates, ordinary helper/wrapper freeze,
+  frozen Unicode/worker checks,31real-decryption frozen cases and RC28-to-RC29
+  MSI upgrade/install/uninstall/session preservation. All12checked production
+  modules matched source, ordinary packaged helper and frozen fixture.
+- Its MSI is43785078bytes, SHA256
+  `81be0d9516f500f3859a41256b473add8721f1e584b3181c51452af9565239f6`.
+  This earlier artifact is not qualification of subsequent UI edits.
+- Guided run42299693429 failed source geometry at `reviewed-contacts`,680x680,
+  Tk scaling1.75. The unavailable prefix plus generic Continue status wrapped
+  to two lines; combined with the large selection header it left73pixels for
+  cards, below the existing three-line readability requirement. The three new
+  crypto capture cases had passed but used a small selection count.
+
+The correction shortens only generic compact continuation copy while keeping
+explicit unavailable coverage. Recovery, binding and saving messages retain their
+meaning. Three reviewed-crypto scenarios now use the existing1,205-selected
+fixture, exercising the large header plus partial warning. Existing geometry and
+readability requirements remain unchanged. The new revision must rerun both
+Windows build and full source/frozen guided gates before a readiness conclusion.
+
+## Windows requalification
 
 No local Windows VM or connected Windows desktop was established. Use the
 existing workflow `.github/workflows/windows-rc18-updates.yml`, registered as
@@ -91,7 +120,7 @@ workflow ID384813334. It is active; current default `main` no longer carries tha
 file, so dispatch eligibility on the pushed candidate ref must be confirmed by
 the service when the authorized dispatch is attempted.
 
-The precise pending remote operations are:
+The requalification operations are:
 
 ```sh
 git push origin HEAD:refs/heads/codex/rc28-decryption-qualification-nov06
@@ -99,8 +128,9 @@ gh workflow run 384813334 --repo JmooreOsirs/amplifai-phone-companion --ref code
 gh workflow run 384813334 --repo JmooreOsirs/amplifai-phone-companion --ref codex/rc28-decryption-qualification-nov06 -f phase=guided-ui
 ```
 
-These operations remain pending authorization; none was attempted or denied.
-Do not merge into main merely to repair a dispatch failure without approval.
+The user authorized these isolated test actions; no operation was denied.
+The earlier dispatches worked despite the default-branch file absence. Do not
+merge into main merely to repair a later dispatch failure without approval.
 The new branch does not match the old automatic draft-release branch triggers.
 Use only `build` and `guided-ui`: `handoff` intentionally remains pinned to RC27.
 

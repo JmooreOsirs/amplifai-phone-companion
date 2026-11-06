@@ -749,7 +749,14 @@ class PhoneWindow:
         if self.state._capture_received and self.state.missing:
             unavailable = " · ".join(f"{source.title()} unavailable" for source in ("calls", "messages")
                                      if source in self.state.missing)
-            status = f"{unavailable}. {status}"
+            if getattr(self, "compact_layout", False) and status == "Continue saves your chosen contacts.":
+                # The adjacent Continue button already names the action. Keep
+                # its coverage warning to one line so the contact grid remains
+                # readable; guarded recovery and Save states keep their copy.
+                labels = [source for source in ("calls", "messages") if source in self.state.missing]
+                status = " and ".join(labels).capitalize() + " unavailable"
+            else:
+                status = f"{unavailable}. {status}"
         self.workspace_coverage.set(coverage)
         self.workspace_status.set(status)
         if hasattr(self, "contact_selected"):

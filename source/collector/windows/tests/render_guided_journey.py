@@ -250,12 +250,18 @@ def assert_actions(view, name):
         visible = view.workspace_status.get()
         if not view.workspace_status_label.winfo_viewable():
             raise RuntimeError("Partial-source coverage is hidden before Continue")
+        if getattr(view, "compact_layout", False):
+            expected = " and ".join(CRYPTO_UNAVAILABLE_SCENARIOS[name]).capitalize() + " unavailable"
+            if visible != expected:
+                raise RuntimeError("Compact continuation lost its bounded explicit coverage warning")
         for source in CRYPTO_UNAVAILABLE_SCENARIOS[name]:
-            if source.title() + " unavailable" not in visible or source.title() + ": 0 readable" in visible:
+            if ((not getattr(view, "compact_layout", False) and source.title() + " unavailable" not in visible)
+                    or source.title() + ": 0 readable" in visible):
                 raise RuntimeError("Unavailable encrypted source is omitted or presented as readable zero")
         if view.workspace_status_label.winfo_height() < view.workspace_status_label.winfo_reqheight():
             raise RuntimeError("Partial-source warning is vertically clipped before Continue")
-        if str(view.review_button.cget("state")) != "normal":
+        primary = view.pair_button if view.state.reviewed else view.review_button
+        if str(primary.cget("state")) != "normal":
             raise RuntimeError("Valid partial contact review lost its deliberate Continue")
     if name in ("contacts", "reviewed-contacts"):
         primary = view.review_button if name == "contacts" else view.pair_button
