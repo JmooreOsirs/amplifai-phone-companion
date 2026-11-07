@@ -19,9 +19,9 @@
       "bundleId": "ai.satoris.amplifai.phone.intel-candidate"
     },
     "windows-x64-test": {
-      "version": "2026.10.28-rc28",
-      "build": "26102828",
-      "installerVersion": "1.0.28"
+      "version": "2026.11.06-rc29",
+      "build": "26110629",
+      "installerVersion": "1.0.29"
     }
   },
   "previousQualifiedNativeHead": "02670fa2ea2c4fbb09b422e7b8cc183e45126e52",
