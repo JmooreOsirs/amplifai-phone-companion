@@ -25,8 +25,8 @@ from updater import BUILD, INSTALLER_VERSION, MAX_MANIFEST_BYTES, PUBLIC_KEY, VE
 from update_installer import READY, RuntimeReadGuard
 from verify_windows_install import verify
 
-BASELINE_BYTES = 43776886
-BASELINE_SHA256 = "69ff4124531bf2575c875ae70e6bb05f9cd1db8f377aec13ee3fbb1ff53bd52d"
+BASELINE_BYTES = 43785078
+BASELINE_SHA256 = "d78576276c9031fbfd39b9c980ea23c66b471609a863e6f85277d9eee1041768"
 FIXED_DATA_NAME = "AMPLIFai Phone Candidate"
 
 
@@ -139,7 +139,7 @@ def qualify(args) -> dict:
         raise ValueError("Signed candidate MSI byte count differs from local fixture")
     package_bytes = args.msi.read_bytes(); verify_installer(package_bytes, manifest)
     if args.baseline.stat().st_size != BASELINE_BYTES or hashlib.sha256(args.baseline.read_bytes()).hexdigest() != BASELINE_SHA256:
-        raise ValueError("Released RC25 MSI differs from the pinned baseline")
+        raise ValueError("Released RC28 MSI differs from the pinned baseline")
     installed = Path(os.environ["LOCALAPPDATA"]) / "AMPLIFaiPhone"
     sessions = default_sessions_root(); data_root = sessions.parent
     if data_root.name != FIXED_DATA_NAME or installed.exists() or data_root.exists():
@@ -253,6 +253,7 @@ def qualify(args) -> dict:
             raise ValueError("Relaunched companion did not close normally")
         return {"status": "actual-windows-frozen-helper-running-prior-release-to-candidate-handoff", "schema": 1,
                 "msiSha256": manifest.sha256, "version": manifest.version, "build": manifest.build,
+                "baselineMsiSha256": BASELINE_SHA256, "baselineMsiBytes": BASELINE_BYTES,
                 "installerVersion": manifest.installer_version, "readyWhileOldAppRunning": True,
                 "oldAppClosedNormally": True, "installerWaitedForParentExit": True,
                 "normalInstallerUi": True, "immutableMsiAndDirectory": True,

@@ -23,7 +23,7 @@ import app
 from build_windows_candidate import FONT, GUI_FILES, LOCK, LOGO, gui_digest
 from journey import journey
 from native_setup import DISCLOSURE
-from native_setup_fixture import (collecting, exercise_controls, exercise_group_controls, require_full_text_scroll,
+from native_setup_fixture import (CRYPTO_UNAVAILABLE_SCENARIOS, collecting, exercise_controls, exercise_group_controls, require_full_text_scroll,
                                   scenarios, text_scroll_evidence)
 from render_candidate import capture, create_root, descendants, place_viewport, visible_snapshot
 from render_contact_workspace import (bounds, check_keyboard, computed_styles, keyboard_traversal,
@@ -70,6 +70,7 @@ EXPECTED_STAGE = {
     "backup-unknown": "prepare", "backup-checking": "prepare",
     "connecting": "collection", "collecting": "collection", "password": "collection", "processing": "collection",
     "contacts": "contacts", "contacts-empty": "contacts", "contacts-partial": "contacts",
+    **dict.fromkeys(CRYPTO_UNAVAILABLE_SCENARIOS, "contacts"),
     "contacts-select-all": "contacts", "reviewed-contacts": "contacts", "continue-uncertain": "attention",
     "bind-uncertain": "attention", "bound": "save", "browser-opened": "save", "preview-received": "save", "pending-receipt": "save",
     "saved": "complete", "recovery": "contacts", "collection-error": "attention", "long-scope-error": "approval",
@@ -85,6 +86,7 @@ EXPECTED_STAGE = {
 }
 CONTACT_LAYOUT_DIAGNOSTIC = frozenset((
     "collecting", "contacts", "contacts-empty", "contacts-partial", "contacts-select-all", "reviewed-contacts",
+    *CRYPTO_UNAVAILABLE_SCENARIOS,
     "group-main", "group-review", "group-all", "group-empty-search", "group-organize-marked",
 ))
 
@@ -244,6 +246,23 @@ def assert_actions(view, name):
             raise RuntimeError("A backup check permits a duplicate Start")
     if name == "contacts-empty" and str(view.review_button.cget("state")) != "disabled":
         raise RuntimeError("Empty selection exposes enabled Continue")
+    if name in CRYPTO_UNAVAILABLE_SCENARIOS:
+        visible = view.workspace_status.get()
+        if not view.workspace_status_label.winfo_viewable():
+            raise RuntimeError("Partial-source coverage is hidden before Continue")
+        if getattr(view, "compact_layout", False):
+            expected = " and ".join(CRYPTO_UNAVAILABLE_SCENARIOS[name]).capitalize() + " unavailable"
+            if visible != expected:
+                raise RuntimeError("Compact continuation lost its bounded explicit coverage warning")
+        for source in CRYPTO_UNAVAILABLE_SCENARIOS[name]:
+            if ((not getattr(view, "compact_layout", False) and source.title() + " unavailable" not in visible)
+                    or source.title() + ": 0 readable" in visible):
+                raise RuntimeError("Unavailable encrypted source is omitted or presented as readable zero")
+        if view.workspace_status_label.winfo_height() < view.workspace_status_label.winfo_reqheight():
+            raise RuntimeError("Partial-source warning is vertically clipped before Continue")
+        primary = view.pair_button if view.state.reviewed else view.review_button
+        if str(primary.cget("state")) != "normal":
+            raise RuntimeError("Valid partial contact review lost its deliberate Continue")
     if name in ("contacts", "reviewed-contacts"):
         primary = view.review_button if name == "contacts" else view.pair_button
         if primary.cget("style") != "Primary.TButton" or str(primary.cget("state")) != "normal":
@@ -614,7 +633,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                 for name, native, state in scenarios():
                     if focused and name not in CONTACT_LAYOUT_DIAGNOSTIC:
                         continue
-                    if contacts_only and name not in ("contacts", "contacts-empty", "contacts-partial", "contacts-select-all", "reviewed-contacts"):
+                    if contacts_only and name not in ("contacts", "contacts-empty", "contacts-partial", "contacts-select-all", "reviewed-contacts", *CRYPTO_UNAVAILABLE_SCENARIOS):
                         continue
                     case_start = len(failures)
                     stage = EXPECTED_STAGE[name]
@@ -764,7 +783,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
               "actual-windows-frozen-synthetic-guided-ui" if frozen_identity else "actual-windows-source-synthetic-guided-ui")
     receipt = {"schema": 3, "status": status, "passed": not failures, "collectAllFailures": collect_all,
                "diagnosticScope": "contact-layout" if focused else "all",
-               "sourceProof": identity, "plannedScenarioCount": (5 if contacts_only else len(CONTACT_LAYOUT_DIAGNOSTIC) if focused else len(EXPECTED_STAGE)) * len(VIEWPORTS),
+               "sourceProof": identity, "plannedScenarioCount": (5 + len(CRYPTO_UNAVAILABLE_SCENARIOS) if contacts_only else len(CONTACT_LAYOUT_DIAGNOSTIC) if focused else len(EXPECTED_STAGE)) * len(VIEWPORTS),
                "guiSourceSha256": gui_digest(args.source), "productionIdentity": {"version": app.VERSION, "build": app.BUILD,
                "channel": app.CHANNEL, "bundleId": app.BUNDLE_ID}, "screenshots": records, "computedStylesByViewport": styles,
                "scenarioResults": cases, "checks": checks, "failureCount": len(failures),

@@ -15,9 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-VERSION = "2026.10.28-rc28"
-BUILD = "26102828"
-INSTALLER_VERSION = "1.0.28"
+VERSION = "2026.11.06-rc29"
+BUILD = "26110629"
+INSTALLER_VERSION = "1.0.29"
 CHANNEL = "windows-x64-test"
 
 GUI_FILES = (

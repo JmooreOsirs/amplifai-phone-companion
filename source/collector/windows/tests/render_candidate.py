@@ -22,7 +22,7 @@ HANDOFF_ID = "11111111-1111-4111-8111-111111111111"
 INTENT_ID = "22222222-2222-4222-8222-222222222222"
 
 
-def selected_review() -> Session:
+def selected_review(*, missing=("calls",), unavailable_reason="selected_payload_length") -> Session:
     state = Session()
     state.begin("inspect")
     state.handle({"kind": "residue", "sessions": []})
@@ -48,10 +48,10 @@ def selected_review() -> Session:
                   "retainedBytes": 2048, "discardedBytes": 2048, "filesReceived": 3,
                   "elapsedSeconds": 2.0, "bytesPerSecond": 2048.0})
     state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 1024})
-    state.handle({"kind": "capture", **page(0), "availableCalls": 0,
-                  "availableMessages": 38_999, "missing": ["calls"],
+    state.handle({"kind": "capture", **page(0), "availableCalls": 0 if "calls" in missing else 1,
+                  "availableMessages": 0 if "messages" in missing else 38_999, "missing": list(missing),
                   "backupEncrypted": True,
-                  "unavailableReasons": {"calls": "selected_payload_length"}})
+                  "unavailableReasons": {source: unavailable_reason for source in missing}})
     command = state.select_all_contacts()
     for cursor in range(0, TOTAL_CONTACTS, 200):
         command = state.handle({"kind": "contacts", **page(cursor, command["scanId"])})
@@ -63,8 +63,9 @@ def selected_review() -> Session:
     digest = hashlib.sha256("".join(f"{index}\n" for index in range(1, TOTAL_CONTACTS + 1)).encode()).hexdigest()
     state.handle({"kind": "review", "reviewId": state._pending_review_id,
                   "selection_sha256": digest, "selected_contacts": TOTAL_CONTACTS,
-                  "matched_calls": 0, "matched_messages": 12_670,
-                  "missing_sources": ["calls"]})
+                  "matched_calls": 0 if "calls" in missing else 1,
+                  "matched_messages": 0 if "messages" in missing else 12_670,
+                  "missing_sources": list(missing)})
     state.pair()
     state.handle({"kind": "pairing", "pairCode": "1234567890", "port": 48751,
                   "expiresInSeconds": 300, "handoffId": HANDOFF_ID,

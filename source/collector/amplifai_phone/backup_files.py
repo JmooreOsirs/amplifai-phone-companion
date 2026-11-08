@@ -33,14 +33,25 @@ def copy_backup_file(
 ) -> int:
     decryptor = unpadder = None
     if keybag is not None:
+        from construct import ConstructError
         from cryptography.hazmat.primitives import padding
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.primitives.keywrap import aes_key_unwrap
+        from cryptography.hazmat.primitives.keywrap import InvalidUnwrap, aes_key_unwrap
         from pyiosbackup.keybag import encryption_key_struct
 
-        parsed = encryption_key_struct.parse(encryption_key)
-        key = aes_key_unwrap(keybag.get_key(parsed.class_), parsed.key)
-        decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16)).decryptor()
+        # The keybag was already unlocked. A missing/malformed per-file key is
+        # an integrity failure of this payload, not evidence of a bad password.
+        # Keep the boundary narrow so storage/cancellation errors retain their
+        # own classifications. Do not retain raw keys or dependency messages.
+        try:
+            parsed = encryption_key_struct.parse(encryption_key)
+            key = aes_key_unwrap(keybag.get_key(parsed.class_), parsed.key)
+            decryptor = Cipher(algorithms.AES(key), modes.CBC(b"\x00" * 16)).decryptor()
+        except (ConstructError, InvalidUnwrap, KeyError, TypeError, ValueError):
+            raise SelectedPayloadIntegrityError(
+                "Encrypted selected payload key is unavailable or invalid",
+                code="selected_payload_crypto",
+            ) from None
         unpadder = padding.PKCS7(128).unpadder() if padded else None
 
     count = 0

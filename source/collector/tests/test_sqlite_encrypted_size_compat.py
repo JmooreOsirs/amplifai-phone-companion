@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.keywrap import InvalidUnwrap, aes_key_wrap
+from cryptography.hazmat.primitives.keywrap import aes_key_wrap
 from packaging.version import Version
 from pyiosbackup import Backup
 from pyiosbackup.keybag import Keybag
@@ -737,5 +737,6 @@ class EncryptedSizeCompatibilityTests(unittest.TestCase):
     def test_wrong_key_does_not_admit_size_difference(self) -> None:
         backup = self._backup()
         backup.keybag = Keybag({1: b"w" * 32})
-        with self.assertRaises(InvalidUnwrap):
+        with self.assertRaises(SelectedPayloadIntegrityError) as failure:
             self._extract(backup)
+        self.assertEqual(failure.exception.code, "selected_payload_crypto")

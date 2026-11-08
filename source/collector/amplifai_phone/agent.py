@@ -590,7 +590,7 @@ def run_connect(
             if capture_stage == "review" and review_step is not None:
                 event["reviewStep"] = review_step
         if event["code"] in {
-            "connection_lost", "device_backup_failed", "backup_host_space",
+            "connection_lost", "device_backup_failed", "backup_host_space", "backup_password",
             "backup_encryption_unknown", "backup_encryption_disabled", "backup_encryption_changed",
             "collection_failed", "backup_control_invalid", "selected_payload_missing",
             "selected_payload_invalid", "contacts_schema", "unsupported_schema",
