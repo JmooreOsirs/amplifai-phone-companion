@@ -462,8 +462,8 @@ jobs:
           Remove-Item -LiteralPath $archive
           $signed = 'source/collector/windows/tests/fixtures/release-qualification/rc29'
           $signedFiles = @(
-            @{name='update-v1.json'; bytes=581; sha='PENDING_RC29_SIGNED_MANIFEST_SHA256'},
-            @{name='update-v1.json.sig'; bytes=89; sha='PENDING_RC29_SIGNATURE_BODY_SHA256'}
+            @{name='update-v1.json'; bytes=581; sha='66819112f667e95c7d941d96b5ef0a356795d5663ca7eeddc2ac4f00589901a9'},
+            @{name='update-v1.json.sig'; bytes=89; sha='6b8f7b2357a07b8893d1340d903fe9cb2bdea13f5e4d8d801299b465b5ea753c'}
           )
           foreach ($record in $signedFiles) {
             $source = Join-Path $signed $record.name
