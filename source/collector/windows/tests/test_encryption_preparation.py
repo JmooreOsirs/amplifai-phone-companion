@@ -231,7 +231,7 @@ class EncryptedHelperBoundaryTests(unittest.TestCase):
                 helper = helper_process.HelperProcess([sys.executable], lambda _: None)
                 with patch.object(helper_process.subprocess, "Popen") as spawn, patch.object(helper_process.threading, "Thread"):
                     helper.start("connect", require_encrypted_backup=required)
-                self.assertEqual(spawn.call_args.args[0], [sys.executable, "connect"] + (["--require-encrypted-backup"] if required else []))
+                self.assertEqual(spawn.call_args.args[0], [sys.executable, "connect", "--retry-backup-unlock"] + (["--require-encrypted-backup"] if required else []))
                 self.assertFalse(spawn.call_args.kwargs["shell"])
         for mode in ("inspect", "clear-residue", BACKUP_CHECK_MODE):
             helper = helper_process.HelperProcess([sys.executable], lambda _: None)

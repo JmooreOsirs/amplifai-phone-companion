@@ -83,7 +83,8 @@ class HelperProcess:
         # Public PyInstaller control; never mutate its private _PYI_* variables.
         environment["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         self.process = subprocess.Popen(
-            [*self.command, mode, *(["--require-encrypted-backup"] if require_encrypted_backup else [])],
+            [*self.command, mode, *(["--retry-backup-unlock"] if mode == "connect" else []),
+             *(["--require-encrypted-backup"] if require_encrypted_backup else [])],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="strict", shell=False,
             close_fds=True, creationflags=flags,

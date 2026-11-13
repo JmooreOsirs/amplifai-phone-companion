@@ -26,7 +26,7 @@ from update_installer import READY, RuntimeReadGuard
 from verify_windows_install import verify
 
 BASELINE_BYTES = 43785078
-BASELINE_SHA256 = "d78576276c9031fbfd39b9c980ea23c66b471609a863e6f85277d9eee1041768"
+BASELINE_SHA256 = "d00f943c521a96be20784eb8989adf68ebe5fc9eba0d44ac71e4ac8a17b54fa6"
 FIXED_DATA_NAME = "AMPLIFai Phone Candidate"
 
 
@@ -139,7 +139,7 @@ def qualify(args) -> dict:
         raise ValueError("Signed candidate MSI byte count differs from local fixture")
     package_bytes = args.msi.read_bytes(); verify_installer(package_bytes, manifest)
     if args.baseline.stat().st_size != BASELINE_BYTES or hashlib.sha256(args.baseline.read_bytes()).hexdigest() != BASELINE_SHA256:
-        raise ValueError("Released RC28 MSI differs from the pinned baseline")
+        raise ValueError("Released RC29 MSI differs from the pinned baseline")
     installed = Path(os.environ["LOCALAPPDATA"]) / "AMPLIFaiPhone"
     sessions = default_sessions_root(); data_root = sessions.parent
     if data_root.name != FIXED_DATA_NAME or installed.exists() or data_root.exists():

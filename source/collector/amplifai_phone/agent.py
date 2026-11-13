@@ -1,4 +1,4 @@
-"""Line-delimited local process protocol for the macOS collector window.
+"""Line-delimited local process protocol for the native collector companions.
 
 The production entrypoint has no synthetic mode or arbitrary-backup-path input.
 Tests inject a synthetic collector directly into run_connect.
@@ -34,7 +34,8 @@ from .call_accounting import CallAccountingHistory, call_accounting, validate_ca
 from .capture_runtime import run_local_capture
 from .helper_protocol import configure_protocol_streams
 from .ios_backup import (
-    BackupEncryptionPreflightError, IPhoneCapture, capture_source_diagnostics, collect_iphone,
+    MAX_BACKUP_UNLOCK_ATTEMPTS, BackupEncryptionPreflightError, BackupKeybagUnlockError,
+    IPhoneCapture, capture_source_diagnostics, collect_iphone,
     inspect_backup_encryption,
 )
 from .metadata import (
@@ -210,7 +211,7 @@ def _error_code(exc: BaseException) -> str:
         return "unsupported_schema"
     if isinstance(exc, SourceCapacityLimit):
         return exc.code
-    if isinstance(exc, (BackupPasswordIsRequired, InvalidUnwrap)):
+    if isinstance(exc, (BackupPasswordIsRequired, InvalidUnwrap, BackupKeybagUnlockError)):
         return "backup_password"
     if isinstance(exc, PairingError):
         return "trust_required"
@@ -259,6 +260,7 @@ def run_connect(
     require_encrypted_backup: bool = False,
     *, diagnostic_history: DiagnosticHistory | None = None,
     call_accounting_history: CallAccountingHistory | None = None,
+    retry_backup_unlock: bool = False,
 ) -> int:
     configure_protocol_streams(source, sink)
     _emit(sink, {"kind": "state", "state": "connecting"})
@@ -267,6 +269,7 @@ def run_connect(
     attempt_id = str(uuid4())
     diagnostics: dict[tuple[str, str], dict[str, object]] = {}
     diagnostic_storage_failures: set[str] = set()
+    password_attempt = 0
 
     def diagnostic_storage_result(history: str, *, failed: bool) -> None:
         was_failed = bool(diagnostic_storage_failures)
@@ -282,10 +285,20 @@ def run_connect(
                          "attemptId": attempt_id})
 
     def password_provider() -> str:
-        nonlocal capture_stage
+        nonlocal capture_stage, password_attempt
         capture_stage = "processing"
-        _emit(sink, {"kind": "state", "state": "password_required"})
+        password_attempt += 1
+        event: dict[str, object] = {"kind": "state", "state": "password_required"}
+        if retry_backup_unlock:
+            if password_attempt > MAX_BACKUP_UNLOCK_ATTEMPTS:
+                raise RuntimeError("Backup unlock attempt limit reached")
+            event.update(attempt=password_attempt, maxAttempts=MAX_BACKUP_UNLOCK_ATTEMPTS)
+            if password_attempt > 1:
+                event["reason"] = "backup_unlock_failed"
+        _emit(sink, event)
         command = _command(source)
+        if command.get("action") == "disconnect":
+            raise CaptureCancelled()
         if command.get("action") != "password":
             raise ValueError("Expected password response")
         password = command.get("value")
@@ -359,6 +372,8 @@ def run_connect(
         }
         if require_encrypted_backup:
             collector_options["require_encrypted_backup"] = True
+        if retry_backup_unlock:
+            collector_options["retry_backup_unlock"] = True
         capture = run_local_capture(collector(**collector_options))
         capture_stage = "review"
         review_step = "diagnostics"
@@ -691,6 +706,7 @@ def main() -> int:
         "mode", choices=("connect", "inspect", "clear-residue", "runtime-check", "backup-encryption-status")
     )
     parser.add_argument("--require-encrypted-backup", action="store_true")
+    parser.add_argument("--retry-backup-unlock", action="store_true")
     args = parser.parse_args()
     diagnostic_history = DiagnosticHistory()
     call_accounting_history = CallAccountingHistory()
@@ -704,6 +720,7 @@ def main() -> int:
     return run_connect(
         sys.stdin, sys.stdout,
         require_encrypted_backup=args.require_encrypted_backup,
+        retry_backup_unlock=args.retry_backup_unlock,
         diagnostic_history=diagnostic_history,
         call_accounting_history=call_accounting_history,
     )

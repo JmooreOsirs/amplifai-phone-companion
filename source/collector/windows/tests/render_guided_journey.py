@@ -23,7 +23,7 @@ import app
 from build_windows_candidate import FONT, GUI_FILES, LOCK, LOGO, gui_digest
 from journey import journey
 from native_setup import DISCLOSURE
-from native_setup_fixture import (CRYPTO_UNAVAILABLE_SCENARIOS, collecting, exercise_controls, exercise_group_controls, require_full_text_scroll,
+from native_setup_fixture import (CRYPTO_UNAVAILABLE_SCENARIOS, PASSWORD_SCENARIOS, collecting, exercise_controls, exercise_group_controls, require_full_text_scroll,
                                   scenarios, text_scroll_evidence)
 from render_candidate import capture, create_root, descendants, place_viewport, visible_snapshot
 from render_contact_workspace import (bounds, check_keyboard, computed_styles, keyboard_traversal,
@@ -68,7 +68,8 @@ EXPECTED_STAGE = {
     "approval-uncertain": "approval", "prepared": "prepare", "start-uncertain": "prepare",
     "backup-encrypted": "prepare", "backup-unencrypted": "prepare",
     "backup-unknown": "prepare", "backup-checking": "prepare",
-    "connecting": "collection", "collecting": "collection", "password": "collection", "processing": "collection",
+    "connecting": "collection", "collecting": "collection", "processing": "collection",
+    **dict.fromkeys(PASSWORD_SCENARIOS, "collection"), "backup-unlock-exhausted-clean": "attention",
     "contacts": "contacts", "contacts-empty": "contacts", "contacts-partial": "contacts",
     **dict.fromkeys(CRYPTO_UNAVAILABLE_SCENARIOS, "contacts"),
     "contacts-select-all": "contacts", "reviewed-contacts": "contacts", "continue-uncertain": "attention",
@@ -167,11 +168,11 @@ def assert_stage(root, view, name):
         for widget in (view.native_agreement, view.native_approve, view.native_start, view.contacts, view.pair_button):
             if widget.winfo_viewable():
                 raise RuntimeError("Unrelated approval/selection control is visible while collecting")
-        if bool(view.password.winfo_viewable()) != (name == "password"):
+        if bool(view.password.winfo_viewable()) != (name in PASSWORD_SCENARIOS):
             raise RuntimeError("Backup password entry is shown outside the password stage")
         if [item.cget("text") for item in view.collection_stage_labels] != ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]:
             raise RuntimeError("Collection lost its local substage hierarchy")
-        active = 2 if name in ("password", "processing") else 1 if name == "collecting" else 0
+        active = 2 if name in (*PASSWORD_SCENARIOS, "processing") else 1 if name == "collecting" else 0
         if view.collection_eyebrow.cget("text") != f"ON THIS PC · STAGE {active + 1} OF 4":
             raise RuntimeError("Collection substage does not describe the current local operation")
         for index, item in enumerate(view.collection_stage_labels):
@@ -182,9 +183,17 @@ def assert_stage(root, view, name):
         if bool(view.collection_metric_well.winfo_viewable()) != metric:
             raise RuntimeError("Collection invents or hides its actual byte measurement")
         if metric:
-            expected_value, expected_label = ("774.8 MiB", "PROCESSED") if name == "processing" else ("67.2 GiB", "RECEIVED")
+            expected_value, expected_label = (("774.8 MiB", "PROCESSED") if name == "processing" else
+                                              ("0 B", "PROCESSED") if name in ("password-retry", "password-final-attempt") else
+                                              ("67.2 GiB", "RECEIVED"))
             if view.collection_metric_value.cget("text") != expected_value or view.collection_metric_label.cget("text") != expected_label:
                 raise RuntimeError("Received and locally processed bytes were conflated")
+        if name in PASSWORD_SCENARIOS:
+            text = view.collection_detail.cget("text")
+            if f"Attempt {PASSWORD_SCENARIOS[name]} of 3" not in text:
+                raise RuntimeError("Password step lost its bounded attempt count")
+            if PASSWORD_SCENARIOS[name] > 1 and ("backup-key issue" not in text or "no new backup" not in text):
+                raise RuntimeError("Password retry lost its cause ambiguity or same-backup explanation")
     if current.stage == "approval":
         text = view.native_disclosure.get("1.0", "end-1c")
         if (DISCLOSURE["sentences"][0] not in text
@@ -274,7 +283,7 @@ def assert_actions(view, name):
         raise RuntimeError("Uncertain Start re-asked approval or hid retry")
     if name == "authority-paused" and not view.attention_action.winfo_viewable():
         raise RuntimeError("Paused retained review lost confirmation recovery")
-    if name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue",
+    if name in ("collection-failed-clean", "collection-stopped-clean", "collection-failed-residue", "backup-unlock-exhausted-clean",
                 "collection-processing-failed-clean"):
         if "ready" in view.window.title() or view.journey.current != 1 or view.state.transfer_status:
             raise RuntimeError("Terminal collection reverted to ready, approval or live read progress")
@@ -284,6 +293,12 @@ def assert_actions(view, name):
             raise RuntimeError("Clean terminal state lost its explicit closed-tab fallback")
         if name.endswith("residue") and (not view.attention_action.winfo_viewable() or view.attention_action.cget("text") != "Remove marked temporary data"):
             raise RuntimeError("Terminal residue state lost its cleanup action")
+    if name == "backup-unlock-exhausted-clean":
+        text = view.attention_detail.cget("text")
+        if (view.attention_heading.cget("text") != "Backup could not be unlocked"
+                or "password may not match" not in text or "backup keys" not in text
+                or view.password.winfo_viewable()):
+            raise RuntimeError("Exhausted unlock attempts lost honest terminal recovery or reopened password entry")
     if name == "collection-processing-failed-clean":
         if (view.state.diagnostic_details or "collection_failed" not in view.attention_detail.cget("text")
                 or "processing" not in view.attention_detail.cget("text")
@@ -714,7 +729,7 @@ def render(args, *, contacts_only=False, frozen_identity=None):
                             _, guide = check(name, "encryption-guide", guide_evidence)
                         elif panel == "collection":
                             required = [view.stop_button, view.collection_details_button]
-                            if name == "password":
+                            if name in PASSWORD_SCENARIOS:
                                 required.extend((view.password, view.password_button))
                             _, focus = check(name, "keyboard", lambda: keyboard_traversal(root, required, start=view.stop_button))
                             def collection_scroll():

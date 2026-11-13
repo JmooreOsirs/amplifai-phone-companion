@@ -28,6 +28,20 @@ class FrozenDecryptionHarnessTest(unittest.TestCase):
         self.assertTrue(all(item["productionModules"] == [] for item in results))
         optional = next(item for item in results if item["case"] == "both_optional_keys")
         self.assertEqual(optional["missingSources"], ["calls", "messages"])
+        for case, prompts, parses, exit_code in (
+            ("same-backup-wrong-correct", 2, 2, 0),
+            ("same-backup-max-attempts", 3, 3, 1),
+            ("same-backup-cancel", 2, 1, 130),
+            ("same-backup-keybag-corrupt", 3, 3, 1),
+            ("same-backup-manifest-invalid", 1, 1, 1),
+        ):
+            with self.subTest(case=case):
+                item = next(item for item in results if item["case"] == case)
+                self.assertEqual(item["acquisitionCount"], 1)
+                self.assertEqual(item["passwordPrompts"], prompts)
+                self.assertEqual(item["parseAttempts"], parses)
+                self.assertEqual(item["exitCode"], exit_code)
+                self.assertTrue(item["sameCompletedBackup"])
 
     def test_validator_rejects_unavailable_as_zero_history_and_secret_echo(self):
         script = Path(__file__).with_name("frozen_decryption_fixture.py").resolve()

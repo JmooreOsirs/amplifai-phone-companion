@@ -57,6 +57,10 @@ FAILURE_EXCEPTION_CLASSES = frozenset({
 FAILURE_REVIEW_STEPS = frozenset({
     "diagnostics", "call_accounting", "source_diagnostics", "contact_page", "capture_packet", "commands",
 })
+BACKUP_UNLOCK_FAILURE_DETAIL = (
+    "The backup could not be unlocked. The password may not match, or the backup keys may be damaged. "
+    "Check the existing backup password with its owner. No contacts or activity were saved from this attempt."
+)
 
 
 class ProtocolError(ValueError):
@@ -209,6 +213,8 @@ class Session:
         self.transfer_elapsed = 0.0
         self.transfer_rate = 0.0
         self.progress: float | None = None
+        self.password_attempt = 0
+        self.password_max_attempts = 0
         self.handoff_id = ""
         self.pair_code = ""
         self.saved_acknowledged = False
@@ -273,6 +279,21 @@ class Session:
             label = "Subsequent operation failure" if self.collection_failure is not None else "Operation failure"
             parts.append(label + ":\n" + self.operation_failure.detail_text)
         return "\n\n".join(parts)
+
+    @property
+    def backup_unlock_failure_detail(self) -> str:
+        return (BACKUP_UNLOCK_FAILURE_DETAIL if self.collection_failure is not None
+                and self.collection_failure.code == "backup_password" else "")
+
+    @property
+    def password_prompt(self) -> str:
+        if self.password_max_attempts != 3:
+            return "Enter the password used to encrypt this iPhone backup."
+        attempt = f"Attempt {self.password_attempt} of {self.password_max_attempts}."
+        if self.password_attempt > 1:
+            return (f"{attempt} Unlock failed: check your backup password; a backup-key issue is also possible. "
+                    "The backup is already on this PC; no new backup is needed.")
+        return f"{attempt} Enter the password used to encrypt this iPhone backup."
 
     def _record_failure(self, event: dict) -> None:
         code = event.get("code")
@@ -485,6 +506,7 @@ class Session:
             self.transfer_stage = ""
             self.transfer_bytes = 0
             self.transfer_elapsed = self.transfer_rate = 0.0
+            self.password_attempt = self.password_max_attempts = 0
             self.handoff_id = self.pair_code = ""
             self._clear_destination()
             self._saved_exit = self._capture_received = False
@@ -1109,9 +1131,28 @@ class Session:
                 if not self._finishing or not self.saved_acknowledged or self._stopping:
                     raise ProtocolError("Unacknowledged completion")
                 self._completed = True
-            elif state in {"connecting", "processing", "password_required"}:
+            elif state == "password_required":
+                if self._capture_received or self._failed or self.phase not in {"connecting", "processing"}:
+                    raise ProtocolError("Unexpected backup password request")
+                if set(event) == {"kind", "state"} and self.password_attempt == 0:
+                    attempt, maximum = 1, 1
+                else:
+                    attempt, maximum = event.get("attempt"), event.get("maxAttempts")
+                    fields = {"kind", "state", "attempt", "maxAttempts"}
+                    if type(attempt) is int and attempt > 1:
+                        fields.add("reason")
+                    if (set(event) != fields or type(attempt) is not int or not 1 <= attempt <= 3
+                            or type(maximum) is not int or maximum != 3
+                            or attempt != self.password_attempt + 1
+                            or self.password_max_attempts not in (0, 3)
+                            or attempt > 1 and event.get("reason") != "backup_unlock_failed"):
+                        raise ProtocolError("Invalid backup unlock retry request")
+                self.password_attempt, self.password_max_attempts = attempt, maximum
                 self.phase = state
-                self.status = {"connecting": "Unlock your iPhone and review its Trust prompt.", "processing": "Reading selected relationship context locally; cleanup is still in progress.", "password_required": "Enter the encrypted backup password. It is not logged or persisted."}[state]
+                self.status = self.password_prompt + " The password is not logged or persisted."
+            elif state in {"connecting", "processing"}:
+                self.phase = state
+                self.status = {"connecting": "Unlock your iPhone and review its Trust prompt.", "processing": "Reading selected relationship context locally; cleanup is still in progress."}[state]
             elif state not in {"disconnected", "cancelled", "pairing_revoked"}:
                 raise ProtocolError("Unknown helper state")
             elif state == "pairing_revoked" and self._selection_change_pending:
@@ -1373,6 +1414,7 @@ class Session:
             self._record_failure(event)
             code = event.get("code")
             messages = {
+                "backup_password": BACKUP_UNLOCK_FAILURE_DETAIL + " This collection stopped; inspect temporary data after the helper exits.",
                 "backup_encryption_disabled": "No backup started: this iPhone now reports encryption Off. In Apple Devices, select your iPhone > General > Backups > Encrypt local backup, then start a new collection. Or choose available data without confirmed call history.",
                 "backup_encryption_unknown": "No backup started: the iPhone's encryption setting could not be confirmed. Check the connection and Apple Devices backup setting, then start a new collection or choose available data without confirmed call history.",
                 "backup_encryption_changed": "The completed backup did not confirm encryption. No preview or account save was admitted. Check Encrypt local backup in Apple Devices before starting a new collection.",
