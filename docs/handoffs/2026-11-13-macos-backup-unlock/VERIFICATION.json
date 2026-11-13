@@ -34,6 +34,21 @@
       "path": "source/collector/macos/Tests/Fixtures/RenderMacReviewAcceptance.swift",
       "sha256": "eec24b0e5c40e0be9651fa9834a6931924777a35538a0374dc40c9aa004dc2b8",
       "bytes": 35249
+    },
+    {
+      "path": "source/collector/macos/Info.plist",
+      "sha256": "147b0a85b81b520afd62a7f20b1a370d88473929c9fe7050378e96aa2527327a",
+      "bytes": 1609
+    },
+    {
+      "path": "source/script/build_portable_candidate.sh",
+      "sha256": "e4faae14720e9d933db5c0cecc4236213f6ceaca4d147de20068d792ff17b2f3",
+      "bytes": 3697
+    },
+    {
+      "path": "source/collector/tests/qualify_frozen_macos_unlock.py",
+      "sha256": "254f99023fecf5fb2b5c9b32f1ec0507f157ac9bfaa7d5324e8386814a64fec1",
+      "bytes": 16364
     }
   ],
   "evidence": [
@@ -196,6 +211,11 @@
       "path": "build/mac-unlock-review/visual/mac-review-render-receipt.json",
       "sha256": "9c382acf4ade00c2567703f5dba1e45e4c4c120ac0ccc8ec8b3ffb38c5083b1e",
       "bytes": 4912
+    },
+    {
+      "path": "build/mac-unlock-review/rc36-portable-build.log",
+      "sha256": "977da0aa2cb496173ab99f8528ca4b75791cd1c76b300c3c504d500fa45aa611",
+      "bytes": 4360
     }
   ],
   "visuallyReviewed": [
@@ -217,10 +237,13 @@
     "periodicAuthorizationCycles": 2,
     "swiftArm64ReleaseBuild": "passed",
     "offscreenRenders": 24,
-    "diffWhitespace": "passed"
+    "diffWhitespace": "passed",
+    "portableBuild": "passed_ad_hoc_not_distribution_signed",
+    "sourcePromptDrivenIPCCases": 6,
+    "frozenPromptDrivenIPC": "pending_final_committed_source_run"
   },
   "releaseDependencies": {
-    "portablePackage": "not_yet_qualified",
+    "portablePackage": "built_full_qualification_pending",
     "appleNotarization": "HTTP403_required_agreement_missing_or_expired",
     "accountHolderResponse": "will_review_not_confirmed_accepted",
     "signedDownloadedAppAcceptance": "pending",
@@ -234,5 +257,12 @@
     "No private key export",
     "No production feed or website change",
     "No signed or public Mac release"
-  ]
+  ],
+  "candidate": {
+    "version": "2026.11.13-rc36",
+    "build": "26111336",
+    "channel": "macos-arm64",
+    "published": false
+  },
+  "pullRequest": "https://github.com/JmooreOsirs/amplifai-phone-companion/pull/54"
 }
