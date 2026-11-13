@@ -68,6 +68,9 @@ struct CollectorFlowChecks {
         try require(model.phase == .processing && model.processedBytes == 1234567890, "Parsing is a separate observed stage, not account completion")
         model.receive(try event(#"{"kind":"state","state":"password_required"}"#))
         try require(model.statusDetail.contains("existing") && !model.statusDetail.contains("Apple ID"), "Password recovery must name the existing backup password")
+        model.password = "synthetic fixture"
+        model.submitPassword()
+        try require(model.phase == .processing && model.password.isEmpty, "A legacy prompt needs one explicit local submission")
 
         let id = "00000000-0000-4000-8000-000000000001"
         let other = "00000000-0000-4000-8000-000000000002"

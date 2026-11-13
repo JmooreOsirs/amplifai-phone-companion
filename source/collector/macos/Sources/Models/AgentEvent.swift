@@ -2,6 +2,7 @@ import Foundation
 import CoreFoundation
 
 enum SourceDiagnosticDecodingError: Error { case invalid }
+private enum BackupPasswordPromptDecodingError: Error { case invalid }
 
 /// The failure-only, nonpersonal v1 wire record. Raw event preflight also checks
 /// JSON number kinds before Foundation can coerce 1.0 into an integer.
@@ -178,9 +179,14 @@ struct ResiduePreview: Decodable, Identifiable {
 }
 
 struct AgentEvent: Decodable {
+    static let maximumBackupUnlockAttempts = 3
+
     static func decode(_ data: Data) throws -> AgentEvent {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw SourceDiagnosticDecodingError.invalid }
         guard object["source_diagnostics"] == nil, object["source_diagnostic_history"] == nil else { throw SourceDiagnosticDecodingError.invalid }
+        if object["kind"] as? String == "state", object["state"] as? String == "password_required" {
+            try validateBackupPasswordPrompt(object)
+        }
         if object["kind"] as? String == "selected-payload-diagnostic" {
             var record = object
             record.removeValue(forKey: "kind")
@@ -201,8 +207,24 @@ struct AgentEvent: Decodable {
         return try decoder.decode(Self.self, from: data)
     }
 
+    private static func validateBackupPasswordPrompt(_ object: [String: Any]) throws {
+        let fields = Set(object.keys)
+        if fields == ["kind", "state"] { return } // Original one-attempt wire format.
+        guard let attempt = try? SourceDiagnostic.integer(object["attempt"]),
+              let maximum = try? SourceDiagnostic.integer(object["maxAttempts"]),
+              maximum == Self.maximumBackupUnlockAttempts, (1...maximum).contains(attempt) else {
+            throw BackupPasswordPromptDecodingError.invalid
+        }
+        if attempt == 1, fields == ["kind", "state", "attempt", "maxAttempts"] { return }
+        if attempt > 1, fields == ["kind", "state", "attempt", "maxAttempts", "reason"],
+           object["reason"] as? String == "backup_unlock_failed" { return }
+        throw BackupPasswordPromptDecodingError.invalid
+    }
+
     let kind: String
     let state: String?
+    let attempt: Int?
+    let maxAttempts: Int?
     let transport: String?
     let value: Double?
     let stage: String?

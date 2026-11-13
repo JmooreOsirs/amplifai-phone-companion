@@ -265,6 +265,9 @@ final class CollectorModel: ObservableObject {
     var onReadyForRunLinks: (() -> Void)?
     @Published private(set) var selectionNeedsReview = true
     @Published var password = ""
+    @Published private(set) var backupUnlockAttempt = 0
+    @Published private(set) var backupUnlockMaximum = 0
+    @Published private(set) var checkingPasswordApproval = false
     @Published var contacts: [ContactPreview] = []
     @Published private(set) var totalContacts = 0
     @Published private(set) var currentContactCursor = 0
@@ -1748,12 +1751,52 @@ final class CollectorModel: ObservableObject {
         launch(mode: "connect")
     }
 
+    private var isWaitingForBackupPassword: Bool {
+        phase == .passwordRequired && activeHelperMode == "connect" &&
+            operationID != nil && phoneRun?.collectionStarted == true &&
+            !cancellationRequested && !outputEnded && exitCode == nil
+    }
+
+    var canSubmitPassword: Bool {
+        isWaitingForBackupPassword && !checkingPasswordApproval && runStatusToken == nil &&
+            !approvalAdoptionPending && ![.replacementRequired, .expired, .revoked].contains(runStatus) &&
+            (1...512).contains(password.unicodeScalars.count)
+    }
+
     func submitPassword() {
-        guard phase == .passwordRequired, !password.isEmpty, password.count <= 512 else { return }
-        let submitted = password
+        guard canSubmitPassword, let operation = operationID, let run = phoneRun, run.collectionStarted,
+              run.admissionProtocol == .legacy || run.admittedOperation?.operationID == operation.uuidString.lowercased()
+        else { return }
+        let attempt = backupUnlockAttempt
+        checkingPasswordApproval = true
+        revalidateCurrentRun { [weak self] current in
+            guard let self, self.checkingPasswordApproval,
+                  self.operationID == operation, self.backupUnlockAttempt == attempt else { return }
+            self.checkingPasswordApproval = false
+            let submitted = self.password
+            self.password = ""
+            guard current, self.isWaitingForBackupPassword, self.runStatus == .current,
+                  let active = self.phoneRun, active.collectionStarted, active.runID == run.runID,
+                  active.capability == run.capability, active.claim.approvalID == run.claim.approvalID,
+                  active.admittedOperation == run.admittedOperation, active.claim.expiresAt > self.now(),
+                  (1...512).contains(submitted.unicodeScalars.count) else { return }
+            self.phase = .processing
+            if !self.send(["action": "password", "value": submitted]) {
+                // EOF lets the owned helper leave its password read and clean the workspace.
+                self.cancellationRequested = true
+                try? self.inputHandle?.close()
+                self.inputHandle = nil
+                self.needsStorageReview = true
+                self.awaitHelperExit()
+            }
+        }
+    }
+
+    private func clearBackupUnlock() {
+        checkingPasswordApproval = false
         password = ""
-        send(["action": "password", "value": submitted])
-        phase = .processing
+        backupUnlockAttempt = 0
+        backupUnlockMaximum = 0
     }
 
     @discardableResult
@@ -2608,6 +2651,7 @@ final class CollectorModel: ObservableObject {
     }
 
     func disconnect() {
+        clearBackupUnlock()
         cancelRunStatusCheck()
         if runStatus == .checking || runStatus == .refreshing { runStatus = .unchecked }
         declineLocalCollection()
@@ -2640,7 +2684,7 @@ final class CollectorModel: ObservableObject {
 
     private func clearPrivateReview() {
         resetBackupEstimate()
-        password = ""
+        clearBackupUnlock()
         contacts = []
         totalContacts = 0
         currentContactCursor = 0
@@ -2775,6 +2819,7 @@ final class CollectorModel: ObservableObject {
             }
             id = approval.runID
             requireEncryptedBackup = approval.callHistoryPreparation == .confirmedEncryptedBackup
+            clearBackupUnlock()
             // The run authorizes exactly this one collection; it can never start another.
             phoneRun?.collectionStarted = true
         } else if mode == "backup-encryption-status" {
@@ -2793,6 +2838,9 @@ final class CollectorModel: ObservableObject {
             // Simulated helper wire (checks and fixtures): record the owned operation, spawn nothing.
             operationID = id
             activeHelperMode = mode
+            cancellationRequested = false
+            outputEnded = false
+            exitCode = nil
             return
         }
         guard let resources = Bundle.main.resourceURL else {
@@ -2813,13 +2861,20 @@ final class CollectorModel: ObservableObject {
 
         let runner = Process()
         let input = Pipe()
+        guard fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            fail("The local helper connection could not be opened. Reopen the app and try again.")
+            if mode == "inspect" { completeStartupChecks() }
+            return
+        }
         let output = Pipe()
         runner.executableURL = portable ? portableHelper : uvxHelper
-        let arguments = portable ? [mode] : [
+        var arguments = portable ? [mode] : [
             "--offline", "--from", "pymobiledevice3==10.4.0",
             "python", "-m", "amplifai_phone.agent", mode
         ]
-        runner.arguments = requireEncryptedBackup ? arguments + ["--require-encrypted-backup"] : arguments
+        if mode == "connect" { arguments.append("--retry-backup-unlock") }
+        if requireEncryptedBackup { arguments.append("--require-encrypted-backup") }
+        runner.arguments = arguments
         runner.environment = Self.helperEnvironment(modulePath: module.path)
         runner.standardInput = input
         runner.standardOutput = output
@@ -2873,6 +2928,7 @@ final class CollectorModel: ObservableObject {
         guard operationID == id else { return }
         if bytes.isEmpty {
             outputEnded = true
+            if phase == .passwordRequired { clearBackupUnlock() }
             if let code = exitCode { finished(mode: mode, code: code) }
         } else { consume(bytes) }
     }
@@ -2880,6 +2936,7 @@ final class CollectorModel: ObservableObject {
     func handleHelperTermination(_ code: Int32, operation id: UUID, mode: String) {
         guard operationID == id else { return }
         exitCode = code
+        if phase == .passwordRequired { clearBackupUnlock() }
         if outputEnded { finished(mode: mode, code: code) }
     }
 
@@ -2889,23 +2946,26 @@ final class CollectorModel: ObservableObject {
         return data + Data([10])
     }
 
-    private func send(_ command: [String: Any]) {
+    @discardableResult
+    private func send(_ command: [String: Any]) -> Bool {
         guard let data = Self.encodedHelperCommand(command) else {
             fail("The local connection is unavailable.")
-            return
+            return false
         }
         if let commandWriter {
             commandWriter(data)
-            return
+            return true
         }
         guard let inputHandle else {
             fail("The local connection is unavailable.")
-            return
+            return false
         }
         do {
             try inputHandle.write(contentsOf: data)
+            return true
         } catch {
             fail("The local connection closed. Connect again.")
+            return false
         }
     }
 
@@ -2924,6 +2984,7 @@ final class CollectorModel: ObservableObject {
             let line = Data(outputBuffer[..<newline])
             outputBuffer.removeSubrange(...newline)
             guard let event = try? AgentEvent.decode(line) else {
+                cancellationRequested = true
                 process?.terminate()
                 needsStorageReview = true
                 awaitHelperExit()
@@ -2968,6 +3029,27 @@ final class CollectorModel: ObservableObject {
         eventObserver?(event)
     }
 
+    private func receiveBackupPasswordPrompt(_ event: AgentEvent) {
+        guard activeHelperMode == "connect", operationID != nil,
+              phoneRun?.collectionStarted == true, !outputEnded, exitCode == nil else { return }
+        let attempt = event.attempt ?? 1
+        let maximum = event.maxAttempts ?? 1
+        let validPhase = attempt == 1 ? [.connecting, .transferring, .processing].contains(phase) : phase == .processing
+        guard validPhase, attempt == backupUnlockAttempt + 1,
+              backupUnlockMaximum == 0 || backupUnlockMaximum == maximum else {
+            cancellationRequested = true
+            process?.terminate()
+            needsStorageReview = true
+            awaitHelperExit()
+            fail("The local helper returned an unexpected backup unlock request.")
+            return
+        }
+        password = ""
+        backupUnlockAttempt = attempt
+        backupUnlockMaximum = maximum
+        phase = .passwordRequired
+    }
+
     private func apply(_ event: AgentEvent) {
         if cancellationRequested && event.kind != "error" && event.kind != "state" { return }
         if cancellationRequested && event.kind == "state"
@@ -2979,10 +3061,12 @@ final class CollectorModel: ObservableObject {
                 guard phase == .connecting else { return }
                 if collectionStartedAt == nil { collectionStartedAt = now() }
                 progressIsKnown = false
-            case "password_required": phase = .passwordRequired
-            case "processing": phase = .processing
+            case "password_required": receiveBackupPasswordPrompt(event)
+            case "processing":
+                if phase != .passwordRequired && phase != .error { phase = .processing }
             case "disconnected", "cancelled":
                 declineLocalCollection()
+                if phase == .error { return }
                 if handoffAcknowledged && !cancellationRequested { phase = .completing }
                 else {
                     clearPrivateReview()
@@ -3001,6 +3085,7 @@ final class CollectorModel: ObservableObject {
             default: break
             }
         case "progress":
+            guard phase != .passwordRequired && phase != .error else { return }
             if let value = event.value, value.isFinite, (0...100).contains(value) {
                 observeBackupProgress(value)
                 progress = value
@@ -3051,6 +3136,7 @@ final class CollectorModel: ObservableObject {
             currentSourceDiagnostics.append(record)
             selectedPayloadContext = currentSourceDiagnostics.map(\.detail).joined(separator: "\n")
         case "capture":
+            guard phase != .passwordRequired else { return }
             let firstPage = event.contacts ?? []
             let total = event.totalContacts ?? firstPage.count
             guard (event.query ?? "").isEmpty, (event.cursor ?? 0) == 0,
@@ -3078,6 +3164,7 @@ final class CollectorModel: ObservableObject {
             currentSourceDiagnostics = captureDiagnostics
             selectedPayloadContext = currentSourceDiagnostics.map(\.detail).joined(separator: "\n")
             declineLocalCollection()
+            clearBackupUnlock()
             clearSuggestions()
             workspace = nil
             groupUndo = nil
@@ -3456,7 +3543,13 @@ final class CollectorModel: ObservableObject {
                 } else {
                     deviceStatus = ""
                 }
-                fail(Self.message(for: event.code) + deviceStatus + cleanup)
+                let message: String
+                if event.code == "backup_password", backupUnlockMaximum > 1, backupUnlockAttempt == backupUnlockMaximum {
+                    message = Self.message(for: event.code) + " All \(backupUnlockMaximum) attempts for this backup have been used."
+                } else {
+                    message = Self.message(for: event.code)
+                }
+                fail(message + deviceStatus + cleanup)
             }
         default:
             process?.terminate()
@@ -3467,6 +3560,7 @@ final class CollectorModel: ObservableObject {
     }
 
     func finished(mode: String, code: Int32) {
+        if mode == "connect" { clearBackupUnlock() }
         if mode == "backup-encryption-status" {
             if code != 0 || backupEncryptionStatus == .checking {
                 backupEncryptionStatus = .unknown
@@ -3531,6 +3625,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        clearBackupUnlock()
         completedReportNavigation = nil
         let failedSettingCheck = backupEncryptionStatus == .checking && statusCheckFailureActive
         if !failedSettingCheck { settingCheckAfterCollectionFailure = false }
@@ -3552,7 +3647,7 @@ final class CollectorModel: ObservableObject {
         if lastErrorStage == nil {
             switch phase {
             case .transferring: lastErrorStage = "backup"
-            case .processing, .completing: lastErrorStage = "processing"
+            case .passwordRequired, .processing, .completing: lastErrorStage = "processing"
             case .selecting, .reviewing: lastErrorStage = "review"
             default: lastErrorStage = "connecting"
             }
@@ -3594,7 +3689,9 @@ final class CollectorModel: ObservableObject {
         case .transferring:
             return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the cable connected and respond to any phone prompts. Initial backup readiness can wait up to 30 minutes. Once actual file data begins, 15 minutes without new activity or a stalled file transfer can stop the session. Active transfers have no fixed total-time limit."
         case .passwordRequired:
-            return "Use the existing password for this iPhone's encrypted computer backup. It is not your phone passcode. This app does not enable, disable or reset encryption."
+            return backupUnlockAttempt > 1
+                ? "The backup could not be unlocked. The password may be incorrect, or the backup's encryption keys may be unreadable. Try again using the backup already on this Mac."
+                : "The backup has been received. Enter the existing password for this iPhone's encrypted computer backup."
         case .processing:
             return "The helper is finishing contact and activity reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
         case .selecting:
@@ -3628,7 +3725,7 @@ final class CollectorModel: ObservableObject {
             return ["Choose Check temporary data, then review any marked app-created sessions.", "Remove only those sessions after explicit confirmation; do not delete other backups or change folder permissions."]
         }
         switch lastErrorCode {
-        case "backup_password": return ["Check the existing encrypted computer-backup password with its owner.", "Reconnect and enter it only in this companion. Do not reset encryption to bypass this step."]
+        case "backup_password": return ["Confirm the existing encrypted computer-backup password with its owner. Do not reset backup encryption.", "If the password is confirmed, share the safe support code and companion build before starting another collection."]
         case "backup_encryption_disabled": return ["No backup started. This iPhone now reports local backup encryption off, although the earlier check reported it on.", "If Calls matter, choose Encrypt local backup for this iPhone in Finder and keep its password, then start a fresh collection. Finder may create its own full backup and needs Mac storage."]
         case "backup_encryption_unknown": return ["No backup started because this companion could not confirm the iPhone's backup encryption setting.", "Check the setting in Finder, then choose Check iPhone again. You can instead choose Start without confirmed call history."]
         case "backup_encryption_changed": return ["The completed backup did not confirm encryption after the earlier preflight; no preview was admitted.", "Check the iPhone's current Finder backup setting, then start a new collection. Do not treat this run as saved data."]
@@ -3656,7 +3753,7 @@ final class CollectorModel: ObservableObject {
         switch code {
         case "phone_connection": return "Use one previously paired iPhone on this network, or connect it by USB, unlock it, and try again."
         case "trust_required": return "Unlock the iPhone and approve its Trust prompt, then try again."
-        case "backup_password": return "The existing encrypted-backup password was not accepted. Check it and retry."
+        case "backup_password": return "The backup could not be unlocked. The password may be incorrect, or the backup's encryption keys may be unreadable. This collection did not save data to your account."
         case "backup_encryption_disabled": return "Collection stopped before backup: this iPhone reported local backup encryption off. Calls may be unavailable. Check Finder if Calls matter."
         case "backup_encryption_unknown": return "Collection stopped before backup: the iPhone's backup encryption setting could not be confirmed. Check Finder, then check the iPhone again or choose Start without confirmed call history."
         case "backup_encryption_changed": return "The completed backup did not confirm encryption. No local preview or account save was made. Check Finder before a new collection."

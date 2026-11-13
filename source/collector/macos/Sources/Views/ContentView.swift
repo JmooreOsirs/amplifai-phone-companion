@@ -579,6 +579,12 @@ struct ContentView: View {
             Text("Existing encrypted-backup password")
                 .font(Brand.headingFont(28))
                 .foregroundStyle(Brand.heading)
+            if model.backupUnlockMaximum > 1 {
+                Text("Attempt \(model.backupUnlockAttempt) of \(model.backupUnlockMaximum)")
+                    .font(Brand.bodyFont(14).weight(.semibold))
+            }
+            Text(model.statusDetail)
+                .font(Brand.bodyFont(16))
             BackupPasswordHelp()
             Text("Your password stays on this Mac and is not saved.")
                 .font(Brand.bodyFont(16))
@@ -588,10 +594,12 @@ struct ContentView: View {
                 .frame(minHeight: 44)
                 .background(Brand.background, in: RoundedRectangle(cornerRadius: Brand.Radius.control))
                 .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control).stroke(Brand.border, lineWidth: 1))
+                .disabled(model.checkingPasswordApproval)
                 .onSubmit { model.submitPassword() }
-            Button("Continue locally") { model.submitPassword() }
+            Button(model.backupUnlockAttempt > 1 ? "Try unlocking again" : "Continue locally") { model.submitPassword() }
                 .buttonStyle(LimeButton())
-                .disabled(model.password.isEmpty || model.password.count > 512)
+                .disabled(!model.canSubmitPassword)
+            if model.checkingPasswordApproval { progressLine("Checking collection approval…") }
             Button("Stop on this Mac") { model.disconnect() }
                 .buttonStyle(SecondaryButton())
         }
