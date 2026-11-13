@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-13T19:28:12.207563+00:00",
+  "status": "source_checks_passed_not_released",
+  "baseCommit": "b745020d6f5da899d738d90c18063f58c2d0e600",
+  "branch": "codex/macos-backup-unlock-nov13",
+  "sourceFiles": [
+    {
+      "path": "source/collector/macos/Sources/Models/AgentEvent.swift",
+      "sha256": "d354651302f6e7d608151db92858ccf49505a225d2279546f67fa753a55c46e1",
+      "bytes": 15260
+    },
+    {
+      "path": "source/collector/macos/Sources/Services/CollectorModel.swift",
+      "sha256": "cbbc63c46395b6ec87350f340586abff593acb7c0bf3161f0888e838db2f7808",
+      "bytes": 200745
+    },
+    {
+      "path": "source/collector/macos/Sources/Views/ContentView.swift",
+      "sha256": "3bd8b40fde1f50ab9811d408a42e20e45cad4de8eabf4d8bdb8ca5c3925bb3f7",
+      "bytes": 54874
+    },
+    {
+      "path": "source/collector/macos/Tests/CollectorFlowChecks.swift",
+      "sha256": "88376b8133906a8cc1210501d04266058917d995fd77efd8a9c4fcd99cf2e397",
+      "bytes": 80123
+    },
+    {
+      "path": "source/collector/macos/Tests/CollectorModelChecks.swift",
+      "sha256": "a19962f25b57eabad224349c558795524cadfb07ab2f3a9ce0f5b7d51ec7e900",
+      "bytes": 66290
+    },
+    {
+      "path": "source/collector/macos/Tests/Fixtures/RenderMacReviewAcceptance.swift",
+      "sha256": "eec24b0e5c40e0be9651fa9834a6931924777a35538a0374dc40c9aa004dc2b8",
+      "bytes": 35249
+    }
+  ],
+  "evidence": [
+    {
+      "path": "build/mac-unlock-review/model-red.log",
+      "sha256": "1152d6921cb9e048a219e022aba6608c615acfd7fca78c578bcf55d7f84d81ec",
+      "bytes": 113
+    },
+    {
+      "path": "build/mac-unlock-review/model-quick.log",
+      "sha256": "2a675e1967f05326bf766de43e4bba40975c13db10d757fbbb48dc2b238c3aaa",
+      "bytes": 95
+    },
+    {
+      "path": "build/mac-unlock-review/model-full.log",
+      "sha256": "fd269735a4be880c963dbc95685111b5c8fbb9d065348eb079a13c13d41f8cf8",
+      "bytes": 588
+    },
+    {
+      "path": "build/mac-unlock-review/crypto-recovery.log",
+      "sha256": "77e0f4912760c6d7c0e185178a9654d79b11f1404665968d827ac387c1361dd3",
+      "bytes": 2129
+    },
+    {
+      "path": "build/mac-unlock-review/flow.log",
+      "sha256": "446dda7d1739651f45531322184d90a35ecf08dff49f40fef52fc3ba1ef6adc0",
+      "bytes": 556
+    },
+    {
+      "path": "build/mac-unlock-review/swift-release-build.log",
+      "sha256": "c9aca926b0b8e3a752d97251586162404072f1a26c9b881acb488d4aa3eb5393",
+      "bytes": 255
+    },
+    {
+      "path": "build/mac-unlock-review/visual-render-v2.log",
+      "sha256": "21a6a70396d6dd594a9750e11197f07650c01e0f988e16ba256ec0304f61ade1",
+      "bytes": 134
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-1180x680.png",
+      "sha256": "a1cd55b477f010831edcc1b4795ea21b9165039d72733da1fb9baae5edb5a258",
+      "bytes": 350339
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-1180x820.png",
+      "sha256": "e0bbe583102e0721e089c87a0eba769ebf72fcae74a4edf882c1972102ed7703",
+      "bytes": 362405
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-1440x1000.png",
+      "sha256": "b4131018ea3bc0f544ef74e45341fe4654087cbb5cda09aedb8ebcc8e034dfb5",
+      "bytes": 398353
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-375x844.png",
+      "sha256": "4b99fc791e9fb757a398c9f41916ea7399b65aa15de353080c68a8db50c93155",
+      "bytes": 328141
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-768x900.png",
+      "sha256": "3f901a4170c0a2fd836104e1a8946f1c24837eefa179ae76e440bfee2a84a51c",
+      "bytes": 348050
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-820x640.png",
+      "sha256": "658d2c03f720e38ff3246078e243d7212496a2e2a9548c5c1b87ace8e5b4cab2",
+      "bytes": 333453
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-exhausted-1180x680.png",
+      "sha256": "77ae7fcc194f789505b5a9c6c219410e0baa13708f121521afd62b4521e7381b",
+      "bytes": 468845
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-exhausted-1180x820.png",
+      "sha256": "fdcfada0cd25172fea3ddc19cc14883791c884c2e741ee30c9115131a17fcb93",
+      "bytes": 512174
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-exhausted-1440x1000.png",
+      "sha256": "8c90b85535d886b177500302ee13101f2f3fb741c80fba9fea32470dea91be16",
+      "bytes": 571133
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-exhausted-375x844.png",
+      "sha256": "137f0cd3918b61643659ba8f35ae0d6302ef3bd9762b895163e6b44fbdf36b90",
+      "bytes": 410935
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-exhausted-768x900.png",
+      "sha256": "7371a65203ace2760ce021c8f879154be1d1e245663670fd1ab7aec6f752381f",
+      "bytes": 517147
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-exhausted-820x640.png",
+      "sha256": "a91eda7d45c538a42be9f9f5d8c0c311152d85e6309c7c89e291caa0c0ede67d",
+      "bytes": 400366
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-final-1180x680.png",
+      "sha256": "d1bd2b9d9dfbac1e85a48aa47beb9000f4dd866fc7b9d728c022ff38ef43535f",
+      "bytes": 375798
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-final-1180x820.png",
+      "sha256": "18b96011a2a5684c873d7e29494c6dd990fc33b1728599e531e83eeac426a858",
+      "bytes": 388558
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-final-1440x1000.png",
+      "sha256": "59a461847c951fc933f8278aa2abfdec18ed1d809501fbdeb1c00d5c1436fdb9",
+      "bytes": 424830
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-final-375x844.png",
+      "sha256": "462325f4c0aa76a33b01a25d2dae0edfc655f2d16a1167bd245a0b9727bd2adc",
+      "bytes": 356814
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-final-768x900.png",
+      "sha256": "10d47954d38b3046d8ff144adc71fad27007f2bc25ff9814d38cb111645f28bc",
+      "bytes": 368778
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-final-820x640.png",
+      "sha256": "933bfbbde0939e0593d5dba26c0d2a57533aa38f0cf9c5a35d41dd44e51a9ff3",
+      "bytes": 353768
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-retry-1180x680.png",
+      "sha256": "359f54fc2e336eada611c956ee9e2a004e810cf4850245c51aa14084a0f40a8e",
+      "bytes": 376559
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-retry-1180x820.png",
+      "sha256": "aa102bf99359b84a013f659ab1a938ebd98c9e53dce63ea8a0c6953f950a4f8a",
+      "bytes": 389177
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-retry-1440x1000.png",
+      "sha256": "55d80ee5c95d2133cc22e00334de255990418aa230526b584d11327a1494c271",
+      "bytes": 425352
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-retry-375x844.png",
+      "sha256": "71ccd2df997cf7a40638d702f9a0331de63ae203c91ffbfbb4f25e822ffb2715",
+      "bytes": 357415
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-retry-768x900.png",
+      "sha256": "00d23effb1cb5670178a4b14385bacf9df00b6de2a566a5d249ad2a0e5a4f21a",
+      "bytes": 369485
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-password-retry-820x640.png",
+      "sha256": "6163905f65ae753ddda781086c354edfcb59a77ef95ad1b66032c5ac5d5a6f9b",
+      "bytes": 354454
+    },
+    {
+      "path": "build/mac-unlock-review/visual/mac-review-render-receipt.json",
+      "sha256": "9c382acf4ade00c2567703f5dba1e45e4c4c120ac0ccc8ec8b3ffb38c5083b1e",
+      "bytes": 4912
+    }
+  ],
+  "visuallyReviewed": [
+    "mac-password-1180x820.png",
+    "mac-password-retry-1180x820.png",
+    "mac-password-final-820x640.png",
+    "mac-password-exhausted-1180x820.png",
+    "mac-password-retry-375x844.png",
+    "mac-password-exhausted-820x640.png",
+    "mac-password-final-768x900.png",
+    "mac-password-retry-1440x1000.png"
+  ],
+  "checks": {
+    "cryptoRecoveryTests": 12,
+    "macFlow": "passed",
+    "macFullModel": "passed",
+    "syntheticRows": 311149,
+    "syntheticPages": 3114,
+    "periodicAuthorizationCycles": 2,
+    "swiftArm64ReleaseBuild": "passed",
+    "offscreenRenders": 24,
+    "diffWhitespace": "passed"
+  },
+  "releaseDependencies": {
+    "portablePackage": "not_yet_qualified",
+    "appleNotarization": "HTTP403_required_agreement_missing_or_expired",
+    "accountHolderResponse": "will_review_not_confirmed_accepted",
+    "signedDownloadedAppAcceptance": "pending",
+    "customerDeviceAcceptance": "not_performed",
+    "customerRootCause": "unproven",
+    "standaloneDiagnosticMaterials": "unavailable"
+  },
+  "exclusions": [
+    "No customer backup or device access",
+    "No customer account Save or reset",
+    "No private key export",
+    "No production feed or website change",
+    "No signed or public Mac release"
+  ]
+}

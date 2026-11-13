@@ -43,6 +43,10 @@ struct CollectorModelChecks {
         try directLaunchRequiresApproval()
         try storageRecoveryInvalidatesApproval()
         try terminalEventsInvalidateApproval()
+        try backupUnlockPromptDecoding()
+        try backupUnlockRequiresFreshAuthority()
+        try backupUnlockRejectsOutOfOrderPrompts()
+        try backupUnlockFencesPendingSubmissions()
         try residueInspectionDoesNotRequireConsent()
         try storageReasons()
         try encryptionPreflightReasons()
@@ -304,14 +308,161 @@ struct CollectorModelChecks {
     }
 
     /// A model whose one-approval run was claimed through the production client and a simulated server.
-    private static func approvedModel(commandWriter: ((Data) -> Void)? = nil) throws -> (CollectorModel, SimulatedPhoneRunServer) {
+    private static func approvedModel(commandWriter: ((Data) -> Void)? = nil,
+                                      admissionProtocol: PhoneRunAdmissionProtocol = .legacy) throws -> (CollectorModel, SimulatedPhoneRunServer) {
         let server = SimulatedPhoneRunServer()
         let model = CollectorModel(commandWriter: commandWriter,
-                                   runAuthority: PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate))
+                                   runAuthority: PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate,
+                                                                        admissionProtocol: admissionProtocol))
         let run = server.createRun()
         guard let link = PhoneRunLink(url: server.appLink(run)), model.admitRunLink(PendingRunLink(link: link, returnBrowserBundleID: nil)),
               model.runApproval == .approved else { throw RecoveryCheckError.failed("Synthetic run claim must succeed") }
         return (model, server)
+    }
+
+    private static func startEncryptedCollection(_ model: CollectorModel) throws {
+        try require(model.startCollection(), "Synthetic collection must start with a read-only check")
+        model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
+        model.finished(mode: "backup-encryption-status", code: 0)
+        try require(model.phase == .connecting && model.operationID != nil && model.phoneRun?.collectionStarted == true,
+                    "Synthetic encrypted collection needs a live admitted operation")
+    }
+
+    private static func backupUnlockPrompt(_ attempt: Int) throws -> AgentEvent {
+        let reason = attempt == 1 ? "" : #","reason":"backup_unlock_failed""#
+        return try event(#"{"kind":"state","state":"password_required","attempt":\#(attempt),"maxAttempts":3\#(reason)}"#)
+    }
+
+    private static func backupUnlockPromptDecoding() throws {
+        for attempt in 1...3 {
+            let prompt = try backupUnlockPrompt(attempt)
+            try require(prompt.attempt == attempt && prompt.maxAttempts == 3, "The helper's attempt bounds must decode")
+        }
+        let malformed = [
+            #""attempt":1"#, #""attempt":true,"maxAttempts":3"#, #""attempt":1.0,"maxAttempts":3"#,
+            #""attempt":"1","maxAttempts":3"#, #""attempt":1,"maxAttempts":2"#, #""attempt":4,"maxAttempts":3"#,
+            #""attempt":2,"maxAttempts":3"#, #""attempt":1,"maxAttempts":3,"reason":"backup_unlock_failed""#,
+            #""attempt":2,"maxAttempts":3,"reason":"different_failure""#, #""attempt":1,"maxAttempts":3,"extra":null"#
+        ]
+        for fields in malformed {
+            let decoded = try? event(#"{"kind":"state","state":"password_required",\#(fields)}"#)
+            try require(decoded == nil, "Malformed backup unlock prompts must be rejected")
+        }
+    }
+
+    private static func backupUnlockRequiresFreshAuthority() throws {
+        var commands: [Data] = []
+        let (model, server) = try approvedModel(commandWriter: { commands.append($0) }, admissionProtocol: .preparation)
+        try startEncryptedCollection(model)
+        model.receive(try backupUnlockPrompt(1))
+        let operation = model.operationID
+        let statusPath = PhoneRunContract.preparationStatusPath
+        server.holdPaths.insert(statusPath)
+        // Both decomposed UTF-8 and surrounding whitespace must reach the helper exactly.
+        let password = " " + String(repeating: "e\u{0301}", count: 255) + " "
+        model.password = password + " "
+        model.submitPassword()
+        try require(commands.isEmpty && server.heldReplyCount(for: statusPath) == 0,
+                    "Password length is measured in Unicode scalars, as in Python")
+        model.password = password
+        model.submitPassword()
+        model.submitPassword()
+        try require(commands.isEmpty && server.heldReplyCount(for: statusPath) == 1,
+                    "A submitted password must wait for fresh status on the admitted operation")
+        server.releaseHeldReplies(path: statusPath)
+        guard commands.count == 1, let firstCommand = try JSONSerialization.jsonObject(with: commands[0]) as? [String: String]
+        else { throw RecoveryCheckError.failed("Expected one password command on the local helper pipe") }
+        try require(firstCommand["action"] == "password" &&
+                    firstCommand["value"].map { Array($0.utf8) } == Array(password.utf8) &&
+                    model.password.isEmpty && model.phase == .processing,
+                    "A current approval releases exactly one unmodified password through the helper pipe")
+        for request in server.requests where request.path == statusPath {
+            let fields = try JSONSerialization.jsonObject(with: request.body) as? [String: String]
+            try require(fields.map { Set($0.keys) } == ["runId", "capability"],
+                        "The remote status request carries only the run identity and capability")
+        }
+
+        for attempt in 2...3 {
+            model.receive(try backupUnlockPrompt(attempt))
+            try require(model.phase == .passwordRequired && model.backupUnlockAttempt == attempt &&
+                        model.backupUnlockMaximum == 3 && model.operationID == operation &&
+                        model.password.isEmpty && model.statusDetail.contains("encryption keys"),
+                        "An ordered retry keeps the original operation and requires a fresh password")
+            model.password = "synthetic retry fixture"
+            model.submitPassword()
+            try require(commands.count == attempt && model.phase == .processing, "Each retry needs a fresh explicit submission")
+        }
+        model.receive(try event(#"{"kind":"error","code":"backup_password","stage":"processing"}"#))
+        try require(model.phase == .error && model.errorMessage.contains("All 3 attempts") &&
+                    model.safeSupportCode.contains("|processing|backup_password|") && model.phoneRun == nil &&
+                    model.password.isEmpty && model.backupUnlockAttempt == 0,
+                    "Exhaustion is terminal and retains the safe support code without retaining password state")
+    }
+
+    private static func backupUnlockRejectsOutOfOrderPrompts() throws {
+        let legacy = try event(#"{"kind":"state","state":"password_required"}"#)
+        var unauthorizedCommands: [Data] = []
+        let unauthorized = CollectorModel(commandWriter: { unauthorizedCommands.append($0) })
+        unauthorized.receive(legacy)
+        unauthorized.password = "synthetic unauthorized fixture"
+        unauthorized.submitPassword()
+        try require(unauthorized.phase == .idle && unauthorizedCommands.isEmpty,
+                    "An unowned legacy prompt cannot solicit or submit a password")
+
+        for sequence in [[2], [1, 1], [1, 2], [0, 2]] {
+            var commands: [Data] = []
+            let (model, _) = try approvedModel(commandWriter: { commands.append($0) })
+            try startEncryptedCollection(model)
+            for attempt in sequence {
+                model.receive(try attempt == 0 ? legacy : backupUnlockPrompt(attempt))
+                if attempt == 0 {
+                    try require(model.backupUnlockMaximum == 1, "A legacy prompt permits exactly one attempt")
+                    model.password = "synthetic legacy fixture"
+                    model.submitPassword()
+                }
+            }
+            model.password = "synthetic rejected fixture"
+            model.submitPassword()
+            try require(model.phase == .error && commands.count == (sequence.first == 0 ? 1 : 0),
+                        "Skipped, replayed and mixed-version prompts must stop the operation")
+        }
+    }
+
+    private static func backupUnlockFencesPendingSubmissions() throws {
+        let path = PhoneRunContract.preparationStatusPath
+        for fence in ["cancelled", "expired", "revoked", "replacement", "operation", "uncertain", "EOF", "next-prompt"] {
+            var commands: [Data] = []
+            let (model, server) = try approvedModel(commandWriter: { commands.append($0) }, admissionProtocol: .preparation)
+            try startEncryptedCollection(model)
+            let run = model.phoneRun!
+            let operation = model.operationID!
+            model.receive(try backupUnlockPrompt(1))
+            if fence == "revoked" { server.revoke(run.runID) }
+            if fence == "replacement" { server.changeApproval(run.runID) }
+            if fence == "operation" { server.forceOperation(run.runID, operationID: UUID().uuidString.lowercased()) }
+            if fence == "uncertain" { server.faultsByPath[path] = [.dropRequest, .dropRequest, .dropRequest] }
+            server.holdPaths.insert(path)
+            model.password = "synthetic fenced fixture"
+            model.submitPassword()
+            try require(model.checkingPasswordApproval && commands.isEmpty, "The pending approval must fence each password write")
+            if fence == "cancelled" { model.disconnect() }
+            if fence == "expired" { model.now = { run.claim.expiresAt } }
+            if fence == "EOF" { model.handleHelperOutput(Data(), operation: operation, mode: "connect") }
+            if fence == "next-prompt" { model.receive(try backupUnlockPrompt(2)) }
+            server.releaseHeldReplies(path: path)
+            let passwordCommands = try commands.compactMap { try JSONSerialization.jsonObject(with: $0) as? [String: String] }
+                .filter { $0["action"] == "password" }
+            try require(passwordCommands.isEmpty && model.password.isEmpty && !model.checkingPasswordApproval,
+                        "A \(fence) fence must clear the pending input without writing it")
+            if fence == "uncertain" {
+                try require(model.runStatus == .uncertain && model.phase == .passwordRequired,
+                            "A transient check failure retains the same prompt for a fresh explicit action")
+                model.password = "synthetic resume fixture"
+                model.submitPassword()
+                try require(model.phase == .processing && model.operationID == operation && commands.count == 1,
+                            "A successful fresh check may resume the same operation")
+            }
+        }
     }
 
     private static func explicitApprovalBindsFreshRun() throws {
@@ -597,6 +748,47 @@ struct CollectorModelChecks {
         try require(pollingServer.statusCount >= 2 && polled.phoneRun == nil && !polled.helperRunning &&
                     polled.runStatus == .revoked && !polled.startCollection(),
                     "Periodic current-status polling terminates the owned helper on explicit revocation")
+
+        // Check a real broken pipe while the child is still alive, with no password echo or disk write.
+        let closedInputSource = #"""
+        #!/bin/sh
+        case "$1" in
+            backup-encryption-status)
+                [ "$#" -eq 1 ] || exit 1
+                printf '%s\n' '{"kind":"backup-encryption-status","backupEncrypted":true}'
+                ;;
+            connect)
+                [ "$#" -eq 3 ] && [ "$2" = "--retry-backup-unlock" ] && [ "$3" = "--require-encrypted-backup" ] || exit 1
+                exec 0<&-
+                printf '%s\n' '{"kind":"state","state":"password_required","attempt":1,"maxAttempts":3}'
+                /bin/sleep 1
+                ;;
+            inspect)
+                [ "$#" -eq 1 ] || exit 1
+                printf '%s\n' '{"kind":"residue","sessions":[]}'
+                ;;
+        esac
+        """#
+        try Data(closedInputSource.utf8).write(to: helper, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        let (broken, _) = try approvedModel()
+        try require(broken.startCollection(), "The closed-input fixture must start an encrypted operation")
+        let promptDeadline = Date().addingTimeInterval(3)
+        while broken.phase != .passwordRequired && Date() < promptDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try require(broken.phase == .passwordRequired, "Only connect opts in to the retry flag")
+        broken.password = "synthetic closed pipe fixture"
+        broken.submitPassword()
+        try require(broken.phase == .error && broken.errorMessage.contains("local connection closed") &&
+                    broken.password.isEmpty && broken.needsStorageReview && broken.phoneRun == nil,
+                    "A closed pipe must not kill the app, overwrite its terminal error or retain the password")
+        let cleanupDeadline = Date().addingTimeInterval(4)
+        while broken.helperRunning && Date() < cleanupDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        try require(broken.phase == .error && !broken.helperRunning && !broken.needsStorageReview,
+                    "The failure must survive helper exit and successful residue inspection")
     }
 
     private static func storageReasons() throws {

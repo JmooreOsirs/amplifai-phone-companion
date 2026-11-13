@@ -19,7 +19,8 @@ struct RenderMacReviewAcceptance {
         let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
         let nativeStates = ["native-claiming", "native-claim-uncertain", "native-consent", "native-consent-checked",
                             "native-approving", "native-approval-uncertain", "native-refused", "native-expired"]
-        let setupStates = ["setup"] + nativeStates + runStates + guideStates + ["password", "error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let unlockStates = ["password", "password-retry", "password-final", "password-exhausted"]
+        let setupStates = ["setup"] + nativeStates + runStates + guideStates + unlockStates + ["error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "organizing", "history", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
@@ -197,7 +198,32 @@ struct RenderMacReviewAcceptance {
                         }
                     }
                 }
-            } else if state == "password" { model.phase = .passwordRequired }
+            } else if unlockStates.contains(state) {
+                try admit()
+                guard model.startCollection() else { throw FixtureError.unexpectedState("\(state): start") }
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+                let maximum = state == "password" ? 1 : state == "password-retry" ? 2 : 3
+                for attempt in 1...maximum {
+                    var prompt: [String: Any] = ["kind": "state", "state": "password_required", "attempt": attempt, "maxAttempts": 3]
+                    if attempt > 1 { prompt["reason"] = "backup_unlock_failed" }
+                    model.receive(try AgentEvent.decode(JSONSerialization.data(withJSONObject: prompt)))
+                    guard model.phase == .passwordRequired, model.backupUnlockAttempt == attempt else {
+                        throw FixtureError.unexpectedState("\(state): unlock attempt \(attempt)")
+                    }
+                    if attempt < maximum || state == "password-exhausted" {
+                        model.password = "SYNTHETIC fixture"
+                        model.submitPassword()
+                    }
+                }
+                if state == "password-exhausted" {
+                    model.receive(try AgentEvent.decode(Data(#"{"kind":"error","code":"backup_password","stage":"processing"}"#.utf8)))
+                    model.finished(mode: "connect", code: 1)
+                    guard model.phase == .error, model.errorMessage.contains("All 3 attempts") else {
+                        throw FixtureError.unexpectedState("\(state): expected exhausted attempt")
+                    }
+                }
+            }
             else if state == "error" { model.phase = .error; model.errorMessage = "The iPhone connection ended. Your source choices have not been saved." }
             else if state == "completed" { model.phase = .completed }
             else if state == "connecting" { model.phase = .connecting }
@@ -267,7 +293,8 @@ struct RenderMacReviewAcceptance {
                     ["kind": "residue", "sessions": [], "sourceDiagnosticHistory": [attempt]])))
             }
             guard model.accountNavigationID == nil, !model.helperRunning,
-                  model.operationID == nil || ["connecting", "agree-checking", "active-transfer"].contains(state) || !setupStates.contains(state) else {
+                  model.operationID == nil || (["connecting", "agree-checking", "active-transfer"] + unlockStates).contains(state) ||
+                    !setupStates.contains(state) else {
                 throw FixtureError.unexpectedState("Fixture must not request account navigation or start the helper")
             }
             stateEvidence[state] = ["phase": String(describing: model.phase), "reviewPending": model.reviewPending,
