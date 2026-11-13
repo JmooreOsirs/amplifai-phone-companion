@@ -943,7 +943,16 @@ class PhoneWindow:
 
     def send_password(self) -> None:
         try:
-            self.state.write_password(self.password.get(), self.helper.stdin)
+            if self.native_active:
+                self.native.timeout()
+            if self.native_active and (not self.native.current or not self.native.started
+                    or self.native.phase != "collecting" or self.native.authority != "current"):
+                self.send(self.state.request_stop())
+                self.helper.close_input()
+                self.state.status = ("No password was sent because collection approval is no longer current. "
+                                     "Keep this app open while the helper stops and temporary data is checked.")
+            else:
+                self.state.write_password(self.password.get(), self.helper.stdin)
         except ProtocolError:
             self.state.status = "No password was sent. Enter the requested backup password."
         except (OSError, RuntimeError, ValueError):

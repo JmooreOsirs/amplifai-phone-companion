@@ -28,10 +28,14 @@ NAME = "AmplifaiDecryptionQualification"
 MODULES = {
     "agent_entry": "collector/agent_entry.py",
     **{f"amplifai_phone.{name}": f"collector/amplifai_phone/{name}.py" for name in (
-        "agent", "helper_protocol", "capture_runtime", "backup_files", "ios_backup",
+        "agent", "helper_protocol", "capture_runtime", "backup_files", "ios_backup", "backup_stream", "backup_watchdog",
         "metadata", "record_store", "workspace", "source_diagnostics", "call_accounting", "__main__",
     )},
 }
+SAME_BACKUP_CASES = (
+    "same-backup-wrong-correct", "same-backup-max-attempts", "same-backup-cancel",
+    "same-backup-keybag-corrupt", "same-backup-manifest-invalid",
+)
 CASES = (
     "valid", "unicode", "combining", "spaces", "maximum-password",
     "wrong_password", "keybag_corrupt",
@@ -40,6 +44,7 @@ CASES = (
     *(f"{source}_{failure}" for source in ("calls", "messages")
       for failure in ("key", "short_key", "missing_class", "padding", "wal_key", "shm_key")),
     "both_optional_keys",
+    *SAME_BACKUP_CASES,
 )
 PASSWORDS = {
     "unicode": "Fictional café 漢字 🔐",
@@ -57,9 +62,9 @@ def password_for(case: str) -> str:
 
 
 def expected_error(case: str) -> str | None:
-    if case in {"wrong_password", "keybag_corrupt"}:
+    if case in {"wrong_password", "keybag_corrupt", "same-backup-max-attempts", "same-backup-keybag-corrupt"}:
         return "backup_password"
-    if case.startswith("manifest_"):
+    if case.startswith("manifest_") or case == "same-backup-manifest-invalid":
         return "backup_control_invalid"
     if case.startswith("contacts_"):
         return "selected_payload_crypto"
@@ -81,12 +86,79 @@ def commands(case: str) -> bytes:
     session.exited(0)
     session.approve(True)
     session.begin("connect")
-    session.handle({"kind": "state", "state": "password_required"})
     stream = io.StringIO()
-    session.write_password(WRONG_PASSWORD if case == "wrong_password" else password_for(case), stream)
+    if case in SAME_BACKUP_CASES:
+        for attempt, password in enumerate(same_backup_passwords(case), 1):
+            session.handle({"kind": "state", "state": "password_required", "attempt": attempt,
+                            "maxAttempts": 3, **({"reason": "backup_unlock_failed"} if attempt > 1 else {})})
+            session.write_password(password, stream)
+        if case in {"same-backup-max-attempts", "same-backup-manifest-invalid"}:
+            # Deliberate extra input must remain unread after the bounded/fatal failure.
+            stream.write(json.dumps({"action": "password", "value": DEFAULT_PASSWORD}) + "\n")
+        if case == "same-backup-cancel":
+            stream.write('{"action":"disconnect"}\n')
+            return stream.getvalue().encode("utf-8")
+    else:
+        session.handle({"kind": "state", "state": "password_required"})
+        session.write_password(WRONG_PASSWORD if case == "wrong_password" else password_for(case), stream)
     for frame in ({"action": "review", "ids": [1]}, {"action": "disconnect"}):
         stream.write(json.dumps(frame, ensure_ascii=False) + "\n")
     return stream.getvalue().encode("utf-8")
+
+
+def same_backup_passwords(case: str) -> list[str]:
+    return {
+        "same-backup-wrong-correct": [WRONG_PASSWORD, DEFAULT_PASSWORD],
+        "same-backup-max-attempts": [WRONG_PASSWORD] * 3,
+        "same-backup-cancel": [WRONG_PASSWORD],
+        "same-backup-keybag-corrupt": [DEFAULT_PASSWORD] * 3,
+        "same-backup-manifest-invalid": [DEFAULT_PASSWORD],
+    }[case]
+
+
+def fictional_live_acquisition(case: str, sessions_root: Path, state: dict):
+    """Keep production collection/retry orchestration; replace USB acquisition only."""
+    from unittest.mock import patch
+    from amplifai_phone.ios_backup import parse_selected_backup
+    from synthetic_encrypted_backup_fixture import acquisition
+
+    variant = {"same-backup-keybag-corrupt": "keybag_corrupt",
+               "same-backup-manifest-invalid": "manifest_key"}.get(case, "valid")
+    state.update(acquisitionCount=0, parseAttempts=0, passwordPrompts=0,
+                 sameCompletedBackup=True, passwordUnchanged=True)
+    expected_passwords = same_backup_passwords(case)
+
+    async def collect(**options):
+        provider = options["password_provider"]
+
+        def password_provider():
+            index = state["passwordPrompts"]
+            state["passwordPrompts"] += 1
+            supplied = provider()
+            state["passwordPipeConsumed"] = True
+            state["passwordUnchanged"] &= (index < len(expected_passwords) and supplied == expected_passwords[index])
+            return supplied
+
+        def parse(*args, **kwargs):
+            state["parseAttempts"] += 1
+            path = args[0]
+            if "backupPath" in state:
+                state["sameCompletedBackup"] &= path == state["backupPath"]
+            else:
+                state["backupPath"] = path
+            state["paths"].append(path.parent)
+            return parse_selected_backup(*args, **kwargs)
+
+        options["password_provider"] = password_provider
+        with acquisition(sessions_root, variant, DEFAULT_PASSWORD) as (collector, service), patch(
+            "amplifai_phone.ios_backup.parse_selected_backup", new=parse
+        ):
+            try:
+                state["capture"] = await collector(**options)
+                return state["capture"]
+            finally:
+                state["acquisitionCount"] = service.backup.await_count
+    return collect
 
 
 def fictional_acquisition(case: str, sessions_root: Path, state: dict):
@@ -158,11 +230,16 @@ def run_case(case: str, proof: Path, sessions_root: Path, manifest: dict | None 
         # actual storage to this fixture's root before they can perform I/O.
         kwargs["diagnostic_history"] = DiagnosticHistory(sessions_root)
         kwargs["call_accounting_history"] = CallAccountingHistory(sessions_root)
-        return original(source, sink, collector=fictional_acquisition(case, sessions_root, state), **kwargs)
+        collector = (fictional_live_acquisition(case, sessions_root, state) if case in SAME_BACKUP_CASES
+                     else fictional_acquisition(case, sessions_root, state))
+        result = original(source, sink, collector=collector, **kwargs)
+        if case in {"same-backup-max-attempts", "same-backup-manifest-invalid"}:
+            state["unusedPasswordNotRead"] = DEFAULT_PASSWORD in source.read()
+        return result
 
     agent.run_connect = injected
     original_argv = sys.argv
-    sys.argv = [sys.argv[0], "connect"]
+    sys.argv = [sys.argv[0], "connect", *(["--retry-backup-unlock"] if case in SAME_BACKUP_CASES else [])]
     try:
         result = agent_entry.main()
     finally:
@@ -180,6 +257,8 @@ def run_case(case: str, proof: Path, sessions_root: Path, manifest: dict | None 
             "passwordUnchanged": state["passwordUnchanged"], "ownedCleanup": cleaned,
             "forcedInitialEncoding": "cp1252", "finalStdinEncoding": sys.stdin.encoding,
             "finalStdoutEncoding": sys.stdout.encoding, "productionModules": modules,
+            **{key: state[key] for key in ("acquisitionCount", "parseAttempts", "passwordPrompts",
+                                          "sameCompletedBackup", "unusedPasswordNotRead") if key in state},
         }, sort_keys=True), encoding="utf-8")
     return result
 
@@ -195,17 +274,39 @@ def check_case(case: str, result: subprocess.CompletedProcess, proof: dict) -> d
     captures = [packet for packet in packets if packet.get("kind") == "capture"]
     reviews = [packet for packet in packets if packet.get("kind") == "review"]
     code = expected_error(case)
-    if result.returncode != (1 if code else 0):
+    expected_exit = 130 if case == "same-backup-cancel" else 1 if code else 0
+    if result.returncode != expected_exit:
         raise AssertionError("Decryption fixture exit differs from expected")
     if not all(proof[key] for key in ("passwordPipeConsumed", "passwordUnchanged", "ownedCleanup")):
         raise AssertionError("Password transmission or owned workspace cleanup failed")
     if proof["finalStdinEncoding"] != "utf-8" or proof["finalStdoutEncoding"] != "utf-8":
         raise AssertionError("Production entry did not enforce strict UTF-8 pipes")
+    recovery = {}
+    if case in SAME_BACKUP_CASES:
+        passwords = same_backup_passwords(case)
+        prompt_count = len(passwords) + int(case == "same-backup-cancel")
+        recovery = {"acquisitionCount": 1, "parseAttempts": len(passwords),
+                    "passwordPrompts": prompt_count, "sameCompletedBackup": True}
+        if any(proof.get(key) != value for key, value in recovery.items()):
+            raise AssertionError("Recovery did not use bounded attempts against one completed backup")
+        prompts = [packet for packet in packets if packet.get("state") == "password_required"]
+        expected_prompts = [{"kind": "state", "state": "password_required", "attempt": attempt,
+                             "maxAttempts": 3, **({"reason": "backup_unlock_failed"} if attempt > 1 else {})}
+                            for attempt in range(1, prompt_count + 1)]
+        if prompts != expected_prompts:
+            raise AssertionError("Recovery prompt sequence changed")
+        if case in {"same-backup-max-attempts", "same-backup-manifest-invalid"} and not proof.get("unusedPasswordNotRead"):
+            raise AssertionError("Recovery consumed a password after its terminal boundary")
+    if case == "same-backup-cancel":
+        if errors or captures or reviews or packets[-1] != {"kind": "state", "state": "cancelled"}:
+            raise AssertionError("Retry cancellation did not stop without partial capture")
+        return {"case": case, "exitCode": 130, "capturePackets": 0,
+                "passwordPipeUnchanged": True, "ownedCleanup": True, **recovery}
     if code:
         if errors != [{"kind": "error", "code": code, "stage": "processing"}] or captures or reviews:
             raise AssertionError("Required decryption failure did not remain fatal and stage-bound")
         return {"case": case, "exitCode": 1, "error": errors[0], "capturePackets": 0,
-                "passwordPipeUnchanged": True, "ownedCleanup": True}
+                "passwordPipeUnchanged": True, "ownedCleanup": True, **recovery}
     missing = unavailable_sources(case)
     reasons = {source: "selected_payload_crypto" for source in missing}
     if errors or len(captures) != 1 or len(reviews) != 1:
@@ -230,7 +331,7 @@ def check_case(case: str, result: subprocess.CompletedProcess, proof: dict) -> d
         raise AssertionError("Local selection review lost optional unavailability")
     return {"case": case, "exitCode": 0, "capturePackets": 1, "reviewPackets": 1,
             "missingSources": missing, "unavailableReasons": reasons,
-            "passwordPipeUnchanged": True, "ownedCleanup": True}
+            "passwordPipeUnchanged": True, "ownedCleanup": True, **recovery}
 
 
 def production_manifest(source: Path, helper: Path) -> dict:

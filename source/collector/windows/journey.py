@@ -40,6 +40,8 @@ def journey(state, native):
                 for item in state.source_diagnostics):
             heading = "Messages could not be validated"
         detail = native.message
+        if native.phase == "failed" and state.backup_unlock_failure_detail:
+            heading, detail = "Backup could not be unlocked", state.backup_unlock_failure_detail
         if native.phase == "failed" and state.failure_summary:
             detail += "\n\n" + state.failure_summary
         return attention(state, native, step, heading, detail)

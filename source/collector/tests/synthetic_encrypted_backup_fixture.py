@@ -9,12 +9,14 @@ import plistlib
 import sqlite3
 import struct
 import tempfile
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from amplifai_phone.agent import run_connect
-from amplifai_phone.ios_backup import DATABASES, HOME_DOMAIN, parse_selected_backup
+from amplifai_phone.ios_backup import DATABASES, HOME_DOMAIN, collect_iphone, parse_selected_backup
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.keywrap import aes_key_wrap
@@ -62,6 +64,11 @@ def keybag(password, variant):
     if variant == "keybag_missing_tlv":
         group.pop(3)
     result = b"".join(tlv(*item) for item in root + group)
+    if variant == "keybag_second_class_corrupt":
+        result += b"".join(tlv(*item) for item in [
+            (b"UUID", b"z" * 16), (b"CLAS", 2), (b"WRAP", 2),
+            (b"KTYP", 0), (b"WPKY", flip(wrapped)),
+        ])
     if variant == "keybag_truncated":
         result = result[:-7]
     return result
@@ -174,6 +181,38 @@ def fixture(root, password, variant):
     )
     for name in ("Info.plist", "Status.plist"):
         (root / name).write_bytes(plistlib.dumps({}))
+
+
+@contextmanager
+def acquisition(root, variant="valid", password=SYNTHETIC_PASSWORD):
+    """Mock one USB acquisition while retaining production unlock and cleanup."""
+    device = SimpleNamespace(is_usb=True, is_network=False,
+                             connection_type="USB", serial="SYNTHETIC-UNLOCK")
+    lockdown = MagicMock()
+    lockdown.udid = device.serial
+    lockdown.__aenter__ = AsyncMock(return_value=lockdown)
+    lockdown.__aexit__ = AsyncMock(return_value=False)
+    service = MagicMock()
+    service.__aenter__ = AsyncMock(return_value=service)
+    service.__aexit__ = AsyncMock(return_value=False)
+    service.service._ensure_started = AsyncMock(return_value=(MagicMock(), MagicMock()))
+    service.resolve_backup_selection.return_value = ("synthetic-selection",)
+
+    async def backup(**options):
+        fixture(Path(options["backup_directory"]) / device.serial, password, variant)
+
+    service.backup = AsyncMock(side_effect=backup)
+
+    async def collector(**options):
+        return await collect_iphone(**options, sessions_root=root,
+                                    now=datetime(2026, 11, 13, tzinfo=UTC))
+
+    with (
+        patch("pymobiledevice3.usbmux.list_devices", new=AsyncMock(return_value=[device])),
+        patch("pymobiledevice3.lockdown.create_using_usbmux", new=AsyncMock(return_value=lockdown)),
+        patch("pymobiledevice3.services.mobilebackup2.Mobilebackup2Service", return_value=service),
+    ):
+        yield collector, service
 
 
 def probe(variant="valid", password=SYNTHETIC_PASSWORD, entered=None):

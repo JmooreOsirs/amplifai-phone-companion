@@ -22,6 +22,7 @@ CRYPTO_UNAVAILABLE_SCENARIOS = {
     "reviewed-messages-crypto": ("messages",),
     "reviewed-both-crypto": ("calls", "messages"),
 }
+PASSWORD_SCENARIOS = {"password": 1, "password-retry": 2, "password-final-attempt": 3}
 
 
 def pending():
@@ -149,7 +150,7 @@ def scenarios():
     run.checked_backup_setting(True)
     run.complete(run.start(), Outcome("uncertain"))
     yield "start-uncertain", run, inspected()
-    for name in ("connecting", "collecting", "password", "processing"):
+    for name in ("connecting", "collecting", *PASSWORD_SCENARIOS, "processing"):
         run, _ = started()
         state = collecting()
         if name != "connecting":
@@ -157,12 +158,30 @@ def scenarios():
                           "retainedBytes": 1_210_988_643, "discardedBytes": 70_997_921_824,
                           "filesReceived": 81_371, "elapsedSeconds": 11_803.0, "bytesPerSecond": 6_117_860.0})
             state.handle({"kind": "progress", "value": 100})
-        if name == "password":
-            state.handle({"kind": "state", "state": "password_required"})
+        if name in PASSWORD_SCENARIOS:
+            for attempt in range(1, PASSWORD_SCENARIOS[name] + 1):
+                if attempt > 1:
+                    state.handle({"kind": "state", "state": "processing"})
+                    state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 0})
+                state.handle({"kind": "state", "state": "password_required", "attempt": attempt,
+                              "maxAttempts": 3, **({"reason": "backup_unlock_failed"} if attempt > 1 else {})})
         if name == "processing":
             state.handle({"kind": "state", "state": "processing"})
             state.handle({"kind": "transfer", "stage": "processing", "processedBytes": 812_441_600})
         yield name, run, state
+    run, _ = started()
+    state = collecting()
+    for attempt in (1, 2, 3):
+        state.handle({"kind": "state", "state": "password_required", "attempt": attempt,
+                      "maxAttempts": 3, **({"reason": "backup_unlock_failed"} if attempt > 1 else {})})
+        state.handle({"kind": "state", "state": "processing"})
+    state.handle({"kind": "error", "code": "backup_password", "stage": "processing"})
+    run.fail()
+    state.exited(1)
+    state.begin("inspect")
+    state.handle({"kind": "residue", "sessions": []})
+    state.exited(0)
+    yield "backup-unlock-exhausted-clean", run, state
     for name in ("contacts", "contacts-empty", "contacts-partial", "contacts-select-all"):
         run, _ = started()
         state = captured(empty=name == "contacts-empty", partial=name == "contacts-partial")

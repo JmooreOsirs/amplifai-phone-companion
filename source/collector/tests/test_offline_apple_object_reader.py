@@ -450,9 +450,9 @@ class AppleEncryptedObjectTest(unittest.TestCase):
             self.assertEqual(capture.missing_sources, ("messages",))
             self.assertEqual(capture.unavailable_reasons, (("messages", "absent"),))
 
-            from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
+            from amplifai_phone.ios_backup import BackupKeybagUnlockError
 
-            with self.assertRaises(InvalidUnwrap):
+            with self.assertRaises(BackupKeybagUnlockError):
                 parse_selected_backup(root, "wrong-synthetic-password")
 
             selected_calls_wal = fixture["encrypted_paths"]["wal"]

@@ -63,6 +63,18 @@ OPTIONAL_PAYLOAD_REASON_CODES = frozenset({
     "selected_payload_invalid", "selected_payload_size", "selected_payload_identity",
     "selected_payload_file_type", "selected_payload_length", "selected_payload_crypto",
 })
+MAX_BACKUP_UNLOCK_ATTEMPTS = 3
+
+
+class BackupKeybagUnlockError(RuntimeError):
+    """The completed backup's keybag could not be unlocked, before any records.
+
+    This does not distinguish an incorrect password from damaged backup keys.
+    Only the Keybag.from_manifest boundary may raise this retryable category.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("The encrypted backup keybag could not be unlocked")
 
 
 class BackupEncryptionPreflightError(RuntimeError):
@@ -328,6 +340,7 @@ def parse_selected_backup(
     from pyiosbackup.keybag import Keybag
     from pyiosbackup.manifest_dbs.sqlite3 import ManifestDbSqlite3
     from pyiosbackup.manifest_plist import ManifestPlist
+    from cryptography.hazmat.primitives.keywrap import InvalidUnwrap
 
     # pyiosbackup's keybag module emits derived key bytes at DEBUG level.
     logging.getLogger("pyiosbackup").setLevel(logging.WARNING)
@@ -355,9 +368,20 @@ def parse_selected_backup(
         manifest = ManifestPlist.from_path(manifest_path_on_disk)
         if manifest.is_encrypted and not password:
             raise BackupPasswordIsRequired()
-        keybag = (
-            Keybag.from_manifest(manifest, password) if manifest.is_encrypted else None
-        )
+        if bound_callback is not None:
+            bound_callback()
+        try:
+            keybag = (
+                Keybag.from_manifest(manifest, password) if manifest.is_encrypted else None
+            )
+        except InvalidUnwrap:
+            if bound_callback is not None:
+                bound_callback()
+            # Manifest and selected-file unwrap failures must never enter the
+            # password retry path. No decrypted database or record exists here.
+            raise BackupKeybagUnlockError() from None
+        if bound_callback is not None:
+            bound_callback()
         manifest_path = extracted / "manifest.sqlite3"
         try:
             copy_backup_file(
@@ -592,6 +616,7 @@ async def collect_iphone(
     transfer_callback: Callable[[dict[str, object]], None] | None = None,
     payload_diagnostic_callback: Callable[[dict[str, object]], None] | None = None,
     require_encrypted_backup: bool = False,
+    retry_backup_unlock: bool = False,
     now: datetime | None = None,
     sessions_root: Path | None = None,
 ) -> IPhoneCapture:
@@ -600,6 +625,8 @@ async def collect_iphone(
     `password_provider` is invoked only if the device reports an encrypted
     backup. It must collect the existing password in-process, never in argv,
     browser storage, logs, or a URL.
+    Windows may opt into at most three explicit attempts against this same
+    completed acquisition. Other callers keep the single-attempt default.
     """
     from pymobiledevice3.lockdown import create_using_usbmux
     from pymobiledevice3.services.mobilebackup2 import (
@@ -610,6 +637,8 @@ async def collect_iphone(
 
     from .backup_stream import bind_streamed_device_link
 
+    if type(retry_backup_unlock) is not bool:
+        raise ValueError("Invalid backup unlock recovery option")
     workspace = SessionWorkspace(sessions_root)
     watchdog = BackupWatchdog()
     watchdog.start()
@@ -678,12 +707,6 @@ async def collect_iphone(
                         ).is_encrypted
                         if require_encrypted_backup and encrypted is not True:
                             raise BackupEncryptionPreflightError("backup_encryption_changed")
-                        password = password_provider() if encrypted else ""
-                        if encrypted and not password:
-                            raise RuntimeError(
-                                "The existing encrypted-backup password is required"
-                            )
-
                         def parsing_bound() -> None:
                             watchdog.raise_if_aborted()
                             workspace.check_bound()
@@ -693,16 +716,35 @@ async def collect_iphone(
                         record_store: RecordStore | None = None
                         try:
                             record_store = RecordStore(review_root / "sanitized.sqlite3", review_workspace)
-                            parsed = parse_selected_backup(
-                                backup_path,
-                                password,
-                                now,
-                                parsing_bound,
-                                workspace=workspace,
-                                transfer_callback=transfer_callback,
-                                payload_diagnostic_callback=payload_diagnostic_callback,
-                                record_store=record_store,
-                            )
+                            attempts = MAX_BACKUP_UNLOCK_ATTEMPTS if encrypted and retry_backup_unlock else 1
+                            for attempt in range(attempts):
+                                parsing_bound()
+                                password = password_provider() if encrypted else ""
+                                try:
+                                    parsing_bound()
+                                    if encrypted and not password:
+                                        raise RuntimeError("The existing encrypted-backup password is required")
+                                    parsed = parse_selected_backup(
+                                        backup_path,
+                                        password,
+                                        now,
+                                        parsing_bound,
+                                        workspace=workspace,
+                                        transfer_callback=transfer_callback,
+                                        payload_diagnostic_callback=payload_diagnostic_callback,
+                                        record_store=record_store,
+                                    )
+                                    parsing_bound()
+                                except BackupKeybagUnlockError:
+                                    parsing_bound()
+                                    if attempt + 1 == attempts:
+                                        raise
+                                    # Only this pre-record failure can retry. The
+                                    # next iteration always asks for fresh input.
+                                    continue
+                                finally:
+                                    password = ""
+                                break
                             review_capture = IPhoneCapture(
                                 parsed.contacts, parsed.calls, parsed.messages,
                                 parsed.collected_at, parsed.since, parsed.missing_sources,

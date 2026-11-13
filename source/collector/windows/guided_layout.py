@@ -295,7 +295,8 @@ def byte_description(value):
 
 def refresh_collection(view):
     state, space = view.state, view.space
-    presentation = (state.phase, state.transfer_stage, state.transfer_bytes, view.native_active)
+    presentation = (state.phase, state.transfer_stage, state.transfer_bytes, view.native_active,
+                    state.password_attempt, state.password_max_attempts)
     if getattr(view, "_collection_presentation", None) == presentation:
         return
     view._collection_presentation = presentation
@@ -304,7 +305,7 @@ def refresh_collection(view):
     view.collection_eyebrow.configure(text=f"ON THIS PC · STAGE {active + 1} OF 4")
     view.collection_heading.configure(text=("Unlock your local backup" if state.phase == "password_required" else
         "Reading available sources" if processing else "Receiving the local backup" if active == 1 else "Connect your iPhone"))
-    view.collection_detail.configure(text=("Enter the password used to encrypt this iPhone backup." if state.phase == "password_required" else
+    view.collection_detail.configure(text=(state.password_prompt if state.phase == "password_required" else
         "Reading available contacts and activity, then cleaning up temporary backup files." if processing else
         "Keep the cable connected. The temporary backup stays on this PC." if active == 1 else
         "Connect by USB, unlock your iPhone and tap Trust if asked."))
