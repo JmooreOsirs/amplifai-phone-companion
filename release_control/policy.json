@@ -28,13 +28,13 @@
   "requiredCheckAppId": 15368,
   "codeOwners": "* @JmooreOsirs @bac1876\n",
   "releasedBuilds": {
-    "macos-arm64": "26102134",
+    "macos-arm64": "26102235",
     "macos-intel-test": "261021341"
   },
   "previousFeeds": {
     "macos-arm64": {
       "bytes": 1561,
-      "sha256": "197e359054f5177c1be9c3924033a9699c5167ae80e6a15407b3390bc093befb"
+      "sha256": "447ac209490b8d62b61b5bc11493b496f0f8c17cde71c16cc280f2f98da6584c"
     },
     "macos-intel-test": {
       "bytes": 1654,
@@ -83,6 +83,15 @@
       "version": "2026.10.22-rc35-intel1",
       "build": "261022351",
       "buildWorkflow": ".github/workflows/macos-intel.yml",
+      "qualificationProfile": "phone-run-recovery-v1",
+      "releaseAuthorized": true
+    },
+    {
+      "sourceCommit": "e269653e57b7a5ab6c9eaab215a1e5ea32c26b33",
+      "channel": "macos-arm64",
+      "version": "2026.11.13-rc36",
+      "build": "26111336",
+      "buildWorkflow": ".github/workflows/macos-arm64-check.yml",
       "qualificationProfile": "phone-run-recovery-v1",
       "releaseAuthorized": true
     }

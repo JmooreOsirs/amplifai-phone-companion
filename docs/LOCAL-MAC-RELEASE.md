@@ -9,7 +9,36 @@ This path signs an already qualified AMPLIFai Phone native build with the existi
 3. Keep the existing Developer ID identity, `AMPLIFai-notary` profile, and `ai.satoris.amplifai.phone.candidate` Sparkle account available to the same macOS user. Normal Keychain prompts are part of key use. This path does not export a private key, create a credential, add a runner or role, or weaken branch protection.
 4. Use a new absolute 0700 scratch directory and distinct new output directories outside the checkout. Put the signed delivery, scratch, and publication output in separate paths. Use the merged control implementation and exact source authorization. Keep that control SHA unchanged from signing through publication so the sealed manifest remains valid.
 
-## October 22 RC35 authorization
+## November 13 RC36 Apple Silicon authorization
+
+Native PR #54 merged normally to `e269653e57b7a5ab6c9eaab215a1e5ea32c26b33`,
+preserving reviewed head `c79bf266ab5a9afdbeacd739b39cb796cf70e5a4`.
+Required exact-head CI run `43493622975` passed. The new row authorizes only
+`macos-arm64`, version `2026.11.13-rc36`, build `26111336`, with
+`phone-run-recovery-v1`. Intel, Windows and Android release settings are unchanged.
+
+RC36 enables three explicit password attempts within one approved live backup
+acquisition, fresh authority checks before each local submission, exact input
+handling and truthful password-or-key failure copy. Integrity checks remain
+mandatory. Six prompt-driven frozen-code synthetic tests matched 14 packaged
+modules and verified one acquisition and cleanup. Full local portable preview
+qualification passed; this is not a release-mode CI artifact or customer-device
+acceptance. The reported customer's actual encryption failure remains unproven.
+
+The ARM rollback/build floor is RC35 `26102235`. Its GitHub appcast and both
+website origins returned the same 1,561 bytes with SHA-256
+`447ac209490b8d62b61b5bc11493b496f0f8c17cde71c16cc280f2f98da6584c`.
+Apple notarization history access succeeded on November 13 after an earlier
+agreement error. No RC36 notarization or publication is claimed by this policy.
+Use the new release-mode run/artifact IDs and digest for the exact native merge
+above; never substitute the local preview or historical RC35 identifiers.
+
+After public signed artifacts exist, coordinate ARM-only website admission,
+download and feed promotion using the verified publication handoff. Preserve
+the RC35 rollback assets and all other channel bytes. Physical-device testing
+remains a separate result.
+
+## October 22 RC35 authorization (historical)
 
 Native PR #29 merged normally at `2026-10-22T17:27:13Z` to
 `dfc80751b8a4a5b16fb67833727130fb2ec3d44f`, preserving reviewed head
