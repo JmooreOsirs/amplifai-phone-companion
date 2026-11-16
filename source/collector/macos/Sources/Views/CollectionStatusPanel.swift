@@ -9,14 +9,18 @@ struct CollectionStatusPanel: View {
     @State private var copyStatus = ""
     @State private var showingTechnicalDetails = false
 
-    private let stages = ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]
+    private var stages: [String] {
+        model.backupUnlockAttempt > 0
+            ? ["Connect iPhone", "Receive backup", "Unlock backup", "Read locally", "Clean up"]
+            : ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]
+    }
 
     private var activeStage: Int {
         switch model.phase {
         case .connecting: return 0
         case .transferring: return 1
-        case .processing: return 2
-        default: return 3
+        case .processing: return model.isUnlockingBackup ? 2 : stages.count - 2
+        default: return stages.count - 1
         }
     }
 
@@ -241,13 +245,14 @@ struct CollectionStatusPanel: View {
                 Image(systemName: model.phase == .processing ? "externaldrive" : "iphone.gen3")
                     .frame(maxWidth: .infinity)
                 Image(systemName: "arrow.right").font(.system(size: 28, weight: .semibold))
-                Image(systemName: model.phase == .processing ? "doc.text.magnifyingglass" : "desktopcomputer")
+                Image(systemName: model.isUnlockingBackup ? "lock" : model.phase == .processing ? "doc.text.magnifyingglass" : "desktopcomputer")
                     .frame(maxWidth: .infinity)
             }
             .font(.system(size: 46)).foregroundStyle(Brand.blue)
             .accessibilityHidden(true)
             if model.phase == .processing {
-                Label("Backup received · reading on this Mac", systemImage: "checkmark.circle.fill")
+                Label(model.isUnlockingBackup ? "Backup received · checking unlock on this Mac" : "Backup received · reading on this Mac",
+                      systemImage: "checkmark.circle.fill")
                     .font(Brand.bodyFont(16).weight(.semibold)).foregroundStyle(Brand.lime)
             } else if model.phase == .completing {
                 Text("Account receipt confirmed · finishing local cleanup")
@@ -309,8 +314,7 @@ struct CollectionStatusPanel: View {
         case .backupWaiting: return "Waiting for backup data"
         case .backupStale: return "Needs attention"
         case nil:
-            return model.phase == .processing && model.processedBytes == 0
-                ? "Reading available sources" : model.statusTitle
+            return model.statusTitle
         }
     }
 
@@ -320,7 +324,9 @@ struct CollectionStatusPanel: View {
         case .backupWaiting: return "No backup data measured yet"
         case .backupStale: return "No recent backup data measured"
         case nil:
-            if model.phase == .processing { return "Reading contacts and activity locally" }
+            if model.phase == .processing {
+                return model.isUnlockingBackup ? "Checking password and backup keys locally" : "Reading contacts and activity locally"
+            }
             if model.phase == .connecting { return "Waiting for iPhone connection confirmation" }
             return model.lastBackupActivityAt != nil ? "Receiving measured backup data" : "Waiting for iPhone backup data"
         }
@@ -346,7 +352,7 @@ struct CollectionStatusPanel: View {
             : model.connectionConfirmedAt != nil
             ? "A \(model.connectionTransport) connection was confirmed. Waiting for backup data; respond to any iPhone passcode prompt."
             : "Keep the cable connected while waiting for backup data from your iPhone."
-        case .processing: return "Reading available contacts and activity, then cleaning up temporary backup files."
+        case .processing: return model.statusDetail
         default: return model.statusDetail
         }
     }

@@ -26,7 +26,7 @@ struct PhoneConnectionGuide: View {
         } else if settingConfirmed {
             instruction(3, "Continue below", "Your backup setting is checked. Keep the iPhone connected.")
         } else {
-            instruction(3, "Check iPhone below", "Start the check here. Answer any Trust prompt on your iPhone when it appears.")
+            instruction(3, "Automatic check", "This screen checks the backup setting while active. If Trust is needed, establish it in Finder and answer the iPhone prompt.")
         }
     }
 
@@ -48,9 +48,9 @@ struct BackupPasswordHelp: View {
                 Image(systemName: "externaldrive.badge.person.crop")
                     .font(.system(size: 30)).foregroundStyle(Brand.blue).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Encrypted backup? Keep its password ready.")
+                    Text("Use your existing computer-backup password")
                         .font(Brand.headingFont(16)).foregroundStyle(Brand.heading)
-                    Text("Use the password chosen for encrypted computer backups. Your iPhone passcode unlocks the phone instead.")
+                    Text("This is the password chosen for encrypted computer backups, not your iPhone passcode or Apple Account password.")
                         .font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
                 }
             }
@@ -69,6 +69,25 @@ struct BackupPasswordHelp: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .brandWell()
+    }
+}
+
+struct BackupReadinessConfirmation: View {
+    @ObservedObject var model: CollectorModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Brand.Space.item) {
+            if model.finderPreparationRequired {
+                Toggle("Finder has finished its backup and its latest-backup date/time has updated", isOn: $model.finderBackupFinished)
+                    .toggleStyle(BrandCheckbox())
+            }
+            Toggle("I have the existing encrypted computer-backup password ready", isOn: $model.backupPasswordReady)
+                .toggleStyle(BrandCheckbox())
+            Text("You will enter it after the backup is received. This check does not test the password or guarantee that the backup can be unlocked.")
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+        }
+        .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -212,7 +231,8 @@ struct FinderEncryptionGuide: View {
                 .buttonStyle(SecondaryButton()).disabled(!model.backupSettingCheckInProgress)
         case .encrypted:
             VerifiedStatusRow(verified: true, title: "Encrypted backup is on",
-                              detail: "The setting is confirmed. Check that Finder has finished before collecting. Call history may be available; full history is not guaranteed.")
+                              detail: "Only the setting is confirmed. AMPLIFai cannot tell whether Finder has finished its backup.")
+            BackupReadinessConfirmation(model: model)
             Button("Back to preparation", action: onClose).buttonStyle(LimeButton())
         default:
             if model.backupEncryptionStatus == .unencrypted {
@@ -221,6 +241,10 @@ struct FinderEncryptionGuide: View {
                 Text("The setting was not confirmed. Check the cable, unlock and Trust, then try again.")
                     .font(Brand.bodyFont(14)).foregroundStyle(Brand.body)
             }
+            Text(model.automaticPreparationChecksActive
+                 ? "Checking automatically while this guide is active, for up to 10 minutes. If it pauses, use Recheck."
+                 : "Automatic checks are paused. Recheck after Finder finishes.")
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
             Button("Recheck encryption") { model.checkBackupEncryptionStatus() }
                 .buttonStyle(LimeButton()).disabled(!model.canPrepareCollection)
         }
@@ -230,8 +254,8 @@ struct FinderEncryptionGuide: View {
         [
             ("Connect, unlock and open Finder", "Connect your iPhone to this Mac with a data-capable USB cable and unlock it. Open Finder below, then choose Next. You do not need to wait for a Trust prompt first."),
             ("Select your iPhone and allow access", "Choose your iPhone under Locations in Finder's sidebar. If Finder asks, click Trust. On your iPhone, tap Trust and enter its passcode if prompted. The AMPLIFai Phone installer disk is a different item."),
-            ("Choose Encrypt local backup", "On the General tab, find Backups and select Encrypt local backup. Create a password you can keep; this changes the setting in Finder."),
-            ("Let Finder finish, then recheck", "Wait for the backup progress in Finder to finish and its latest-backup date/time to update. Return here and recheck. This reads the encryption setting; it cannot confirm Finder's backup has finished.")
+            ("Choose Encrypt local backup", "On the General tab, under Backups, choose “Back up all of the data on your iPhone to this Mac.” Select “Encrypt local backup,” create a password you can keep, then confirm it. Finder starts the encrypted backup."),
+            ("Let Finder finish, then confirm", "Wait for Finder's backup progress to finish and its latest-backup date/time to update. This guide rechecks the encryption setting automatically while active. Confirm below that Finder is finished and your password is ready, then return to preparation and choose Start collection.")
         ]
     }
 

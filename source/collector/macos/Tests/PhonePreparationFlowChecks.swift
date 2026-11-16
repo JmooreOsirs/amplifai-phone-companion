@@ -6,13 +6,17 @@ import Darwin
     typealias Flow = PhoneRunFlowChecks
     static func main() {
         do {
+            try encryptedStartRequiresReadiness()
+            try automaticPreparationIsBoundedAndReadOnly()
+            try preparationCancellationFencesLateResults()
+            try finderReadinessIsNotAnEncryptionResult()
             try preparationAndExplicitStart()
             try exactStartRecovery()
             try startRefusalsAndFences()
             try stopAndStatusCannotStart()
             try operationBoundHandoff()
             try preparationContinueStaysNative()
-            print("macOS preparation admission, operation fences, recovery and handoff checks passed")
+            print("macOS automatic preparation, readiness, cancellation, admission, operation fences, recovery and handoff checks passed")
         } catch {
             FileHandle.standardError.write(Data("macOS preparation flow check failed: \(error)\n".utf8))
             Darwin.exit(1)
@@ -40,6 +44,158 @@ import Darwin
 
     static func startBodies(_ server: SimulatedPhoneRunServer) -> [Data] {
         server.requests.filter { $0.path == PhoneRunContract.startPath }.map(\.body)
+    }
+
+    static func encryptedStartRequiresReadiness() throws {
+        let (model, server, _, _) = try approved()
+        model.checkBackupEncryptionStatus()
+        model.receive(try Flow.event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
+        model.finished(mode: "backup-encryption-status", code: 0)
+        try Flow.require(!model.startCollection() && startBodies(server).isEmpty,
+                         "Encrypted preparation cannot Start before the owner confirms password readiness")
+        model.backupPasswordReady = true
+        model.updatePreparationObservation(visible: false, finderGuide: false)
+        model.updatePreparationObservation(visible: true, finderGuide: false)
+        try Flow.require(model.backupPasswordReady && model.preparedToStart && model.operationID == nil &&
+                         !model.automaticPreparationChecksActive && startBodies(server).isEmpty,
+                         "Returning foreground keeps encrypted readiness and cannot restart a helper or collect")
+        model.disconnect()
+
+        let (skipped, _, _, _) = try approved()
+        skipped.checkBackupEncryptionStatus()
+        try finishSetting(skipped, encrypted: false)
+        skipped.beginFinderPreparation()
+        try Flow.require(!skipped.canStartWithAvailableData && !skipped.startCollectionWithAvailableData(),
+                         "Available-data Start cannot bypass an outstanding Finder completion confirmation")
+        skipped.skipUnstartedFinderPreparation()
+        try Flow.require(!skipped.finderPreparationRequired && skipped.canStartWithAvailableData &&
+                         skipped.startCollectionWithAvailableData(),
+                         "An explicit assertion that no Finder backup began restores the available-data action")
+        skipped.disconnect()
+    }
+
+    static func finishSetting(_ model: CollectorModel, encrypted: Bool) throws {
+        model.receive(try Flow.event(#"{"kind":"backup-encryption-status","backupEncrypted":\#(encrypted)}"#))
+        model.finished(mode: "backup-encryption-status", code: 0)
+    }
+
+    static func automaticPreparationIsBoundedAndReadOnly() throws {
+        let (model, server, wire, _) = try approved()
+        var clock = Date()
+        model.now = { clock }; server.now = { clock }
+        model.updatePreparationObservation(visible: true, finderGuide: false)
+        let first = model.operationID
+        try Flow.require(first != nil && model.backupEncryptionStatus == .checking &&
+                         startBodies(server).isEmpty && model.phoneRun?.collectionStarted == false,
+                         "Showing approved preparation automatically reads the setting without Start authority")
+        model.preparationObservationTick()
+        model.checkBackupEncryptionStatus()
+        try Flow.require(model.operationID == first, "Automatic and manual checks cannot overlap an owned helper")
+        model.receive(try Flow.event(#"{"kind":"error","code":"trust_required"}"#))
+        model.finished(mode: "backup-encryption-status", code: 1)
+        try Flow.require(model.operationID == nil && model.automaticPreparationChecksActive,
+                         "Trust failure waits for the bounded next observation")
+        clock = clock.addingTimeInterval(5)
+        model.preparationObservationTick()
+        let second = model.operationID
+        try Flow.require(second != nil && second != first, "Trust or reconnect retry owns a fresh read-only helper")
+        try finishSetting(model, encrypted: true)
+        clock = clock.addingTimeInterval(60)
+        model.preparationObservationTick()
+        try Flow.require(model.operationID == nil && model.backupEncryptionStatus == .encrypted &&
+                         !model.automaticPreparationChecksActive && startBodies(server).isEmpty && wire.commands.isEmpty,
+                         "Encryption confirmation stops automatic checking and never creates a collection command")
+        model.disconnect()
+
+        for guide in [false, true] {
+            let (bounded, authority, _, _) = try approved()
+            var instant = Date()
+            bounded.now = { instant }; authority.now = { instant }
+            bounded.updatePreparationObservation(visible: true, finderGuide: guide)
+            bounded.receive(try Flow.event(#"{"kind":"error","code":"phone_connection"}"#))
+            bounded.finished(mode: "backup-encryption-status", code: 1)
+            instant = instant.addingTimeInterval(guide ? 600 : 120)
+            bounded.preparationObservationTick()
+            try Flow.require(!bounded.automaticPreparationChecksActive && bounded.operationID == nil &&
+                             bounded.phoneRun != nil && startBodies(authority).isEmpty,
+                             "Automatic reconnect checks stop at the preparation or guide deadline without ending approval")
+            bounded.checkBackupEncryptionStatus()
+            try Flow.require(bounded.operationID != nil, "Manual recheck remains available after the automatic bound")
+            bounded.disconnect()
+        }
+    }
+
+    static func preparationCancellationFencesLateResults() throws {
+        for reason in ["hidden", "cancel", "not-now", "stop", "expiry", "revoked", "replacement", "storage", "companion"] {
+            let (model, server, _, runID) = try approved()
+            model.updatePreparationObservation(visible: true, finderGuide: false)
+            let operation = model.operationID!
+            switch reason {
+            case "hidden": model.updatePreparationObservation(visible: false, finderGuide: false)
+            case "cancel": model.cancelBackupEncryptionStatusCheck()
+            case "not-now": model.dismissRunApproval()
+            case "stop": model.disconnect()
+            case "expiry": model.now = { model.phoneRun!.claim.expiresAt }; model.preparationObservationTick()
+            case "revoked": server.revoke(runID); model.refreshRunStatus()
+            case "replacement": server.changeApproval(runID); model.refreshRunStatus()
+            case "storage": model.receive(try Flow.event(#"{"kind":"error","code":"workspace_cleanup","cleanupRequired":true}"#))
+            default: model.setCompanionStatus(.unavailable)
+            }
+            let status = model.backupEncryptionStatus
+            model.handleHelperOutput(Data(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#.utf8) + Data([10]),
+                                    operation: operation, mode: "backup-encryption-status")
+            model.handleHelperTermination(0, operation: operation, mode: "backup-encryption-status")
+            model.preparationObservationTick()
+            try Flow.require(!model.automaticPreparationChecksActive && model.operationID == nil &&
+                             model.backupEncryptionStatus == status && startBodies(server).isEmpty &&
+                             model.phoneRun?.collectionStarted != true,
+                             "\(reason) cancels the owned check and rejects late result/exit without collection")
+            if reason == "hidden" || reason == "cancel" {
+                try Flow.require(model.runApproval == .approved && model.phoneRun?.runID == runID,
+                                 "Leaving or cancelling a read-only check preserves the unstarted approval")
+                model.updatePreparationObservation(visible: false, finderGuide: false)
+                model.updatePreparationObservation(visible: true, finderGuide: false)
+                let current = model.operationID
+                model.handleHelperOutput(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8) + Data([10]),
+                                        operation: operation, mode: "backup-encryption-status")
+                try Flow.require(current != nil && current != operation && model.operationID == current &&
+                                 model.backupEncryptionStatus == .checking,
+                                 "An old background check cannot settle a new foreground check")
+            }
+            model.now = Date.init
+            model.disconnect()
+        }
+    }
+
+    static func finderReadinessIsNotAnEncryptionResult() throws {
+        let (model, server, _, _) = try approved()
+        var clock = Date()
+        model.now = { clock }; server.now = { clock }
+        model.checkBackupEncryptionStatus()
+        try finishSetting(model, encrypted: false)
+        model.beginFinderPreparation()
+        model.updatePreparationObservation(visible: true, finderGuide: true)
+        try finishSetting(model, encrypted: false)
+        clock = clock.addingTimeInterval(5)
+        model.preparationObservationTick()
+        try Flow.require(model.operationID != nil, "Visible Finder guidance retries an observed Off setting")
+        try finishSetting(model, encrypted: true)
+        try Flow.require(model.finderPreparationRequired && !model.finderBackupFinished && !model.backupPasswordReady &&
+                         !model.preparedToStart && !model.startCollection() && startBodies(server).isEmpty,
+                         "WillEncrypt cannot attest Finder completion or password readiness")
+        model.backupPasswordReady = true
+        try Flow.require(!model.startCollection(), "Having a password cannot bypass unfinished Finder confirmation")
+        model.finderBackupFinished = true
+        model.updatePreparationObservation(visible: true, finderGuide: false)
+        try Flow.require(model.preparedToStart && model.phoneRun?.collectionStarted == false && startBodies(server).isEmpty,
+                         "Returning from Finder with readiness still requires explicit Start")
+        try Flow.require(model.startCollection(), "Explicit Start rechecks after both owner confirmations")
+        model.preparationObservationTick()
+        try finishSetting(model, encrypted: true)
+        try Flow.require(model.phoneRun?.collectionStarted == true && startBodies(server).count == 1 &&
+                         model.phase == .connecting && !model.automaticPreparationChecksActive,
+                         "Exactly one explicit Start admits the operation; automatic observation stays cancelled")
+        model.disconnect()
     }
 
     static func preparationAndExplicitStart() throws {

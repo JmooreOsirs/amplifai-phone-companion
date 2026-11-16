@@ -49,6 +49,7 @@ enum PhoneRunFlowChecks {
 
     /// Start collection: read-only preflight, current capability status, then the same approved run connects.
     static func start(_ model: CollectorModel, encrypted: Bool = true) throws {
+        model.backupPasswordReady = true // Synthetic owner readiness acknowledgement, not password validation.
         try require(model.startCollection(), "Start collection runs the iPhone check")
         model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":\#(encrypted)}"#))
         model.finished(mode: "backup-encryption-status", code: 0)
@@ -371,6 +372,7 @@ enum PhoneRunFlowChecks {
         let wire = Wire()
         let (model, run) = try approvedModel(server, wire)
         server.revoke(run.runID)
+        model.backupPasswordReady = true
         try require(model.startCollection(), "The iPhone check runs")
         model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
         model.finished(mode: "backup-encryption-status", code: 0)
@@ -399,6 +401,7 @@ enum PhoneRunFlowChecks {
         slowModel.now = { slowClock }
         slowModel.admitRunLink(link(slow, slow.createRun()))
         slowClock = slowClock.addingTimeInterval(9 * 60)
+        slowModel.backupPasswordReady = true
         try require(slowModel.startCollection(), "Start inside the window runs the check")
         slowClock = slowClock.addingTimeInterval(2 * 60)
         slowModel.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))

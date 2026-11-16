@@ -15,11 +15,11 @@ struct RenderMacReviewAcceptance {
         var stateEvidence: [String: [String: Any]] = [:]
         let shareStates = ["bind-uncertain", "bind-refused", "expired"]
         let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry", "adoption-retry", "adoption-checking", "adoption-recovered"] + shareStates
-        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
-        let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck"]
+        let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "encryption-ready", "finder-ready", "finder-return-off", "automatic-wait", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
+        let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck", "finder-confirm"]
         let nativeStates = ["native-claiming", "native-claim-uncertain", "native-consent", "native-consent-checked",
                             "native-approving", "native-approval-uncertain", "native-refused", "native-expired"]
-        let unlockStates = ["password", "password-retry", "password-final", "password-exhausted"]
+        let unlockStates = ["password", "password-retry", "password-final", "password-exhausted", "unlocking", "reading-unlocked"]
         let setupStates = ["setup"] + nativeStates + runStates + guideStates + unlockStates + ["error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "organizing", "history", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
@@ -63,7 +63,7 @@ struct RenderMacReviewAcceptance {
             if !setupStates.contains(state) {
                 // A synthetic run, started on the simulated helper wire.
                 try admit()
-                guard model.startCollection() else { throw FixtureError.unexpectedState("\(state): start") }
+                model.checkBackupEncryptionStatus()
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
                 model.finished(mode: "backup-encryption-status", code: 0)
                 guard model.startCollectionWithAvailableData() else { throw FixtureError.unexpectedState("\(state): explicit available-data choice") }
@@ -200,10 +200,11 @@ struct RenderMacReviewAcceptance {
                 }
             } else if unlockStates.contains(state) {
                 try admit()
+                model.backupPasswordReady = true
                 guard model.startCollection() else { throw FixtureError.unexpectedState("\(state): start") }
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#.utf8)))
                 model.finished(mode: "backup-encryption-status", code: 0)
-                let maximum = state == "password" ? 1 : state == "password-retry" ? 2 : 3
+                let maximum = ["password", "unlocking", "reading-unlocked"].contains(state) ? 1 : state == "password-retry" ? 2 : 3
                 for attempt in 1...maximum {
                     var prompt: [String: Any] = ["kind": "state", "state": "password_required", "attempt": attempt, "maxAttempts": 3]
                     if attempt > 1 { prompt["reason"] = "backup_unlock_failed" }
@@ -214,6 +215,16 @@ struct RenderMacReviewAcceptance {
                     if attempt < maximum || state == "password-exhausted" {
                         model.password = "SYNTHETIC fixture"
                         model.submitPassword()
+                    }
+                }
+                if state == "unlocking" || state == "reading-unlocked" {
+                    model.password = "SYNTHETIC fixture"
+                    model.submitPassword()
+                    if state == "reading-unlocked" {
+                        model.receive(try AgentEvent.decode(Data(#"{"kind":"transfer","stage":"processing","processedBytes":8192}"#.utf8)))
+                    }
+                    guard model.phase == .processing, model.isUnlockingBackup == (state == "unlocking") else {
+                        throw FixtureError.unexpectedState("\(state): evidence-based processing stage")
                     }
                 }
                 if state == "password-exhausted" {
@@ -259,29 +270,44 @@ struct RenderMacReviewAcceptance {
             }
             else if state == "active-transfer" {
                 try admit()
-                guard model.startCollection() else { throw FixtureError.unexpectedState("active-transfer: check") }
+                model.checkBackupEncryptionStatus()
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8)))
                 model.finished(mode: "backup-encryption-status", code: 0)
                 guard model.startCollectionWithAvailableData() else { throw FixtureError.unexpectedState("active-transfer: explicit start") }
                 model.phase = .transferring
             }
-            else if state == "encryption-off" || state == "encryption-on" {
+            else if ["encryption-off", "encryption-on", "encryption-ready", "finder-ready", "finder-return-off"].contains(state) {
                 try admit()
+                if state.hasPrefix("finder-") { model.beginFinderPreparation() }
                 model.checkBackupEncryptionStatus()
-                let event: [String: Any] = ["kind": "backup-encryption-status", "backupEncrypted": state == "encryption-on"]
+                let event: [String: Any] = ["kind": "backup-encryption-status", "backupEncrypted": !["encryption-off", "finder-return-off"].contains(state)]
                 model.receive(try AgentEvent.decode(JSONSerialization.data(withJSONObject: event)))
                 model.finished(mode: "backup-encryption-status", code: 0)
+                if state == "encryption-ready" || state == "finder-ready" { model.backupPasswordReady = true }
+                if state == "finder-ready" { model.finderBackupFinished = true }
             }
-            else if state == "agree-checking" { try admit(); _ = model.startCollection() }
+            else if state == "automatic-wait" {
+                try admit()
+                model.updatePreparationObservation(visible: true, finderGuide: false)
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"error","code":"trust_required"}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 1)
+            }
+            else if state == "agree-checking" { try admit(); model.checkBackupEncryptionStatus() }
             else if state == "agree-unknown" {
                 try admit()
-                _ = model.startCollection()
+                model.checkBackupEncryptionStatus()
                 model.receive(try AgentEvent.decode(Data(#"{"kind":"error","code":"phone_connection"}"#.utf8)))
                 model.finished(mode: "backup-encryption-status", code: 1)
             }
             else if state == "processing" { model.phase = .processing }
             else if state == "completing" { model.phase = .completing }
             else if state == "cancelling" { model.phase = .cancelling }
+            if state == "finder-confirm" {
+                model.beginFinderPreparation()
+                model.checkBackupEncryptionStatus()
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#.utf8)))
+                model.finished(mode: "backup-encryption-status", code: 0)
+            }
             if state == "history" {
                 let record: [String: Any] = ["source": "messages", "component": "database", "reason": "selected_payload_length",
                     "result": "length_mismatch", "declaredBytes": 8192, "rawBytes": 4112, "copiedBytes": 4096,
@@ -303,6 +329,9 @@ struct RenderMacReviewAcceptance {
                 "runApproval": String(describing: model.runApproval), "runBinding": String(describing: model.runBinding),
                 "nativeSetup": String(describing: model.nativeSetupState),
                 "nativeConsentChecked": model.nativeDisclosureAccepted, "canStartCapture": model.canConnect,
+                "passwordReady": model.backupPasswordReady, "finderFinished": model.finderBackupFinished,
+                "finderConfirmationRequired": model.finderPreparationRequired, "preparedToStart": model.preparedToStart,
+                "automaticChecksActive": model.automaticPreparationChecksActive,
                 "runStatus": String(describing: model.runStatus),
                 "approvalAdoptionPending": model.approvalAdoptionPending,
                 "canRetryApprovalAdoption": model.canRetryApprovalAdoption,
@@ -336,6 +365,20 @@ struct RenderMacReviewAcceptance {
                 try render(ContentView(model: model, updater: updater),
                            width: 1180, height: 1500, path: output.appendingPathComponent("mac-\(state)-tall-1180x1500.png"))
             }
+            // Mount once after the matched snapshots: a real disappear deliberately clears readiness.
+            if state == "encryption-on" || state == "finder-confirm" {
+                let path = output.appendingPathComponent("mac-\(state)-compact-controls-375x844.png")
+                if state == "finder-confirm" {
+                    try render(ScrollView {
+                        FinderEncryptionGuide(model: model, initialStep: 3, onClose: {})
+                            .panel().frame(maxWidth: 880).padding(28)
+                    }.background(Brand.background).tint(Brand.lime), width: 375, height: 844,
+                               path: path, readinessModel: model)
+                } else {
+                    try render(ContentView(model: model, updater: updater), width: 375, height: 844,
+                               path: path, readinessModel: model)
+                }
+            }
         }
         let receipt: [String: Any] = ["renderer": "offscreen NSHostingView bitmap of production views", "contacts": 5501,
             "viewports": viewports.map { [$0.0, $0.1] }, "states": states, "fixturePreparationSeconds": timings,
@@ -354,7 +397,7 @@ struct RenderMacReviewAcceptance {
             ],
             "guideSymbolsAvailable": ["iphone.gen3", "cable.connector.horizontal", "laptopcomputer", "lock.iphone"]
                 .allSatisfy { NSImage(systemSymbolName: $0, accessibilityDescription: nil) != nil },
-            "screenCaptured": false, "windowCreated": states.contains(where: nativeStates.contains),
+            "screenCaptured": false, "windowCreated": states.contains { nativeStates.contains($0) || ["encryption-on", "finder-confirm"].contains($0) },
             "windowShown": false, "appActivated": false,
             "collectorStarted": false, "ownerWorkspaceRead": false, "updateControllerStarted": false]
         try JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys])
@@ -367,7 +410,8 @@ struct RenderMacReviewAcceptance {
         return [resolved.redComponent, resolved.greenComponent, resolved.blueComponent].map { Double($0) }
     }
 
-    private static func render<V: View>(_ view: V, width: Int, height: Int, path: URL) throws {
+    private static func render<V: View>(_ view: V, width: Int, height: Int, path: URL,
+                                       readinessModel: CollectorModel? = nil) throws {
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark)
             .frame(width: CGFloat(width), height: CGFloat(height))
             .overlay(alignment: .bottomLeading) {
@@ -379,7 +423,8 @@ struct RenderMacReviewAcceptance {
             })
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
         var validationWindow: NSWindow?
-        if path.lastPathComponent.hasPrefix("mac-native-") {
+        let validatesSetupScroll = path.lastPathComponent.hasPrefix("mac-native-") || readinessModel != nil
+        if validatesSetupScroll {
             let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: width, height: height),
                                   styleMask: [.borderless], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
@@ -397,7 +442,7 @@ struct RenderMacReviewAcceptance {
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
         try data.write(to: path, options: .atomic)
-        if path.lastPathComponent.hasPrefix("mac-native-") {
+        if validatesSetupScroll {
             func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
             let scrollViews = descendants(hosting).compactMap { $0 as? NSScrollView }
             guard scrollViews.count == 1, let scroll = scrollViews.first, let document = scroll.documentView else {
@@ -430,6 +475,16 @@ struct RenderMacReviewAcceptance {
                 "scrolled": scrolls, "documentFrame": [document.frame.width, document.frame.height],
                 "clipBounds": [scroll.contentView.bounds.width, scroll.contentView.bounds.height],
                 "viewport": [viewport.minX, viewport.minY, viewport.width, viewport.height]]
+            if let model = readinessModel {
+                guard !model.backupPasswordReady, !model.preparedToStart,
+                      model.phoneRun?.collectionStarted == false, model.localCollectionApproval == nil,
+                      model.operationID == nil, validationWindow?.isVisible == false,
+                      validationWindow?.isKeyWindow == false else {
+                    throw FixtureError.unexpectedState("Rendering readiness granted collection authority or showed a window")
+                }
+                setupScrollEvidence[path.lastPathComponent]?["readinessRemainsRequired"] = true
+                setupScrollEvidence[path.lastPathComponent]?["keyboardStyle"] = "Existing BrandCheckbox focusable Toggle.button; live keyboard traversal not exercised"
+            }
         }
         if ["main", "review", "organizing", "unavailable", "history"].contains(where: { path.lastPathComponent.hasPrefix("mac-\($0)-") }) {
             func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }

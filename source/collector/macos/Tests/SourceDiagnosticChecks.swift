@@ -109,6 +109,7 @@ enum SourceDiagnosticChecks {
         model.phase = .idle
         try require(!model.currentSourceDiagnostics.isEmpty, "Reset fixture must contain current failure evidence")
         try require(model.admitRunLink(PhoneRunFlowChecks.link(server, server.createRun())), "A new run link is admitted when idle")
+        model.backupPasswordReady = true
         try require(model.startCollection(), "New collection setup must be available in fixture")
         model.receive(try event(["kind": "backup-encryption-status", "backupEncrypted": true]))
         model.finished(mode: "backup-encryption-status", code: 0)

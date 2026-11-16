@@ -163,6 +163,7 @@ enum AuthorityRefreshIntegrationChecks {
 
     static func pair(_ fixture: Fixture, contacts: Int) async throws -> (String, [String: Any]) {
         let model = fixture.model
+        model.backupPasswordReady = true
         try require(model.startCollection(), "Start uses the real synthetic-capture helper")
         try await fixture.signals.until("real capture", seconds: 90) { model.phase == .selecting || model.phase == .error }
         try require(model.phase == .selecting && model.totalContacts == contacts,

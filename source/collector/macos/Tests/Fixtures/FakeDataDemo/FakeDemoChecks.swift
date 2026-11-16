@@ -134,7 +134,7 @@ enum FakeDemoChecks {
         let (model, server, inbox) = runModel()
         try require(!model.startCollection() && model.journeyStep == 0, "Nothing starts before the website's approval")
         try approvedRun(model, server, inbox)
-        try require(model.startCollection(), "Start collection runs the simulated iPhone check")
+        model.checkBackupEncryptionStatus()
         try await wait(10, "simulated encryption check") { !model.helperRunning && model.backupEncryptionStatus == .unencrypted }
         try require(model.phase == .idle && model.phoneRun?.collectionStarted == false,
                     "Encryption off presents the available-data choice before collection")
@@ -202,7 +202,7 @@ enum FakeDemoChecks {
     private static func cancellationAndRecovery() async throws {
         let (cancelled, cancelledServer, cancelledInbox) = runModel()
         try approvedRun(cancelled, cancelledServer, cancelledInbox)
-        try require(cancelled.startCollection(), "start")
+        cancelled.checkBackupEncryptionStatus()
         cancelled.cancelBackupEncryptionStatusCheck()
         try require(cancelled.journeyStep == 1, "Cancelling the simulated check stays on Collect for the approved run")
         try await wait(5, "check cancellation settles") { !cancelled.helperRunning && cancelled.phase == .idle }
@@ -211,7 +211,7 @@ enum FakeDemoChecks {
 
         let (stopped, stoppedServer, stoppedInbox) = runModel()
         try approvedRun(stopped, stoppedServer, stoppedInbox)
-        try require(stopped.startCollection(), "start")
+        stopped.checkBackupEncryptionStatus()
         try await wait(10, "simulated encryption check") { !stopped.helperRunning && stopped.backupEncryptionStatus == .unencrypted }
         try require(stopped.startCollectionWithAvailableData(), "explicit available-data choice")
         try await wait(5, "first simulated connection event") { !stopped.connectionTransport.isEmpty }

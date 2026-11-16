@@ -5,6 +5,7 @@ struct ContentView: View {
     @ObservedObject var updater: CompanionUpdater
     /// The system default opens the browser; a host can intercept it (the fake-data demo does).
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
     @State private var search = ""
     @State private var confirmingCleanup = false
     @State private var showingConnectionHelp = false
@@ -79,6 +80,10 @@ struct ContentView: View {
             showingFinderGuide = false
             scrollToCollectionSetup(setupScroll)
         }
+        .onChange(of: model.phoneRun?.claim, initial: true) { _, _ in updatePreparationObservation() }
+        .onChange(of: model.canObservePreparation) { _, _ in updatePreparationObservation() }
+        .onChange(of: scenePhase) { _, _ in updatePreparationObservation() }
+        .onChange(of: showingFinderGuide) { _, _ in updatePreparationObservation() }
         .onChange(of: model.nativeSetupState) { _, _ in
             showingFinderGuide = false
             scrollToCollectionSetup(setupScroll)
@@ -97,7 +102,10 @@ struct ContentView: View {
             if safe { updater.resumeIfSafe() }
             else { showingUpdates = false }
         }
-        .onDisappear { model.declineLocalCollection() }
+        .onDisappear {
+            model.updatePreparationObservation(visible: false, finderGuide: false)
+            model.declineLocalCollection()
+        }
         .confirmationDialog(
             "Remove previous temporary backups created by this app?",
             isPresented: $confirmingCleanup
@@ -348,6 +356,17 @@ struct ContentView: View {
         .panel()
     }
 
+    private func updatePreparationObservation() {
+        model.updatePreparationObservation(visible: scenePhase == .active &&
+            !runNeedsAccountAction,
+            finderGuide: showingFinderGuide)
+    }
+
+    private func openFinderGuide() {
+        model.beginFinderPreparation()
+        showingFinderGuide = true
+    }
+
     /// A plain launch has no account identity. The original signed-in tab must deliberately hand setup over.
     @ViewBuilder private var runStartContent: some View {
         Text("Collect phone data with your AMPLIFai account")
@@ -415,9 +434,10 @@ struct ContentView: View {
                 Button("Try the newer approval again") { model.retryCandidateClaim() }
                     .buttonStyle(QuietAction())
             }
-            PhoneConnectionGuide(checkInProgress: model.backupSettingCheckInProgress,
-                                 settingConfirmed: [.encrypted, .unencrypted].contains(model.backupEncryptionStatus))
-            BackupPasswordHelp()
+            if model.backupEncryptionStatus != .encrypted {
+                PhoneConnectionGuide(checkInProgress: model.backupSettingCheckInProgress,
+                                     settingConfirmed: model.backupEncryptionStatus == .unencrypted)
+            }
             iPhoneCheckCard
             DisclosureGroup("Approval and privacy details") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -455,40 +475,51 @@ struct ContentView: View {
     @ViewBuilder private var setupCheckContent: some View {
         switch model.backupEncryptionStatus {
         case .checking:
-            progressLine("Checking your iPhone…")
+            progressLine("Checking the backup setting…")
             Text("Keep your iPhone unlocked. If it asks to Trust this computer, tap Trust and enter the iPhone passcode. No backup or collection has started.")
                 .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
-            if model.backupSettingCheckInProgress {
+            if model.backupSettingCheckInProgress || model.automaticPreparationChecksActive {
                 Button("Cancel check") { model.cancelBackupEncryptionStatusCheck() }
                     .buttonStyle(SecondaryButton())
             }
         case .unknown:
             VerifiedStatusRow(verified: false, title: "Backup setting not confirmed", detail: backupSettingDetail)
+            unfinishedFinderReadiness
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { unknownSettingActions }
                 VStack(alignment: .leading, spacing: 12) { unknownSettingActions }
             }
             finderGuideAction
+            Text("An encrypted backup may still need its existing computer-backup password after transfer.")
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
         case .unencrypted:
             VerifiedStatusRow(verified: false, title: "Backup encryption is off", detail: backupSettingDetail)
+            unfinishedFinderReadiness
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { unencryptedSettingActions }
                 VStack(alignment: .leading, spacing: 12) { unencryptedSettingActions }
             }
         case .encrypted:
             VerifiedStatusRow(verified: true, title: "Backup encryption is on", detail: backupSettingDetail)
+            BackupPasswordHelp()
+            BackupReadinessConfirmation(model: model)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { startActions }
                 VStack(alignment: .leading, spacing: 12) { startActions }
             }
         case .notChecked:
-            Text("Connect and unlock your iPhone, then check it here. The check reads the backup setting without starting collection.")
+            Text("Connect and unlock your iPhone. This screen checks the backup setting automatically while active; you can also check it here. No collection starts until you choose Start.")
                 .font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { checkPhoneActions }
                 VStack(alignment: .leading, spacing: 12) { checkPhoneActions }
             }
-            finderGuideAction
+        }
+        if model.automaticPreparationChecksActive && model.backupEncryptionStatus != .checking {
+            Text("Checking again automatically for up to 2 minutes. You can recheck manually at any time.")
+                .font(Brand.bodyFont(14)).foregroundStyle(Brand.muted)
+            Button("Stop automatic checks") { model.stopAutomaticPreparationChecks(cancelCurrentCheck: true) }
+                .buttonStyle(QuietAction())
         }
     }
 
@@ -504,7 +535,9 @@ struct ContentView: View {
     @ViewBuilder private var startActions: some View {
         Button("Start collection") { model.startCollection() }
             .buttonStyle(LimeButton())
-            .disabled(!model.canPrepareCollection || !model.hasStartableRun)
+            .disabled(!model.preparedToStart)
+        Button("Recheck setting") { model.checkBackupEncryptionStatus() }
+            .buttonStyle(QuietAction()).disabled(!model.canPrepareCollection)
         Button("Not now") { model.dismissRunApproval() }
             .buttonStyle(SecondaryButton())
             .keyboardShortcut(.cancelAction)
@@ -515,29 +548,39 @@ struct ContentView: View {
             .buttonStyle(LimeButton()).disabled(!model.canPrepareCollection)
         Button("Continue with available data") { model.startCollectionWithAvailableData() }
             .buttonStyle(SecondaryButton())
-            .disabled(!model.canPrepareCollection || !model.hasStartableRun)
+            .disabled(!model.canStartWithAvailableData)
     }
 
     @ViewBuilder private var unencryptedSettingActions: some View {
-        Button("Set up encryption in Finder") { showingFinderGuide = true }
+        Button("Set up encryption in Finder", action: openFinderGuide)
             .buttonStyle(LimeButton())
         Button("Continue with available data") { model.startCollectionWithAvailableData() }
             .buttonStyle(SecondaryButton())
-            .disabled(!model.canPrepareCollection || !model.hasStartableRun)
+            .disabled(!model.canStartWithAvailableData)
         Button("Recheck") { model.checkBackupEncryptionStatus() }
             .buttonStyle(QuietAction()).disabled(!model.canPrepareCollection)
     }
 
     private var finderGuideAction: some View {
-        Button("Set up encrypted backup in Finder") { showingFinderGuide = true }
+        Button("Set up encrypted backup in Finder", action: openFinderGuide)
             .buttonStyle(QuietAction())
+    }
+
+    @ViewBuilder private var unfinishedFinderReadiness: some View {
+        if model.finderPreparationRequired {
+            BackupReadinessConfirmation(model: model)
+            Button("I haven't started a Finder backup") { model.skipUnstartedFinderPreparation() }
+                .buttonStyle(QuietAction()).disabled(!model.canPrepareCollection)
+        }
     }
 
     private var backupSettingDetail: String {
         switch model.backupEncryptionStatus {
         case .notChecked: return "Connect by USB, unlock the iPhone and approve Trust if asked."
         case .checking: return "Reading the existing backup setting. No backup or phone-data collection has started."
-        case .encrypted: return "Call history may be available. Keep your existing backup password ready; full history is not guaranteed."
+        case .encrypted: return model.finderPreparationRequired
+            ? "Keep your iPhone connected. Confirm Finder has finished and your computer-backup password is ready before choosing Start. The setting check cannot confirm either one."
+            : "No Finder setup is needed. Keep your iPhone connected and confirm you have the existing computer-backup password before the potentially long transfer. Encryption does not guarantee all call history is available."
         case .unencrypted: return "Call history may be unavailable. Set up encryption in Finder, or continue with whatever data is available."
         case .unknown:
             switch model.backupEncryptionCheckCode {
@@ -576,6 +619,8 @@ struct ContentView: View {
 
     private var passwordPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Text("ON THIS MAC · UNLOCK BACKUP")
+                .font(Brand.bodyFont(13).weight(.bold)).foregroundStyle(Brand.muted)
             Text("Existing encrypted-backup password")
                 .font(Brand.headingFont(28))
                 .foregroundStyle(Brand.heading)
