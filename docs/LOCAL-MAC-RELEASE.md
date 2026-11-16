@@ -9,7 +9,37 @@ This path signs an already qualified AMPLIFai Phone native build with the existi
 3. Keep the existing Developer ID identity, `AMPLIFai-notary` profile, and `ai.satoris.amplifai.phone.candidate` Sparkle account available to the same macOS user. Normal Keychain prompts are part of key use. This path does not export a private key, create a credential, add a runner or role, or weaken branch protection.
 4. Use a new absolute 0700 scratch directory and distinct new output directories outside the checkout. Put the signed delivery, scratch, and publication output in separate paths. Use the merged control implementation and exact source authorization. Keep that control SHA unchanged from signing through publication so the sealed manifest remains valid.
 
-## November 13 RC36 Apple Silicon authorization
+## November 16 RC37 Apple Silicon authorization
+
+Native [PR #56](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/56)
+merged normally to `9d8e4e43bbc364a16878b4d6ae6efee8584b3f6f`, preserving reviewed
+head `d9f59ae385805475a2bf3b39ab15fec54e74b4d5`. Exact-head required CI run
+`43960471682` passed both native and control checks. This row authorizes only
+`macos-arm64`, version `2026.11.16-rc37`, build `26111637`, under
+`phone-run-recovery-v1`.
+
+RC37 adds bounded automatic read-only encryption-setting checks, explicit
+password readiness before Start, a Finder completion acknowledgement, and
+residue inspection after a cancelled setting helper. It retains local
+post-transfer password entry and three-attempt same-acquisition recovery.
+It does not validate the password early, alter encryption, read an existing
+private backup, or prove the reported customer's encryption-key cause fixed.
+
+Final local qualification passed 119 Python tests, real authority refresh and
+watchdog checks over 311,149 synthetic records, preparation flow/wire checks,
+and 40 hidden AppKit lifecycle cycles. Production-view renders at six sizes
+and compact hidden-window scrolling passed with existing native design tokens.
+Live keyboard traversal and physical customer-device acceptance are separate.
+
+The ARM rollback/build floor is RC36 `26111336`; its verified public appcast is
+1,561 bytes with SHA-256
+`221c8c1e292de02a538183135827e988d7da063a78cd8cbb1f6a16f3c8dab84b`.
+Preserve RC36 assets and every non-ARM feed. Use new release-mode CI run and
+artifact identifiers for this exact source. This policy does not itself claim
+RC37 signing, notarization or publication. Activate the website only from the
+verified public signed publication handoff.
+
+## November 13 RC36 Apple Silicon authorization (historical)
 
 Native PR #54 merged normally to `e269653e57b7a5ab6c9eaab215a1e5ea32c26b33`,
 preserving reviewed head `c79bf266ab5a9afdbeacd739b39cb796cf70e5a4`.
