@@ -321,6 +321,7 @@ struct CollectorModelChecks {
     }
 
     private static func startEncryptedCollection(_ model: CollectorModel) throws {
+        model.backupPasswordReady = true
         try require(model.startCollection(), "Synthetic collection must start with a read-only check")
         model.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
         model.finished(mode: "backup-encryption-status", code: 0)
@@ -645,6 +646,44 @@ struct CollectorModelChecks {
         try require(settingModel.backupEncryptionStatus == .encrypted,
                     "Only the current clean helper result may qualify an encrypted choice")
 
+        let (backgrounded, _) = try approvedModel()
+        var cancelledCheckInspections = 0
+        backgrounded.eventObserver = { event in
+            if event.kind == "residue" { cancelledCheckInspections += 1 }
+        }
+        backgrounded.updatePreparationObservation(visible: true, finderGuide: false)
+        let backgroundOperation = backgrounded.operationID!
+        backgrounded.updatePreparationObservation(visible: false, finderGuide: false)
+        try require(backgrounded.needsStorageReview,
+                    "Terminating a read-only helper must require inspection of its app-created workspace")
+        let backgroundDeadline = Date().addingTimeInterval(3)
+        while backgrounded.helperRunning && Date() < backgroundDeadline { await Task.yield() }
+        try require(!backgrounded.helperRunning && backgrounded.runApproval == .approved &&
+                    backgrounded.phoneRun?.collectionStarted == false && backgrounded.phase == .idle &&
+                    backgrounded.backupEncryptionStatus == .notChecked && !backgrounded.needsStorageReview &&
+                    cancelledCheckInspections == 1,
+                    "Foreground loss drains the actual owned read-only process and preserves preparation")
+        backgrounded.updatePreparationObservation(visible: true, finderGuide: false)
+        let foregroundOperation = backgrounded.operationID
+        backgrounded.handleHelperOutput(
+            Data(#"{"kind":"backup-encryption-status","backupEncrypted":false}"#.utf8) + Data([10]),
+            operation: backgroundOperation, mode: "backup-encryption-status")
+        backgrounded.handleHelperTermination(1, operation: backgroundOperation, mode: "backup-encryption-status")
+        try require(foregroundOperation != nil && foregroundOperation != backgroundOperation &&
+                    backgrounded.operationID == foregroundOperation && backgrounded.backupEncryptionStatus == .checking,
+                    "A background helper cannot overwrite or finish the foreground helper")
+        backgrounded.cancelBackupEncryptionStatusCheck()
+        // The root view observes .cancelling while it remains visible; this must not re-arm automatic checks.
+        backgrounded.updatePreparationObservation(visible: true, finderGuide: false)
+        let backgroundCancelDeadline = Date().addingTimeInterval(3)
+        while backgrounded.helperRunning && Date() < backgroundCancelDeadline { await Task.yield() }
+        backgrounded.updatePreparationObservation(visible: true, finderGuide: false)
+        try require(!backgrounded.helperRunning && backgrounded.operationID == nil &&
+                    !backgrounded.automaticPreparationChecksActive && backgrounded.runApproval == .approved &&
+                    !backgrounded.needsStorageReview && cancelledCheckInspections == 2,
+                    "Cancel check stays cancelled across actual process exit and visible-view reconciliation")
+        backgrounded.dismissRunApproval()
+
         let abnormal = CollectorModel()
         try require(abnormal.beginBackupEncryptionStatusCheck(), "Synthetic abnormal check must start")
         abnormal.receive(try event(#"{"kind":"backup-encryption-status","backupEncrypted":true}"#))
@@ -703,6 +742,7 @@ struct CollectorModelChecks {
 
         // One Start checks the iPhone with the real helper path, revalidates status and launches exactly that run.
         let (single, singleServer) = try approvedModel()
+        single.backupPasswordReady = true
         try require(single.startCollection(), "Start collection runs the read-only check")
         let checkDeadline = Date().addingTimeInterval(3)
         while (single.phase != .connecting || !single.helperRunning) && Date() < checkDeadline {
@@ -732,6 +772,7 @@ struct CollectorModelChecks {
         // synthetic helper, without a phone, account request, or a new collection permission.
         let (polled, pollingServer) = try approvedModel()
         polled.runStatusPollNanoseconds = 20_000_000
+        polled.backupPasswordReady = true
         try require(polled.startCollection(), "Polling fixture starts with verified authority")
         let pollStartDeadline = Date().addingTimeInterval(3)
         while polled.phoneRun?.collectionStarted != true && Date() < pollStartDeadline {
@@ -772,6 +813,7 @@ struct CollectorModelChecks {
         try Data(closedInputSource.utf8).write(to: helper, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
         let (broken, _) = try approvedModel()
+        broken.backupPasswordReady = true
         try require(broken.startCollection(), "The closed-input fixture must start an encrypted operation")
         let promptDeadline = Date().addingTimeInterval(3)
         while broken.phase != .passwordRequired && Date() < promptDeadline {

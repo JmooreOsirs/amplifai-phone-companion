@@ -19,7 +19,8 @@ APPEND_PATHS = ["release-evidence/final-signed-app-inventory.json", "release-evi
 PHONE_RUN_MODULES = ("test_bridge_run_timing", "test_bridge_recovery", "test_bridge_refresh",
                      "test_call_accounting", "test_source_diagnostic_flow", "test_nonfinite_duration_pipeline",
                      "test_sqlite_encrypted_size_compat", "test_sqlite_messages_size_compat")
-PHONE_RUN_SCRIPTS = ("check_model.sh", "check_window_lifecycle.sh")
+PHONE_RUN_SCRIPTS = ("check_model.sh", "check_window_lifecycle.sh",
+                     "check_preparation_flow.sh", "check_preparation_wire.sh")
 
 
 def require_secret_free_job() -> None:

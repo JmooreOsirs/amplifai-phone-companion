@@ -33,7 +33,7 @@ class QualificationProfileTests(unittest.TestCase):
                               "test_call_accounting", "test_source_diagnostic_flow", "test_nonfinite_duration_pipeline",
                               "test_sqlite_encrypted_size_compat", "test_sqlite_messages_size_compat")]
         paths += [self.root / "source/collector/macos/Tests" / name
-                  for name in ("check_model.sh", "check_window_lifecycle.sh")]
+                  for name in ("check_model.sh", "check_window_lifecycle.sh", "check_preparation_flow.sh", "check_preparation_wire.sh")]
         for path in paths:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("# synthetic test fixture, execution is intercepted\n")
@@ -144,7 +144,7 @@ class QualificationProfileTests(unittest.TestCase):
                                           "test_bridge_recovery", "test_bridge_refresh", "test_call_accounting",
                                           "test_source_diagnostic_flow", "test_nonfinite_duration_pipeline",
                                           "test_sqlite_encrypted_size_compat", "test_sqlite_messages_size_compat", "-v"])
-        self.assertEqual([Path(call.args[0][-1]).name for call in calls[1:]], ["check_model.sh", "check_window_lifecycle.sh"])
+        self.assertEqual([Path(call.args[0][-1]).name for call in calls[1:]], ["check_model.sh", "check_window_lifecycle.sh", "check_preparation_flow.sh", "check_preparation_wire.sh"])
         for call in calls:
             self.assertTrue(call.kwargs["check"])
             self.assertEqual(call.kwargs["cwd"], self.root)
@@ -153,7 +153,7 @@ class QualificationProfileTests(unittest.TestCase):
 
     def test_each_command_failure_propagates_without_running_later_commands(self):
         self.files()
-        for failed in range(3):
+        for failed in range(5):
             replies = [subprocess.CompletedProcess([], 0)] * failed + [subprocess.CalledProcessError(1, ["synthetic"])]
             with patch.object(subprocess, "run", side_effect=replies) as run:
                 with self.assertRaises(subprocess.CalledProcessError):

@@ -305,14 +305,29 @@ final class CollectorModel: ObservableObject {
     @Published var missingSources: [String] = []
     @Published private(set) var backupEncrypted: Bool?
     @Published private(set) var unavailableReasons: [String: String] = [:]
-    @Published var residues: [ResiduePreview] = []
+    @Published var residues: [ResiduePreview] = [] {
+        didSet { if !residues.isEmpty { stopAutomaticPreparationChecks(cancelCurrentCheck: true) } }
+    }
     @Published var errorMessage = ""
     @Published private(set) var helperRunning = false
-    @Published private(set) var needsStorageReview = false
+    @Published private(set) var needsStorageReview = false {
+        didSet { if needsStorageReview { stopAutomaticPreparationChecks(cancelCurrentCheck: true) } }
+    }
     @Published private(set) var collectionApprovalRunID = UUID()
     @Published private(set) var localCollectionApproval: LocalCollectionApproval?
     @Published private(set) var backupEncryptionStatus: BackupEncryptionStatus = .notChecked
     @Published private(set) var backupEncryptionCheckCode: String?
+    @Published var backupPasswordReady = false
+    @Published var finderBackupFinished = false
+    @Published private(set) var finderPreparationRequired = false
+    @Published private(set) var automaticPreparationChecksActive = false
+    private var preparationObservationIdentity: String?
+    private var preparationObservationTask: Task<Void, Never>?
+    private var preparationObservationGeneration = UUID()
+    private var preparationObservationDeadline = Date.distantPast
+    private var preparationNextCheck = Date.distantPast
+    private var preparationChecksRemaining = 0
+    private var preparationGuideVisible = false
     @Published private(set) var statusCheckFailureActive = false
     @Published private(set) var settingCheckAfterCollectionFailure = false
     @Published private(set) var diagnosticDelivery: DiagnosticDelivery = .idle
@@ -404,6 +419,7 @@ final class CollectorModel: ObservableObject {
 
     func setCompanionStatus(_ status: CompanionStatus) {
         if companionStatus != status { companionStatus = status }
+        if !companionStatusAllowsWork { stopAutomaticPreparationChecks(cancelCurrentCheck: true) }
     }
 
     /// A verified run for this collection that has not started and has not expired.
@@ -657,6 +673,7 @@ final class CollectorModel: ObservableObject {
     }
 
     private func refuseRun(_ message: String) {
+        stopAutomaticPreparationChecks(cancelCurrentCheck: true)
         pendingStartRequest = nil
         pendingPreparationBind = nil
         cancelRunStatusCheck()
@@ -671,13 +688,16 @@ final class CollectorModel: ObservableObject {
 
     /// Not now: forget this verified, unstarted run. Nothing was collected.
     func dismissRunApproval() {
-        guard !hasPendingNativeSetup, phoneRun?.collectionStarted != true, !helperRunning else { return }
+        guard !hasPendingNativeSetup, phoneRun?.collectionStarted != true,
+              !helperRunning || backupSettingCheckInProgress else { return }
+        stopAutomaticPreparationChecks(cancelCurrentCheck: true)
         endPhoneRun()
         declineLocalCollection()
     }
 
     /// Ends this app's use of the run: completion, discard, or a collection that stopped.
     private func endPhoneRun() {
+        stopAutomaticPreparationChecks(cancelCurrentCheck: true)
         clearNativeSetup()
         pendingStartRequest = nil
         pendingPreparationBind = nil
@@ -899,13 +919,15 @@ final class CollectorModel: ObservableObject {
         return true
     }
 
-    /// Start collection is an action, not consent: it runs the read-only iPhone setting check and then starts.
+    /// Explicit Start requires password readiness, then rechecks the setting and current authority.
     /// An unencrypted or unconfirmed setting stops here for Finder guidance or an explicit available-data choice.
     @discardableResult
     func startCollection() -> Bool {
         refreshRunStartWindow()
         guard hasStartableRun, canPrepareCollection, localCollectionApproval == nil,
-              candidateClaim == nil, startConfirmation == .none else { return false }
+              candidateClaim == nil, startConfirmation == .none, backupPasswordReady,
+              !finderPreparationRequired || finderBackupFinished else { return false }
+        stopAutomaticPreparationChecks()
         guard beginBackupEncryptionStatusCheck() else { return false }
         guard prepareExplicitStartRequest() else { return false }
         startAfterSettingCheck = true
@@ -920,7 +942,9 @@ final class CollectorModel: ObservableObject {
         refreshRunStartWindow()
         guard backupEncryptionStatus == .unencrypted || backupEncryptionStatus == .unknown,
               !helperRunning, process == nil, hasStartableRun,
-              canPrepareCollection, candidateClaim == nil, startConfirmation == .none else { return false }
+              canPrepareCollection, candidateClaim == nil, startConfirmation == .none,
+              !finderPreparationRequired || (finderBackupFinished && backupPasswordReady) else { return false }
+        stopAutomaticPreparationChecks()
         guard prepareExplicitStartRequest() else { return false }
         confirmRunThenStart(.continueWithoutConfirmedCoverage)
         return true
@@ -936,7 +960,8 @@ final class CollectorModel: ObservableObject {
         guard startAfterSettingCheck else { return }
         startAfterSettingCheck = false
         guard !needsStorageReview, process == nil, let preparation = settingCallHistoryPreparation,
-              backupEncryptionStatus == .encrypted else { return }
+              backupEncryptionStatus == .encrypted, backupPasswordReady,
+              !finderPreparationRequired || finderBackupFinished else { return }
         guard hasStartableRun, canPrepareCollection else { refreshRunStartWindow(); return }
         confirmRunThenStart(preparation)
     }
@@ -1295,16 +1320,134 @@ final class CollectorModel: ObservableObject {
     }
 
     func declineLocalCollection() {
+        stopAutomaticPreparationChecks(cancelCurrentCheck: true)
         localCollectionApproval = nil
         collectionApprovalRunID = UUID()
         backupEncryptionStatus = .notChecked
         backupEncryptionCheckCode = nil
+        backupPasswordReady = false
+        finderBackupFinished = false
+        finderPreparationRequired = false
+    }
+
+    var canObservePreparation: Bool {
+        readyForRunLinks && hasStartableRun && companionStatusAllowsWork && !updateInstallationInProgress &&
+            !needsStorageReview && residues.isEmpty && !hasUnsavedReview && candidateClaim == nil &&
+            localCollectionApproval == nil && startConfirmation == .none && !startAfterSettingCheck &&
+            (phase == .idle || phase == .error) &&
+            ![.uncertain, .replacementRequired, .revoked, .expired].contains(runStatus)
+    }
+
+    var preparedToStart: Bool {
+        canPrepareCollection && hasStartableRun && backupEncryptionStatus == .encrypted &&
+            backupPasswordReady && (!finderPreparationRequired || finderBackupFinished)
+    }
+
+    var canStartWithAvailableData: Bool {
+        canPrepareCollection && hasStartableRun && candidateClaim == nil && startConfirmation == .none &&
+            [.unencrypted, .unknown].contains(backupEncryptionStatus) &&
+            (!finderPreparationRequired || (finderBackupFinished && backupPasswordReady))
+    }
+
+    func skipUnstartedFinderPreparation() {
+        guard canPrepareCollection, [.unencrypted, .unknown].contains(backupEncryptionStatus) else { return }
+        finderPreparationRequired = false
+        finderBackupFinished = false
+        backupPasswordReady = false
+    }
+
+    func beginFinderPreparation() {
+        guard hasStartableRun, backupEncryptionStatus != .encrypted else { return }
+        finderPreparationRequired = true
+        finderBackupFinished = false
+        backupPasswordReady = false
+    }
+
+    /// Foreground preparation owns a bounded read-only observation, never a Start request.
+    /// Finder owns its backup: an encryption result cannot acknowledge its completion.
+    func updatePreparationObservation(visible: Bool, finderGuide: Bool) {
+        guard visible, canObservePreparation, let run = phoneRun else {
+            stopAutomaticPreparationChecks(cancelCurrentCheck: !visible || !startAfterSettingCheck)
+            if !visible { preparationObservationIdentity = nil }
+            return
+        }
+        let identity = "\(run.runID):\(run.claim.approvalID):\(finderGuide)"
+        guard preparationObservationIdentity != identity else { return }
+        stopAutomaticPreparationChecks()
+        preparationObservationIdentity = identity
+        preparationGuideVisible = finderGuide
+        guard backupEncryptionStatus != .encrypted else { return }
+        preparationChecksRemaining = finderGuide ? 120 : 24
+        preparationObservationDeadline = now().addingTimeInterval(finderGuide ? 600 : 120)
+        preparationNextCheck = now()
+        automaticPreparationChecksActive = true
+        let generation = preparationObservationGeneration
+        preparationObservationTick()
+        guard automaticPreparationChecksActive else { return }
+        preparationObservationTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self, self.preparationObservationGeneration == generation else { return }
+                self.preparationObservationTick()
+            }
+        }
+    }
+
+    /// Clock seam for deterministic scheduling checks; production calls this from its owned task.
+    func preparationObservationTick() {
+        guard automaticPreparationChecksActive else { return }
+        guard canObservePreparation, now() < preparationObservationDeadline, preparationChecksRemaining > 0 else {
+            stopAutomaticPreparationChecks(cancelCurrentCheck: true)
+            return
+        }
+        guard !backupSettingCheckInProgress, process == nil, activeHelperMode == nil else { return }
+        if backupEncryptionStatus == .encrypted ||
+            (backupEncryptionStatus == .unencrypted && !preparationGuideVisible) {
+            stopAutomaticPreparationChecks()
+            return
+        }
+        if backupEncryptionStatus == .unknown &&
+            !["phone_connection", "trust_required"].contains(backupEncryptionCheckCode ?? "") {
+            stopAutomaticPreparationChecks()
+            return
+        }
+        guard now() >= preparationNextCheck, canPrepareCollection else { return }
+        preparationChecksRemaining -= 1
+        preparationNextCheck = now().addingTimeInterval(5)
+        checkBackupEncryptionStatus()
+    }
+
+    func stopAutomaticPreparationChecks(cancelCurrentCheck: Bool = false) {
+        preparationObservationGeneration = UUID()
+        preparationObservationTask?.cancel()
+        preparationObservationTask = nil
+        automaticPreparationChecksActive = false
+        if cancelCurrentCheck { cancelReadOnlySettingCheck() }
+    }
+
+    private func cancelReadOnlySettingCheck() {
+        guard activeHelperMode == "backup-encryption-status", !cancellationRequested else { return }
+        startAfterSettingCheck = false
+        cancellationRequested = true
+        backupEncryptionStatus = .notChecked
+        backupEncryptionCheckCode = nil
+        backupPasswordReady = false
+        if let process {
+            // Admin-mode SIGTERM may bypass Python's workspace cleanup, including its pairing cache.
+            needsStorageReview = true
+            if process.isRunning { process.terminate() }
+            phase = .cancelling
+            awaitHelperExit()
+        } else {
+            operationID = nil
+            activeHelperMode = nil
+        }
     }
 
     @discardableResult
     func beginBackupEncryptionStatusCheck() -> Bool {
         guard canPrepareCollection, localCollectionApproval == nil, startConfirmation == .none,
-              candidateClaim == nil else { return false }
+              candidateClaim == nil, activeHelperMode == nil else { return false }
         if phase == .error { settingCheckAfterCollectionFailure = true }
         backupEncryptionStatus = .checking
         backupEncryptionCheckCode = nil
@@ -1323,8 +1466,7 @@ final class CollectorModel: ObservableObject {
     }
 
     func cancelBackupEncryptionStatusCheck() {
-        guard backupSettingCheckInProgress else { return }
-        disconnect()
+        stopAutomaticPreparationChecks(cancelCurrentCheck: true)
     }
 
     var canSafelyClose: Bool {
@@ -2784,6 +2926,7 @@ final class CollectorModel: ObservableObject {
 
     private func awaitHelperExit() {
         guard cancellationTask == nil, let runner = process, let id = operationID else { return }
+        let mode = activeHelperMode ?? "connect"
         cancellationTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(nanoseconds: self?.cancellationGraceNanoseconds ?? 15_000_000_000)
@@ -2802,7 +2945,7 @@ final class CollectorModel: ObservableObject {
                 self.outputHandle?.readabilityHandler = nil
                 try? self.outputHandle?.close()
                 self.outputEnded = true
-                if let code = self.exitCode { self.finished(mode: "connect", code: code) }
+                if let code = self.exitCode { self.finished(mode: mode, code: code) }
             }
         }
     }
@@ -3487,6 +3630,7 @@ final class CollectorModel: ObservableObject {
             if event.backupEncrypted == true { backupEncryptionStatus = .encrypted }
             else if event.backupEncrypted == false { backupEncryptionStatus = .unencrypted }
             else { backupEncryptionStatus = .unknown }
+            if backupEncryptionStatus != .encrypted { backupPasswordReady = false }
             statusCheckFailureActive = backupEncryptionStatus == .unknown
         case "error":
             if activeHelperMode == "backup-encryption-status" &&
@@ -3562,7 +3706,7 @@ final class CollectorModel: ObservableObject {
     func finished(mode: String, code: Int32) {
         if mode == "connect" { clearBackupUnlock() }
         if mode == "backup-encryption-status" {
-            if code != 0 || backupEncryptionStatus == .checking {
+            if !cancellationRequested && (code != 0 || backupEncryptionStatus == .checking) {
                 backupEncryptionStatus = .unknown
                 // A normal error frame precedes the helper's nonzero exit. Keep its
                 // bounded reason so setup can explain storage, USB or Trust failures.
@@ -3570,6 +3714,7 @@ final class CollectorModel: ObservableObject {
                     SupportDiagnosticReporter.reportCodes.contains($0) ? $0 : nil
                 } ?? "collection_failed"
                 statusCheckFailureActive = true
+                backupPasswordReady = false
             }
         } else { declineLocalCollection() }
         cancellationTask?.cancel()
@@ -3620,7 +3765,10 @@ final class CollectorModel: ObservableObject {
         }
         if mode == "connect" && needsStorageReview { inspectResidue() }
         if mode == "backup-encryption-status" && needsStorageReview { inspectResidue() }
-        if mode == "backup-encryption-status" { startAfterCheckIfReady() }
+        if mode == "backup-encryption-status" {
+            startAfterCheckIfReady()
+            preparationObservationTick()
+        }
         if mode == "inspect" { completeStartupChecks() }
     }
 
@@ -3656,13 +3804,17 @@ final class CollectorModel: ObservableObject {
         phase = .error
     }
 
+    var isUnlockingBackup: Bool {
+        phase == .processing && backupUnlockAttempt > 0 && lastParsingActivityAt == nil
+    }
+
     var statusTitle: String {
         switch phase {
         case .idle: return "Connect your iPhone"
         case .connecting: return "Unlock and trust your iPhone"
         case .transferring: return lastBackupActivityAt == nil ? "Waiting for iPhone backup data" : "Receiving the local backup"
         case .passwordRequired: return "Existing backup password needed"
-        case .processing: return "Finishing local collection"
+        case .processing: return isUnlockingBackup ? "Unlocking and checking the backup" : "Reading available sources locally"
         case .selecting: return "Choose the people to review"
         case .reviewing:
             if browserOwnsFlow { return isPreparationRun ? "Waiting for your account to save" : "Saving in your AMPLIFai account" }
@@ -3693,7 +3845,9 @@ final class CollectorModel: ObservableObject {
                 ? "The backup could not be unlocked. The password may be incorrect, or the backup's encryption keys may be unreadable. Try again using the backup already on this Mac."
                 : "The backup has been received. Enter the existing password for this iPhone's encrypted computer backup."
         case .processing:
-            return "The helper is finishing contact and activity reading and temporary-backup cleanup. Backup progress does not mean your review or account save is complete."
+            return isUnlockingBackup
+                ? "Checking the supplied password and backup encryption keys on this Mac. The backup has not yet been confirmed readable."
+                : "Reading available contacts and activity, then cleaning up temporary backup files. Backup progress does not mean your review or account save is complete."
         case .selecting:
             return "\(totalContacts) contacts, \(availableCalls) call activity records and \(availableMessages) SMS activity records were observed in available sources. Choose contacts, then Continue: only those are saved to the account you approved."
         case .reviewing:
