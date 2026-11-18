@@ -2,6 +2,31 @@ import Combine
 import Foundation
 import Sparkle
 
+/// Sparkle boundary: lifecycle checks use the same driver as scheduled and manual updates.
+@MainActor protocol CompanionUpdateDriver: AnyObject {
+    var automaticallyChecksForUpdates: Bool { get }
+    var canCheckForUpdates: Bool { get }
+    var sessionInProgress: Bool { get }
+    func start() throws
+    func checkForUpdatesInBackground()
+    func checkForUpdateInformation()
+    func checkForUpdates()
+}
+
+@MainActor private final class SparkleUpdateDriver: CompanionUpdateDriver {
+    private let controller: SPUStandardUpdaterController
+    init(delegate: SPUUpdaterDelegate) {
+        controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: delegate, userDriverDelegate: nil)
+    }
+    var automaticallyChecksForUpdates: Bool { controller.updater.automaticallyChecksForUpdates }
+    var canCheckForUpdates: Bool { controller.updater.canCheckForUpdates }
+    var sessionInProgress: Bool { controller.updater.sessionInProgress }
+    func start() throws { try controller.updater.start() }
+    func checkForUpdatesInBackground() { controller.updater.checkForUpdatesInBackground() }
+    func checkForUpdateInformation() { controller.updater.checkForUpdateInformation() }
+    func checkForUpdates() { controller.checkForUpdates(nil) }
+}
+
 @MainActor
 final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     enum State: Equatable {
@@ -28,17 +53,22 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
     @Published private(set) var availableBuild: String?
     private weak var model: CollectorModel?
     private var observation: AnyCancellable?
-    private var controller: SPUStandardUpdaterController?
+    private var controller: CompanionUpdateDriver?
+    private let makeDriver: @MainActor (SPUUpdaterDelegate) -> CompanionUpdateDriver
     private var availableVersion: String?
     private var postponedInstall: (() -> Void)?
     private var startupPending = false
     private var pendingManualCheck = false
+    private var pendingOpeningCheck = false
+    private var checkInFlight = false
     private let information: [String: Any]
     let publishedUpdatesEnabled: Bool
 
-    init(enablePublishedUpdates: Bool = true, bundleInformation: [String: Any]? = nil) {
+    init(enablePublishedUpdates: Bool = true, bundleInformation: [String: Any]? = nil,
+         makeDriver: @escaping @MainActor (SPUUpdaterDelegate) -> CompanionUpdateDriver = { SparkleUpdateDriver(delegate: $0) }) {
         let info = bundleInformation ?? Bundle.main.infoDictionary ?? [:]
         information = info
+        self.makeDriver = makeDriver
         publishedUpdatesEnabled = enablePublishedUpdates && Self.isQualifiedConfiguration(info, architecture: Self.architecture)
         super.init()
         if !publishedUpdatesEnabled { state = .updatesDisabled }
@@ -76,6 +106,7 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func startIfNeeded(model: CollectorModel) {
         bind(model: model)
+        model.retireExpiredUnapprovedSetup()
         guard publishedUpdatesEnabled else { state = .updatesDisabled; return }
         guard controller == nil else { return }
         startupPending = true
@@ -86,14 +117,47 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
         guard startupPending, let model else { return }
         guard model.canCheckForUpdatesInBackground else { state = .deferred(nil); return }
         startupPending = false
-        let updater = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
+        let updater = makeDriver(self)
         controller = updater
-        do { try updater.updater.start() }
+        do { try updater.start() }
         catch { controller = nil; state = .failed; return }
-        let automaticChecksEnabled = updater.updater.automaticallyChecksForUpdates
+        pendingOpeningCheck = false
+        let automaticChecksEnabled = updater.automaticallyChecksForUpdates
         state = Self.startupState(automaticChecksEnabled: automaticChecksEnabled)
         // Info.plist supplies defaults. Sparkle's persisted user preferences are never overwritten here.
-        if automaticChecksEnabled { updater.updater.checkForUpdatesInBackground() }
+        if automaticChecksEnabled, !updater.sessionInProgress {
+            checkInFlight = true
+            updater.checkForUpdatesInBackground()
+        }
+    }
+
+    /// Reopening or accepting a supported account link probes the signed channel without resetting
+    /// Sparkle's scheduler or offering an installation over the user's current work.
+    func applicationOpened(model: CollectorModel) {
+        model.retireExpiredUnapprovedSetup()
+        guard controller != nil else { startIfNeeded(model: model); return }
+        bind(model: model)
+        pendingOpeningCheck = true
+        checkOpeningWhenSafe()
+    }
+
+    private func checkOpeningWhenSafe() {
+        guard pendingOpeningCheck, let controller else { return }
+        // The current cycle already covers this opening. Do not queue another check behind it.
+        guard !checkInFlight, !controller.sessionInProgress, postponedInstall == nil, !modelIsInstalling else {
+            pendingOpeningCheck = false
+            return
+        }
+        guard controller.automaticallyChecksForUpdates else {
+            pendingOpeningCheck = false
+            if availableVersion == nil { state = .manualOnly }
+            return
+        }
+        guard model?.canCheckForUpdatesInBackground == true else { return }
+        pendingOpeningCheck = false
+        checkInFlight = true
+        state = .checking
+        controller.checkForUpdateInformation()
     }
 
     static func startupState(automaticChecksEnabled: Bool) -> State {
@@ -116,10 +180,12 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             return
         }
         startWhenSafe()
-        guard let controller, controller.updater.canCheckForUpdates else { return }
+        guard let controller, !checkInFlight, controller.canCheckForUpdates else { return }
         pendingManualCheck = false
+        pendingOpeningCheck = false
+        checkInFlight = true
         state = .checking
-        controller.checkForUpdates(nil)
+        controller.checkForUpdates()
     }
 
     @discardableResult
@@ -134,7 +200,9 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func resumeIfSafe() {
         guard publishedUpdatesEnabled else { postponedInstall = nil; state = .updatesDisabled; return }
+        model?.retireExpiredUnapprovedSetup()
         if startupPending, model?.canCheckForUpdatesInBackground == true { startWhenSafe() }
+        checkOpeningWhenSafe()
         guard let model, model.canInstallUpdate else {
             if let availableVersion, !modelIsInstalling { state = .deferred(availableVersion) }
             return
@@ -209,6 +277,7 @@ final class CompanionUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
         guard publishedUpdatesEnabled else { return }
+        checkInFlight = false
         guard let error else { model?.endUpdateInstallation(); return }
         let failure = error as NSError
         if failure.domain == Self.gateErrorDomain { return }

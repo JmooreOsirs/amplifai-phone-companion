@@ -1,5 +1,41 @@
 # Native delivery and website promotion contracts
 
+## November 18 Apple Silicon RC38 opening and stale-setup recovery
+
+Candidate `2026.11.18-rc38` / `26111838` starts from the published RC37 native
+merge `9d8e4e43bbc364a16878b4d6ae6efee8584b3f6f`. Jeff authorized qualification,
+existing-key signing/notarization and publication through the canonical native
+executor; the active model setting is retained. The website owner activates
+feed/download pointers only after the signed public-byte handoff.
+
+Cold launch retains Sparkle's existing background check. Reopening the running
+app and delivering a supported account link request a signed-channel information
+probe before setup admission. The production Sparkle adapter reads the persisted
+automatic-check preference, coalesces active sessions and keeps manual checking
+available. No check waits on the network before local work can proceed; a failed
+check cannot claim that the installed build is current. Reopen uses Sparkle's
+[information probe](https://sparkle-project.org/documentation/api-reference/Classes/SPUUpdater.html)
+to avoid restarting its automatic-download scheduler.
+
+A verified, expired `pendingApproval` that never sent approval is retired locally
+at its deadline, on opening, or before a new supported link. Live setup, uncertain
+claims, pending/uncertain approval, approved runs, active transfer, unsaved review,
+Save receipts and cleanup remain protected. Expiry grants no consent and sends
+no account mutation. The next setup still needs explicit approval.
+
+Focused synthetic updater and setup checks passed, including the actual AppKit
+reopen delegate, opt-out/manual check, offline retry, in-flight session coalescing,
+transfer/review installation deferral, exact expiry, the real expiry task, new-link
+admission and exact uncertain approval recovery. The packaged RC37 Info.plist
+was read from its sealed release DMG and matches the expected signed ARM channel.
+No layout, style, consent text or server protocol changes are included.
+
+Next finite milestone: normal source/control PR checks, exact merged-source
+release-mode qualification, signed and notarized RC38 public artifacts, then
+serialized website activation and public readback. RC37 `26111637` remains
+rollback. Physical-device/account acceptance and the customer's installed version
+or historical backup-unlock cause remain unverified. No customer data was changed.
+
 ## October 27 Windows RC27 Unicode release
 
 Exact package/source `71ff8ffe1d61bfdd4cfd7143b54fdbfffee7ae23` is Windows `2026.10.27-rc27`, build `26102727`, MSI `1.0.27`. The helper and its parent enforce strict UTF-8 input/output; safe first-failure enums survive cleanup and unknown call direction remains unknown. A matching fictional Unicode case reproduces the old CP1252 failure and passes under the repair. The discarded original exception remains unproved.

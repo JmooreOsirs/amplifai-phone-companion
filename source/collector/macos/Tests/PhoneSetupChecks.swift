@@ -14,12 +14,14 @@ import Darwin
         return (model, server, wire)
     }
 
-    static func main() {
+    static func main() async {
         do {
             try strictLinksAndTransport()
             try strictClaimAndReceipt()
             try explicitConsentAndCompleteFlow()
             try exactUncertainRecovery()
+            try expiredSetupRecovery()
+            try await setupExpiryTimer()
             try mismatchesStayDisabled()
             try cancellationAndStaleCallbacks()
             try legacyAndRestartIsolation()
@@ -194,6 +196,9 @@ import Darwin
         try Flow.require(model.nativeSetupState == .approvalUncertain, "Not now cannot discard uncertain approval recovery")
         try disabled(model, wire, "Uncertain approval cannot start capture")
         server.now = server.expiresAt.addingTimeInterval(10)
+        try Flow.require(!model.retireExpiredUnapprovedSetup() && !model.admitSetupLink(server.link) &&
+                         model.nativeSetupState == .approvalUncertain,
+                         "Expiry and reopening preserve the exact possibly committed approval")
         model.retryNativeApproval()
         let approvals = server.requests.filter { $0.path == PhoneSetupContract.approvePath }
         try Flow.require(model.runApproval == .approved && approvals.count == 4 &&
@@ -209,6 +214,88 @@ import Darwin
         unexpected.retryNativeApproval()
         try Flow.require(unexpected.runApproval == .approved && unexpectedServer.runs.runs.count == 1,
                          "Exact retry recovers after an invalid success status")
+    }
+
+    @MainActor private final class SetupRouter: PhoneRunTransport {
+        var server: SimulatedPhoneSetupServer
+        init(_ server: SimulatedPhoneSetupServer) { self.server = server }
+        func post(path: String, body: Data, completion: @escaping @MainActor (PhoneRunTransportResult) -> Void) {
+            server.post(path: path, body: body, completion: completion)
+        }
+    }
+
+    static func expiredSetupRecovery() throws {
+        let first = SimulatedPhoneSetupServer()
+        let router = SetupRouter(first)
+        let wire = Flow.Wire()
+        let model = CollectorModel(commandWriter: { wire.commands.append($0) }, runAuthority:
+            PhoneRunAuthorityClient(transport: router, schedule: PhoneRunAuthorityClient.immediate,
+                                    admissionProtocol: .preparation))
+        model.now = { router.server.now }
+        try Flow.require(model.admitSetupLink(first.link), "First synthetic setup is pending")
+        model.nativeDisclosureAccepted = true
+        let claim = model.nativeSetup
+        first.now = first.expiresAt.addingTimeInterval(-0.001)
+        try Flow.require(!model.retireExpiredUnapprovedSetup() && model.nativeSetup == claim &&
+                         !model.admitSetupLink(first.link), "A live pending agreement stays protected until its exact expiry")
+        first.now = first.expiresAt
+        model.phase = .reviewing
+        try Flow.require(!model.retireExpiredUnapprovedSetup(), "Review cannot be discarded by setup retirement")
+        model.phase = .idle
+        let next = SimulatedPhoneSetupServer(now: first.now)
+        router.server = next
+        let inbox = PhoneRunLinkInbox()
+        var beforeDelivery = false
+        inbox.beforeDelivery = { beforeDelivery = model.nativeSetup == claim && next.requests.isEmpty }
+        inbox.attach(model)
+        let url = URL(string: "amplifai-phone://setup?setup=\(next.setupID)&bootstrap=\(next.bootstrap)")!
+        try Flow.require(inbox.receive(url, returnBrowserBundleID: next.link.returnBrowserBundleID) && beforeDelivery &&
+                         model.nativeSetup?.setupID == next.setupID && model.nativeSetupState == .pendingApproval &&
+                         !model.nativeDisclosureAccepted && wire.commands.isEmpty && first.approvalBytes == nil &&
+                         next.approvalBytes == nil && first.requests.count == 1 && next.requests.count == 1,
+                         "At expiry a valid new link replaces only unapproved local setup and still needs fresh consent")
+        next.now = next.expiresAt
+        try Flow.require(model.retireExpiredUnapprovedSetup() && !model.retireExpiredUnapprovedSetup() &&
+                         model.canInstallUpdate && model.admitsRunLink,
+                         "Retirement is idempotent and clears stale busy status without an account operation")
+
+        let (uncertain, claimServer, _) = fixture()
+        claimServer.faults = [.loseReply, .dropRequest, .malformed]
+        uncertain.admitSetupLink(claimServer.link)
+        claimServer.now = claimServer.expiresAt
+        try Flow.require(!uncertain.retireExpiredUnapprovedSetup() && !uncertain.admitSetupLink(claimServer.link) &&
+                         uncertain.nativeSetupState == .claimUncertain,
+                         "An uncertain one-use claim cannot be forgotten by expiry")
+
+        let (approving, approvalServer, _) = fixture()
+        approving.admitSetupLink(approvalServer.link)
+        approving.nativeDisclosureAccepted = true
+        approvalServer.holdReplies = true
+        approving.approveNativeSetup()
+        approvalServer.now = approvalServer.expiresAt
+        try Flow.require(!approving.retireExpiredUnapprovedSetup() && approving.nativeSetupState == .approving &&
+                         !approving.canInstallUpdate, "An approval in flight survives setup expiry")
+        approvalServer.releaseHeldReplies()
+        let confirmed = approving.phoneRun
+        try Flow.require(confirmed != nil && !approving.retireExpiredUnapprovedSetup() &&
+                         approving.phoneRun?.runID == confirmed?.runID,
+                         "A confirmed receipt and its approved run are never retired as stale setup")
+    }
+
+    static func setupExpiryTimer() async throws {
+        let server = SimulatedPhoneSetupServer(expiresIn: 1)
+        let wire = Flow.Wire()
+        let model = CollectorModel(commandWriter: { wire.commands.append($0) }, runAuthority:
+            PhoneRunAuthorityClient(transport: server, schedule: PhoneRunAuthorityClient.immediate,
+                                    admissionProtocol: .preparation))
+        model.now = { Date() }
+        try Flow.require(model.admitSetupLink(server.link) && model.hasPendingNativeSetup, "Timer starts from verified setup")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while model.hasPendingNativeSetup && ContinuousClock.now < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try Flow.require(model.nativeSetupState == .none && model.canInstallUpdate && server.requests.count == 1 &&
+                         wire.commands.isEmpty, "The real expiry task clears stale busy status with no collection or network request")
     }
 
     static func mismatchesStayDisabled() throws {

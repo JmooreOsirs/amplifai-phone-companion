@@ -11,9 +11,9 @@
   <key>CFBundleIconFile</key>
   <string>AmplifaiPhone.icns</string>
   <key>CFBundleShortVersionString</key>
-  <string>2026.11.16-rc37</string>
+  <string>2026.11.18-rc38</string>
   <key>CFBundleVersion</key>
-  <string>26111637</string>
+  <string>26111838</string>
   <key>CFBundleURLTypes</key>
   <array>
     <dict>

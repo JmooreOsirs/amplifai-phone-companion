@@ -312,7 +312,8 @@ enum PhoneRunFlowChecks {
         offline.faults = [.dropRequest, .dropRequest, .dropRequest]
         let waiting = CollectorModel(commandWriter: { _ in }, runAuthority: client(offline))
         waiting.admitRunLink(link(offline, offline.createRun()))
-        try require(waiting.runApproval == .uncertain && waiting.phoneRun == nil && !waiting.startCollection(),
+        try require(waiting.runApproval == .uncertain && waiting.phoneRun == nil && !waiting.startCollection() &&
+                    !waiting.canInstallUpdate,
                     "An unconfirmed claim never starts a collection")
         waiting.retryRunClaim()
         try require(waiting.runApproval == .approved && Set(offline.requests.map(\.body)).count == 1,
@@ -325,7 +326,7 @@ enum PhoneRunFlowChecks {
         let wire = Wire()
         let model = CollectorModel(commandWriter: { wire.commands.append($0) }, runAuthority: client(server))
         model.admitRunLink(link(server, server.createRun()))
-        try require(model.runApproval == .uncertain && model.phoneRun == nil && server.claimCount == 3,
+        try require(model.runApproval == .uncertain && model.phoneRun == nil && server.claimCount == 3 && !model.canInstallUpdate,
                     "A malformed success after retries is uncertain, never success or refusal")
         model.retryRunClaim()
         try require(model.runApproval == .approved && Set(server.requests.map(\.body)).count == 1,
@@ -484,7 +485,8 @@ enum PhoneRunFlowChecks {
             let newer = server.createRun(email: email, course: "Newer course")
             server.faults = [fault, fault, fault]
             model.admitRunLink(link(server, newer))
-            try require(model.candidateUncertain && model.phoneRun == grant && model.hasStartableRun && !model.startCollection(),
+            try require(model.candidateUncertain && model.phoneRun == grant && model.hasStartableRun && !model.startCollection() &&
+                        !model.canInstallUpdate,
                         "An unconfirmed candidate retains both grants but blocks Start until settlement (\(fault))")
             let candidateBodies = server.requests.suffix(3).map(\.body)
             model.retryCandidateClaim()

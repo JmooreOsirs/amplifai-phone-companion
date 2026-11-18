@@ -86,6 +86,8 @@ enum ReturnBrowserChoice {
 @MainActor final class PhoneRunLinkInbox {
     private(set) var pending: PendingPhoneLink?
     private weak var model: CollectorModel?
+    /// Check installed compatibility before handing a supported link to the model; never awaits the network.
+    var beforeDelivery: (() -> Void)?
 
     /// Returns false when the URL is not a supported phone link (ignored).
     @discardableResult
@@ -119,6 +121,7 @@ enum ReturnBrowserChoice {
     }
 
     private func deliver(_ item: PendingPhoneLink, to model: CollectorModel) {
+        beforeDelivery?()
         switch item {
         case .run(let link): model.admitRunLink(link)
         case .setup(let link): model.admitSetupLink(link)

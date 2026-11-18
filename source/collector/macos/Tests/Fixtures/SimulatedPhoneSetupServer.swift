@@ -22,9 +22,9 @@ import Foundation
     private(set) var receipt: [String: Any]?
     private(set) var runID: String?
 
-    init(now: Date = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))) {
+    init(now: Date = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970)), expiresIn: TimeInterval = 600) {
         self.now = now
-        expiresAt = now.addingTimeInterval(600)
+        expiresAt = now.addingTimeInterval(expiresIn)
         runs.now = { [weak self] in self?.now ?? .distantPast }
     }
 

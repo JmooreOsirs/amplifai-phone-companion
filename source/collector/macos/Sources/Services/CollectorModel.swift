@@ -221,6 +221,7 @@ final class CollectorModel: ObservableObject {
     private var setupBrowserBundleID: String?
     private var setupClaimStartedAt = Date.distantPast
     private var setupApprovalStartedAt = Date.distantPast
+    private var nativeSetupExpiryTask: Task<Void, Never>?
     @Published private(set) var runBinding: RunBinding = .none
     @Published private(set) var runStatus: RunStatus = .unchecked
     @Published private(set) var runStatusMessage = ""
@@ -505,6 +506,7 @@ final class CollectorModel: ObservableObject {
     /// Redeems the link's one-use bootstrap with a fresh capability this app generates and keeps.
     @discardableResult
     func admitRunLink(_ item: PendingRunLink) -> Bool {
+        retireExpiredUnapprovedSetup()
         guard admitsRunLink, let authority = runAuthority else { return false }
         // The same link again (the owner opened the app twice) is a duplicate: the grant, its capability and
         // any prepared claim stay exactly as they are.
@@ -737,6 +739,7 @@ final class CollectorModel: ObservableObject {
     /// A pending setup cannot displace a verified legacy run or discard an uncertain one-use claim.
     @discardableResult
     func admitSetupLink(_ item: PendingSetupLink) -> Bool {
+        retireExpiredUnapprovedSetup()
         guard admitsRunLink, runAuthority?.admissionProtocol == .preparation, phoneRun == nil,
               pendingClaim == nil, let authority = runAuthority else { return false }
         guard let capability = PhoneRunContract.newCapability(),
@@ -774,6 +777,7 @@ final class CollectorModel: ObservableObject {
             nativeSetup = setup
             nativeDisclosureAccepted = false
             nativeSetupState = .pendingApproval
+            scheduleNativeSetupExpiry()
         case .refused: refuseNativeSetup()
         case .uncertain, .malformed:
             nativeSetupState = .claimUncertain
@@ -850,6 +854,33 @@ final class CollectorModel: ObservableObject {
 
     private static let nativeApprovalUncertainMessage = "Your approval could not be confirmed. Retry the same approval to recover its result. To cancel, return to your original account tab. Collection stays off until confirmation."
 
+    /// Only a verified setup that never sent approval may be forgotten automatically. In particular,
+    /// claim/approval uncertainty keeps its exact recovery request even after the setup deadline.
+    @discardableResult
+    func retireExpiredUnapprovedSetup() -> Bool {
+        guard nativeSetupState == .pendingApproval, let setup = nativeSetup, let claim = pendingSetupClaim,
+              setup.setupID == claim.setupID, setup.requestID == claim.requestID, setup.expiresAt <= now(),
+              pendingSetupApproval == nil, pendingClaim == nil, phoneRun == nil, runApproval == .none,
+              !helperRunning, process == nil, !updateInstallationInProgress,
+              !hasUnsavedReview, !reviewPending, !pairingRequested, handoffID.isEmpty,
+              !needsStorageReview, residues.isEmpty,
+              phase == .idle || phase == .error || phase == .completed else { return false }
+        clearNativeSetup()
+        return true
+    }
+
+    private func scheduleNativeSetupExpiry() {
+        nativeSetupExpiryTask?.cancel()
+        guard nativeSetupState == .pendingApproval, let setup = nativeSetup else { return }
+        let delay = max(0, min(PhoneSetupContract.lifetime + 60, setup.expiresAt.timeIntervalSince(now())))
+        nativeSetupExpiryTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
+            guard let self, self.nativeSetup == setup, self.nativeSetupState == .pendingApproval else { return }
+            if setup.expiresAt > self.now() { self.scheduleNativeSetupExpiry() }
+            else { self.retireExpiredUnapprovedSetup() }
+        }
+    }
+
     /// Before approval, Not now only forgets the local setup. Server cancellation belongs to the signed-in tab.
     func dismissNativeSetup() {
         guard pendingSetupApproval == nil else { return }
@@ -857,6 +888,8 @@ final class CollectorModel: ObservableObject {
     }
 
     private func clearNativeSetup() {
+        nativeSetupExpiryTask?.cancel()
+        nativeSetupExpiryTask = nil
         pendingSetupClaim = nil
         pendingSetupApproval = nil
         nativeSetup = nil
@@ -1630,6 +1663,7 @@ final class CollectorModel: ObservableObject {
     var canTerminateForUpdate: Bool {
         let settled = phase == .idle || phase == .completed || phase == .error
         return settled && !hasPendingNativeSetup && !helperRunning && process == nil && !needsStorageReview && residues.isEmpty &&
+            pendingClaim == nil && candidateClaim == nil && startConfirmation == .none &&
             !hasUnsavedReview && !reviewPending && !pairingRequested &&
             (handoffID.isEmpty || handoffAcknowledged)
     }
