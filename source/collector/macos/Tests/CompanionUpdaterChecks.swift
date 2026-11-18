@@ -1,12 +1,14 @@
 import Foundation
 import Combine
 import Sparkle
+import AppKit
 
 @main
 @MainActor
 struct CompanionUpdaterChecks {
     static func main() async {
         configurationAndChannelChecks()
+        openingLifecycleChecks()
         delegatePathChecks()
         disabledUpdatesCannotContactFeedOrInstall()
         let model = CollectorModel()
@@ -56,6 +58,97 @@ struct CompanionUpdaterChecks {
         print("Mac updater deferral, install-on-quit and no-update reason checks passed")
         await statusProcessChecks()
         await closedStatusPipeCannotTerminateWrapper()
+    }
+
+    @MainActor private final class RecordingDriver: CompanionUpdateDriver {
+        var automaticallyChecksForUpdates = true
+        var canCheckForUpdates = true
+        var sessionInProgress = false
+        var starts = 0
+        var backgroundChecks = 0
+        var informationChecks = 0
+        var manualChecks = 0
+        func start() throws { starts += 1 }
+        func checkForUpdatesInBackground() { backgroundChecks += 1; sessionInProgress = true }
+        func checkForUpdateInformation() { informationChecks += 1; sessionInProgress = true }
+        func checkForUpdates() { manualChecks += 1; sessionInProgress = true }
+    }
+
+    private static func openingLifecycleChecks() {
+        let model = CollectorModel()
+        let driver = RecordingDriver()
+        let updater = CompanionUpdater(bundleInformation: qualifiedInformation(), makeDriver: { _ in driver })
+        let delegate = AppDelegate()
+        delegate.attach(model: model, updater: updater)
+        var reopened = 0
+        delegate.reopenCollectorWindow = { reopened += 1 }
+        model.setCompanionStatus(.starting)
+        updater.startIfNeeded(model: model)
+        _ = delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true)
+        precondition(driver.starts == 0 && updater.state == .deferred(nil))
+        model.setCompanionStatus(.ready)
+        updater.resumeIfSafe()
+        updater.startIfNeeded(model: model)
+        _ = delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false)
+        precondition(driver.starts == 1 && driver.backgroundChecks == 1 && driver.informationChecks == 0 && reopened == 1,
+                     "Cold appearance and reopening coalesce into one startup check and one owned window")
+
+        let sparkle = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: updater, userDriverDelegate: nil)
+        driver.sessionInProgress = false
+        updater.updater(sparkle.updater, didFinishUpdateCycleFor: .updatesInBackground, error: nil)
+        _ = delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true)
+        _ = delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true)
+        precondition(driver.starts == 1 && driver.informationChecks == 1 && driver.backgroundChecks == 1,
+                     "Reopen probes once without restarting Sparkle or its background download scheduler")
+        driver.sessionInProgress = false
+        updater.updater(sparkle.updater, didFinishUpdateCycleFor: .updateInformation,
+                        error: NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+        precondition(updater.state == .failed && model.canPrepareCollection && !model.updateInstallationInProgress,
+                     "An offline check cannot block new local work or claim current compatibility")
+        model.phase = .processing
+        updater.applicationOpened(model: model)
+        precondition(driver.informationChecks == 2 && !model.canInstallUpdate,
+                     "A transfer permits information discovery but not installation")
+        var installs = 0
+        updater.postponeInstallIfNeeded(version: "new") { installs += 1 }
+        updater.applicationOpened(model: model)
+        precondition(installs == 0 && driver.informationChecks == 2)
+        model.phase = .reviewing
+        updater.resumeIfSafe()
+        precondition(installs == 0, "Reopen cannot replace unsaved review")
+        model.phase = .idle
+        updater.resumeIfSafe()
+        updater.resumeIfSafe()
+        precondition(installs == 1, "The deferred install is released once after work settles")
+
+        let optedOut = RecordingDriver()
+        optedOut.automaticallyChecksForUpdates = false
+        let manualModel = CollectorModel()
+        let manual = CompanionUpdater(bundleInformation: qualifiedInformation(), makeDriver: { _ in optedOut })
+        manual.startIfNeeded(model: manualModel)
+        manual.applicationOpened(model: manualModel)
+        precondition(optedOut.starts == 1 && optedOut.backgroundChecks == 0 && optedOut.informationChecks == 0 &&
+                     manual.state == .manualOnly && manual.currentBuild == "26101425",
+                     "Opt-out persists on launch and reopen while installed build status remains available")
+        manual.checkNow()
+        manual.checkNow()
+        precondition(optedOut.manualChecks == 1, "An explicit manual check works without enabling automatic checks")
+
+        let externallyBusy = RecordingDriver()
+        let busy = CompanionUpdater(bundleInformation: qualifiedInformation(), makeDriver: { _ in externallyBusy })
+        busy.startIfNeeded(model: manualModel)
+        let actual = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: busy, userDriverDelegate: nil)
+        busy.updater(actual.updater, didFinishUpdateCycleFor: .updatesInBackground, error: nil)
+        externallyBusy.sessionInProgress = true
+        busy.applicationOpened(model: manualModel)
+        precondition(externallyBusy.informationChecks == 0,
+                     "Sparkle's own scheduled session cannot be duplicated even if manual checks are allowed")
+        externallyBusy.sessionInProgress = false
+        externallyBusy.automaticallyChecksForUpdates = false
+        busy.applicationOpened(model: manualModel)
+        precondition(busy.state == .manualOnly && externallyBusy.informationChecks == 0,
+                     "Each reopening reads the current persisted preference")
+        print("Cold launch, actual AppKit reopen, coalescing, opt-out, offline and protected-work update checks passed")
     }
 
     static func qualifiedInformation(architecture requestedArchitecture: String? = nil) -> [String: Any] {

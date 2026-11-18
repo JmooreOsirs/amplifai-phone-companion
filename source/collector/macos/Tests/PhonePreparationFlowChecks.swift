@@ -235,7 +235,8 @@ import Darwin
                 ? [.loseReply, .dropRequest, .dropRequest] : [.dropRequest, .dropRequest, .dropRequest]
             try Flow.start(model)
             if !committed {
-                try Flow.require(model.startConfirmation == .uncertain && model.phoneRun?.collectionStarted == false,
+                try Flow.require(model.startConfirmation == .uncertain && model.phoneRun?.collectionStarted == false &&
+                                 !model.canInstallUpdate,
                                  "An absent admission remains uncertain and cannot launch")
                 model.retryStartConfirmation()
             }
@@ -289,7 +290,8 @@ import Darwin
         let (model, server, _, _) = try approved()
         server.holdPaths = [PhoneRunContract.startPath]
         try Flow.start(model)
-        try Flow.require(model.startConfirmation == .confirming && model.phoneRun?.collectionStarted == false,
+        try Flow.require(model.startConfirmation == .confirming && model.phoneRun?.collectionStarted == false &&
+                         !model.canInstallUpdate,
                          "A held Start response grants no local collection")
         model.disconnect()
         server.releaseHeldReplies()
