@@ -1,5 +1,59 @@
 # Native delivery and website promotion contracts
 
+## November 18 follow-on: iPhone prompts and account Save clarity
+
+After the RC38 signed public-byte handoff, the canonical coordinator requested
+two bounded native UX corrections. The active approved model setting is retained.
+The existing native checkout and `codex/macos-phone-save-guidance-nov18` branch
+own this follow-on. RC38 source, version, control pins and public bytes stay fixed.
+
+At backup start, direct attention to the iPhone's own Trust/screen-passcode prompt.
+For numeric device status 208, explain unlocking and keeping the phone awake,
+then one user-initiated new collection through the existing account approval path
+after the stopped attempt and any temporary-data checks. Keep other status codes,
+numeric support evidence, consent and recovery guards unchanged. Apple's
+[Trust instructions](https://support.apple.com/en-us/109054) describe the phone
+prompt; iMazing's [backup-error reference](https://imazing.com/guides/mberrordomain-backup-and-restore-errors-explained)
+associates status 208 with protected data while locked. This guides recovery; it
+does not prove a particular customer's cause. No automatic retry, encryption
+reset, customer rerun or expanded telemetry is authorized by this patch.
+
+After the encrypted-backup password, say what is actually happening: unlocking
+for contact review, preparing contacts, then choosing people and continuing.
+Temporary-file cleanup before review is distinct from final receipt-confirmed
+Save cleanup. Keep account receipt and safe-close guards; never infer a Save from
+progress, cleanup or a helper completion event. Do not imply USB remains required
+during the subsequent local preparation or review.
+
+UI reference contract: the shipped RC37/RC38 production views and retained
+`/private/tmp/amplifai-mac-visual.rc37-reviewed` renders are authority. Change text
+and the existing progress labels only. Reuse `Brand.headingFont(28)`,
+`Brand.bodyFont(15/16)`, native heading/body/muted/lime colors, `Brand.Space.item`
+(12), page padding (28), section gap (20), control radius (8), panel radius (12),
+the existing password `LimeButton`, numbered recovery text and stage capsules.
+The existing next-action text moves into the activity heading at the same body
+scale. No new font, surface, control behavior, motion, icon or window geometry.
+Compare matched 375/768/1440 and compact Mac renders and resolved native styles.
+
+Finite milestone: focused status-208/alternate-status and real receipt-flow
+assertions, production Swift build, hidden production-view renders, then the
+reviewable source PR and explicit release-state handoff. Qualification/publication
+of this follow-on and physical customer/device acceptance remain separate.
+
+Local validation passed: focused model checks, full native flow/preparation/setup
+checks and the production Swift build. The status-208 case preserves 182 seconds,
+zero received/retained bytes and the numeric support code; alternate status 205
+retains its original guidance. The existing synthetic selected-contact journey
+rejects completion before review and before the final receipt, then reaches Saved
+and safe close only through the acknowledged flow. Thirteen states produced 84
+hidden render images at the six existing viewports, including 375/768/1440 and
+820x640. Pre-review, pending-receipt, acknowledged-cleanup, completed and status-208
+screens were inspected. Resolved native styles equal the retained baseline.
+Evidence is in `build/mac-opening-nov18/followon-*.log` and
+`/private/tmp/amplifai-mac-visual.phone-save-nov18/mac-review-render-receipt.json`.
+The render model has no admitted product build, so it cannot send diagnostics;
+no app was activated, window shown, screen captured or customer helper started.
+
 ## November 18 Apple Silicon RC38 opening and stale-setup recovery
 
 Candidate `2026.11.18-rc38` / `26111838` starts from the published RC37 native
@@ -30,11 +84,20 @@ admission and exact uncertain approval recovery. The packaged RC37 Info.plist
 was read from its sealed release DMG and matches the expected signed ARM channel.
 No layout, style, consent text or server protocol changes are included.
 
-Next finite milestone: normal source/control PR checks, exact merged-source
-release-mode qualification, signed and notarized RC38 public artifacts, then
-serialized website activation and public readback. RC37 `26111637` remains
-rollback. Physical-device/account acceptance and the customer's installed version
-or historical backup-unlock cause remain unverified. No customer data was changed.
+Source PR58 merged as `8b9a9ee67397526194d9286290871be24dad8c9c`; control PR59
+merged as `92a8af7e0f1beebcbbc1fc167a5639f0d476dc64`. Release qualification
+`44357698676` attempt 2 passed; attempt 1 acquired no hosted ARM runner and ran no
+candidate steps. Artifact `14456087029` passed immutable digest verification.
+Apple accepted app notarization `f9f2d9ea-bbd8-481d-abc3-03acc6447206` and DMG
+`aec69053-23ee-48db-9522-026cb6a493ef`. The [RC38 release](https://github.com/JmooreOsirs/amplifai-phone-companion/releases/tag/macos-2026.11.18-rc38-release)
+is published with mounted-package verification and complete public asset readback.
+The signed website handoff is under
+`build/mac-opening-nov18/rc38-release/publication/website-handoff.json`.
+
+Next finite milestone: website-owner activation and both-origin readback from the
+signed handoff. RC37 `26111637` remains rollback. Physical-device/account
+acceptance and the customer's installed version or historical backup-unlock cause
+remain unverified. No customer data was changed.
 
 ## October 27 Windows RC27 Unicode release
 

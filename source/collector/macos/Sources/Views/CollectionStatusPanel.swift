@@ -11,15 +11,15 @@ struct CollectionStatusPanel: View {
 
     private var stages: [String] {
         model.backupUnlockAttempt > 0
-            ? ["Connect iPhone", "Receive backup", "Unlock backup", "Read locally", "Clean up"]
-            : ["Connect iPhone", "Receive backup", "Read locally", "Clean up"]
+            ? ["Connect iPhone", "Receive backup", "Unlock backup", "Prepare review", "Choose people", "Account save"]
+            : ["Connect iPhone", "Receive backup", "Prepare review", "Choose people", "Account save"]
     }
 
     private var activeStage: Int {
         switch model.phase {
         case .connecting: return 0
         case .transferring: return 1
-        case .processing: return model.isUnlockingBackup ? 2 : stages.count - 2
+        case .processing: return model.isUnlockingBackup ? 2 : stages.count - 3
         default: return stages.count - 1
         }
     }
@@ -132,10 +132,12 @@ struct CollectionStatusPanel: View {
 
     private var nextAction: String {
         switch model.phase {
-        case .connecting: return "Next: receive the iPhone backup on this Mac. Keep the phone unlocked for Trust prompts."
+        case .connecting: return "Next: receive the iPhone backup on this Mac. Watch the phone for Trust and passcode prompts."
         case .transferring: return "Next: read available sources locally, then choose which contacts to share."
-        case .processing: return "Next: choose contacts, then Continue to save them to your approved account."
-        default: return "Next: inspect receipt-confirmed sources in your signed-in account."
+        case .processing: return "Next: choose people and continue to your account."
+        default: return model.handoffAcknowledged
+            ? "Next: view your saved report in your account."
+            : "Next: wait for your account to confirm the save."
         }
     }
 
@@ -224,14 +226,14 @@ struct CollectionStatusPanel: View {
                     }
                 }
                 if model.phase == .completing {
-                    Text("Account save acknowledged · finishing local cleanup").foregroundStyle(Brand.body)
+                    Text(model.handoffAcknowledged ? "Account save confirmed · finishing local cleanup" : "Account receipt not yet confirmed")
+                        .foregroundStyle(Brand.body)
                 } else {
                     HStack(spacing: 8) {
                         Circle().fill(Brand.blue).frame(width: 7, height: 7)
                         Text(activityAge(at: context.date)).foregroundStyle(Brand.muted)
                     }
                 }
-                Text(nextAction).foregroundStyle(Brand.body)
                 Text("Temporary local bytes are not saved account records.")
                     .font(Brand.bodyFont(13)).foregroundStyle(Brand.muted)
             }
@@ -255,7 +257,7 @@ struct CollectionStatusPanel: View {
                       systemImage: "checkmark.circle.fill")
                     .font(Brand.bodyFont(16).weight(.semibold)).foregroundStyle(Brand.lime)
             } else if model.phase == .completing {
-                Text("Account receipt confirmed · finishing local cleanup")
+                Text(model.handoffAcknowledged ? "Account receipt confirmed · finishing local cleanup" : "Waiting for the account receipt")
                     .font(Brand.bodyFont(16).weight(.semibold)).foregroundStyle(Brand.lime)
             } else {
                 Text("iPhone → this Mac")
@@ -298,13 +300,14 @@ struct CollectionStatusPanel: View {
 
     private func activityHeading(at date: Date) -> some View {
         VStack(alignment: .leading, spacing: Brand.Space.item) {
-            Text("ON THIS MAC · STAGE \(activeStage + 1) OF \(stages.count)")
+            Text("COLLECTION · STAGE \(activeStage + 1) OF \(stages.count)")
                 .font(Brand.bodyFont(13).weight(.bold)).tracking(0.8).foregroundStyle(Brand.muted)
             Text(activityTitle(at: date))
                 .font(Brand.headingFont(28)).foregroundStyle(Brand.heading)
                 .lineLimit(3).fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             Text(activityDetail(at: date)).font(Brand.bodyFont(15)).foregroundStyle(Brand.body)
+            Text(nextAction).font(Brand.bodyFont(15).weight(.semibold)).foregroundStyle(Brand.body)
         }
     }
 
