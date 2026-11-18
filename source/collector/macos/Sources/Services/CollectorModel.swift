@@ -3848,13 +3848,13 @@ final class CollectorModel: ObservableObject {
         case .connecting: return "Unlock and trust your iPhone"
         case .transferring: return lastBackupActivityAt == nil ? "Waiting for iPhone backup data" : "Receiving the local backup"
         case .passwordRequired: return "Existing backup password needed"
-        case .processing: return isUnlockingBackup ? "Unlocking and checking the backup" : "Reading available sources locally"
-        case .selecting: return "Choose the people to review"
+        case .processing: return isUnlockingBackup ? "Unlocking the backup for review" : "Preparing contacts for review"
+        case .selecting: return "Choose people and continue"
         case .reviewing:
             if browserOwnsFlow { return isPreparationRun ? "Waiting for your account to save" : "Saving in your AMPLIFai account" }
             return "Your local review is ready"
-        case .completing: return "Saved — finishing on this Mac"
-        case .completed: return "Saved — your report is in your account"
+        case .completing: return handoffAcknowledged ? "Saved — finishing on this Mac" : "Waiting for account confirmation"
+        case .completed: return handoffAcknowledged ? "Saved — your report is in your account" : "Account save is not confirmed"
         case .cancelling: return "Stopping and checking temporary data"
         case .error: return settingCheckAfterCollectionFailure ? "Previous collection stopped" : "Collection stopped"
         }
@@ -3867,21 +3867,21 @@ final class CollectorModel: ObservableObject {
     var statusDetail: String {
         switch phase {
         case .idle, .connecting:
-            return "Connect one iPhone by USB and unlock it to establish the connection. Respond to Apple's Trust/passcode prompt on the phone if shown. Existing trusted Wi-Fi pairing is used only when no cable is present. A later screen lock alone does not prove a failure; no security bypass is performed."
+            return "Connect one iPhone by USB and watch its screen as the backup starts. Unlock it with its screen passcode and approve Trust on the iPhone if asked. Enter the screen passcode on the phone; this Mac asks separately for an encrypted-backup password if needed. Existing trusted Wi-Fi pairing is used only when no cable is present."
         case .error:
             return settingCheckAfterCollectionFailure
                 ? "The error below is from the earlier attempt. The setting check below shows the most recent read; it did not start a backup."
                 : "This collection did not produce a verified completion. Review the failure and last observed transfer below before starting a new approved attempt."
         case .transferring:
-            return "Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Keep the cable connected and respond to any phone prompts. Initial backup readiness can wait up to 30 minutes. Once actual file data begins, 15 minutes without new activity or a stalled file transfer can stop the session. Active transfers have no fixed total-time limit."
+            return "Watch your iPhone for its Trust or screen-passcode prompt as the backup starts. Respond on the phone and keep the cable connected during transfer. Unrelated full-backup bytes are streamed and discarded; selected source databases stay local and temporary. Initial backup readiness can wait up to 30 minutes. Once actual file data begins, 15 minutes without new activity or a stalled file transfer can stop the session. Active transfers have no fixed total-time limit."
         case .passwordRequired:
             return backupUnlockAttempt > 1
                 ? "The backup could not be unlocked. The password may be incorrect, or the backup's encryption keys may be unreadable. Try again using the backup already on this Mac."
-                : "The backup has been received. Enter the existing password for this iPhone's encrypted computer backup."
+                : "The backup has been received. Enter the existing encrypted computer-backup password on this Mac to prepare contacts for review. Next, choose people and continue to your account."
         case .processing:
             return isUnlockingBackup
-                ? "Checking the supplied password and backup encryption keys on this Mac. The backup has not yet been confirmed readable."
-                : "Reading available contacts and activity, then cleaning up temporary backup files. Backup progress does not mean your review or account save is complete."
+                ? "Checking the password and backup keys on this Mac. The backup is not yet confirmed readable, and nothing has been saved to your account."
+                : "This Mac is reading contacts and activity and removing temporary backup files before review. Nothing has been saved to your account yet. Choose people and continue when the review appears."
         case .selecting:
             return "\(totalContacts) contacts, \(availableCalls) call activity records and \(availableMessages) SMS activity records were observed in available sources. Choose contacts, then Continue: only those are saved to the account you approved."
         case .reviewing:
@@ -3900,9 +3900,14 @@ final class CollectorModel: ObservableObject {
             }
             return "Review the counts and observed dates. Continue saves the contacts you chose to the account you approved."
         case .completing:
-            return "Your account confirmed the save. This window stays available until the owned helper finishes safely."
+            return handoffAcknowledged
+                ? "Your account confirmed the save. This Mac is finishing cleanup of its private copy."
+                : "This Mac has not received the final account receipt. Keep the local review until the save is confirmed."
         case .completed:
-            return "Your report is ready in your AMPLIFai account. This Mac's private copy was cleared."
+            if canSafelyClose { return "Your report is ready in your AMPLIFai account. This Mac's private copy was cleared." }
+            return handoffAcknowledged
+                ? "Your account confirmed the save. Check any remaining temporary data on this Mac."
+                : "No final account receipt was confirmed. Check your account and retain any local review."
         case .cancelling:
             return "Wait for the owned helper to stop. If temporary phone data remains, inspect it here before reconnecting; cleanup never targets other backups."
         }
@@ -3931,7 +3936,12 @@ final class CollectorModel: ObservableObject {
         case "backup_time_limit", "connection_timeout", "phone_connection", "trust_required":
             return ["Connect one phone by USB, keep it unlocked, and approve Trust on the phone if shown.", "Check the cable and use the phone's normal controls. Reconnect after the helper has stopped."]
         case "connection_lost": return ["Check the direct USB cable and port and respond to any iPhone Trust prompt.", "After the helper stops, compare a normal Finder backup on the same Mac. If Finder succeeds but this fails again, share the companion version and last transfer details with support."]
-        case "device_backup_failed": return ["Note the device status and companion version.", "If the same iPhone cannot complete a normal Finder backup on this Mac, resolve that device backup issue first. Otherwise, share the status with support before repeating collection."]
+        case "device_backup_failed":
+            if lastDeviceStatus == 208 {
+                return ["Unlock your iPhone with its screen passcode, keep it awake, and approve Trust on the phone if asked. The screen passcode belongs on the iPhone; the encrypted-backup password is entered separately on this Mac.",
+                        "After this attempt stops and any temporary-data checks finish, return to your AMPLIFai account and approve one new collection. Try once with the iPhone unlocked. If status 208 repeats, share the support code before another attempt."]
+            }
+            return ["Note the device status and companion version.", "If the same iPhone cannot complete a normal Finder backup on this Mac, resolve that device backup issue first. Otherwise, share the status with support before repeating collection."]
         case "collection_failed": return ["Note the companion version and last observed transfer stage.", "Contact support before repeating the same long collection; the cause was not classified."]
         default: return []
         }

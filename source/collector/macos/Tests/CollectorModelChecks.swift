@@ -178,6 +178,8 @@ struct CollectorModelChecks {
         model.phase = .completed
         try require(!model.canInstallUpdate,
                     "A completed phase without a bound saved ACK cannot permit replacement")
+        try require(!model.statusTitle.hasPrefix("Saved") && !model.statusDetail.contains("private copy was cleared"),
+                    "An unacknowledged completed phase cannot present a confirmed Save or cleanup")
         model.disconnect()
         try require(model.canInstallUpdate,
                     "After explicit discard and cleanup, a settled app may install")
@@ -909,8 +911,28 @@ struct CollectorModelChecks {
         try require(fields[2].range(of: #"^[A-F0-9]{8}$"#, options: .regularExpression) != nil, "A fresh opaque report reference is required before browser pairing")
         try require(fields[3...8].elementsEqual(["backup", "device_backup_failed", "1800", "1024", "0", "205"]), "Pre-pair failure report must preserve safe first code, stage, elapsed, bytes and device status")
         try require(!model.safeSupportCode.contains("phone owner"), "Support code cannot include private phone text")
+        try require(model.recoverySteps.joined().contains("normal Finder backup") &&
+                    !model.recoverySteps.joined().contains("approve one new collection"),
+                    "Other numeric device failures retain their existing recovery guidance")
         model.receive(try event(#"{"kind":"error","code":"workspace_cleanup","stage":"processing"}"#))
         try require(model.safeSupportCode == fields.joined(separator: "|"), "A later cleanup error cannot replace the first terminal device failure or report reference")
+        var commands: [Data] = []
+        let locked = CollectorModel(commandWriter: { commands.append($0) })
+        locked.phase = .transferring
+        try require(locked.statusDetail.contains("Watch your iPhone") && locked.statusDetail.contains("screen-passcode"),
+                    "Backup start must direct attention to the iPhone's own prompt")
+        locked.receive(try event(#"{"kind":"transfer","stage":"backup","receivedBytes":0,"retainedBytes":0,"discardedBytes":0,"filesReceived":0,"elapsedSeconds":182,"bytesPerSecond":0}"#))
+        locked.receive(try event(#"{"kind":"error","code":"device_backup_failed","stage":"backup","deviceCode":208}"#))
+        let guidance = locked.recoverySteps.joined(separator: " ")
+        try require(locked.errorMessage.contains("Device status: 208") &&
+                    locked.safeSupportCode.hasSuffix("|backup|device_backup_failed|182|0|0|208"),
+                    "Status 208 preserves the exact safe code and measured zero-byte failure")
+        try require(guidance.contains("screen passcode") && guidance.contains("keep it awake") &&
+                    guidance.contains("encrypted-backup password") && guidance.contains("approve one new collection") &&
+                    guidance.contains("Try once") && guidance.contains("If status 208 repeats"),
+                    "Status 208 distinguishes phone unlock from backup password and offers one approved retry")
+        try require(commands.isEmpty && !locked.canConnect && !locked.handoffAcknowledged,
+                    "Guidance cannot restart collection, grant consent or claim an account save")
         let unknown = CollectorModel()
         unknown.phase = .transferring
         unknown.receive(try event(#"{"kind":"error","code":"private phone owner reason","stage":"backup"}"#))

@@ -641,7 +641,7 @@ struct ContentView: View {
                 .overlay(RoundedRectangle(cornerRadius: Brand.Radius.control).stroke(Brand.border, lineWidth: 1))
                 .disabled(model.checkingPasswordApproval)
                 .onSubmit { model.submitPassword() }
-            Button(model.backupUnlockAttempt > 1 ? "Try unlocking again" : "Continue locally") { model.submitPassword() }
+            Button(model.backupUnlockAttempt > 1 ? "Try unlocking again" : "Unlock for contact review") { model.submitPassword() }
                 .buttonStyle(LimeButton())
                 .disabled(!model.canSubmitPassword)
             if model.checkingPasswordApproval { progressLine("Checking collection approval…") }

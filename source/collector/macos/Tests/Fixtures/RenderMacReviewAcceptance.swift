@@ -14,13 +14,13 @@ struct RenderMacReviewAcceptance {
         var timings: [String: Double] = [:]
         var stateEvidence: [String: [String: Any]] = [:]
         let shareStates = ["bind-uncertain", "bind-refused", "expired"]
-        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "link-failed", "verify-uncertain", "finish-retry", "adoption-retry", "adoption-checking", "adoption-recovered"] + shareStates
+        let reviewStates = ["pending-review", "local-review", "handoff", "save-receipt", "confirmed-cleanup", "confirmed-saved", "link-failed", "verify-uncertain", "finish-retry", "adoption-retry", "adoption-checking", "adoption-recovered"] + shareStates
         let runStates = ["run-claiming", "run-uncertain", "run-refused", "run-approved", "agree-checking", "agree-unknown", "encryption-off", "encryption-on", "encryption-ready", "finder-ready", "finder-return-off", "automatic-wait", "status-uncertain", "status-expired", "status-revoked", "status-changed", "active-transfer"]
         let guideStates = ["finder-connect", "finder-device", "finder-encrypt", "finder-recheck", "finder-confirm"]
         let nativeStates = ["native-claiming", "native-claim-uncertain", "native-consent", "native-consent-checked",
                             "native-approving", "native-approval-uncertain", "native-refused", "native-expired"]
         let unlockStates = ["password", "password-retry", "password-final", "password-exhausted", "unlocking", "reading-unlocked"]
-        let setupStates = ["setup"] + nativeStates + runStates + guideStates + unlockStates + ["error", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
+        let setupStates = ["setup"] + nativeStates + runStates + guideStates + unlockStates + ["error", "device-208", "completed", "connecting", "transferring", "transferring-progress", "processing", "completing", "cancelling"]
         let allStates = ["main", "organizing", "history", "all-selected", "all-exceptions", "review", "last-page", "search", "empty", "loading"] + reviewStates + ["no-selection", "unavailable"] + setupStates
         let viewports = [(375, 844), (768, 900), (1440, 1000), (1180, 820), (820, 640), (1180, 680)]
         let states = CommandLine.arguments.count > 2 ? Array(CommandLine.arguments.dropFirst(2)) : allStates
@@ -30,7 +30,8 @@ struct RenderMacReviewAcceptance {
             let server = SimulatedPhoneRunServer()
             let setupServer = SimulatedPhoneSetupServer()
             let transport: PhoneRunTransport = nativeStates.contains(state) ? setupServer : server
-            let model = CollectorModel(commandWriter: { commands.append($0) },
+            // Synthetic renders have no admitted product build, so error views cannot send diagnostics.
+            let model = CollectorModel(commandWriter: { commands.append($0) }, bundleInformation: [:],
                                        runAuthority: PhoneRunAuthorityClient(transport: transport, schedule: PhoneRunAuthorityClient.immediate,
                                            admissionProtocol: nativeStates.contains(state) ? .preparation : .legacy))
             let updater = CompanionUpdater(bundleInformation: [:])
@@ -143,7 +144,7 @@ struct RenderMacReviewAcceptance {
                         if state != "local-review" && state != "link-failed" {
                             model.pairBrowser(automaticAccountNavigation: false)
                             try receive(pairing)
-                            if ["handoff", "save-receipt", "expired", "verify-uncertain", "finish-retry"].contains(state) {
+                            if ["handoff", "save-receipt", "confirmed-cleanup", "confirmed-saved", "expired", "verify-uncertain", "finish-retry"].contains(state) {
                                 guard model.handoffBound, !model.canEditWorkspace, !model.handoffAcknowledged else {
                                     throw FixtureError.unexpectedState("\(state): synthetic handoff did not bind")
                                 }
@@ -158,11 +159,19 @@ struct RenderMacReviewAcceptance {
                                     throw FixtureError.unexpectedState("verify-uncertain: exact retry not available")
                                 }
                             }
-                            if state == "save-receipt" {
+                            if ["save-receipt", "confirmed-cleanup", "confirmed-saved"].contains(state) {
                                 try receive(["kind": "handoff", "state": "received", "handoffId": handoffID])
                                 try receive(["kind": "handoff", "state": "saved_pending_browser_receipt", "handoffId": handoffID])
                                 guard model.accountSaveAwaitingBrowserReceipt, !model.handoffAcknowledged else {
                                     throw FixtureError.unexpectedState("Save receipt must await the final browser receipt")
+                                }
+                                if state != "save-receipt" {
+                                    try receive(["kind": "handoff", "state": "saved", "handoffId": handoffID])
+                                    if state == "confirmed-saved" { model.finished(mode: "connect", code: 0) }
+                                    guard model.handoffAcknowledged,
+                                          model.canSafelyClose == (state == "confirmed-saved") else {
+                                        throw FixtureError.unexpectedState("Confirmed Save fixture must pass real receipt and cleanup gates")
+                                    }
                                 }
                             }
                             if state == "finish-retry" {
@@ -236,6 +245,11 @@ struct RenderMacReviewAcceptance {
                 }
             }
             else if state == "error" { model.phase = .error; model.errorMessage = "The iPhone connection ended. Your source choices have not been saved." }
+            else if state == "device-208" {
+                model.phase = .transferring
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"transfer","stage":"backup","receivedBytes":0,"retainedBytes":0,"discardedBytes":0,"filesReceived":0,"elapsedSeconds":182,"bytesPerSecond":0}"#.utf8)))
+                model.receive(try AgentEvent.decode(Data(#"{"kind":"error","code":"device_backup_failed","stage":"backup","deviceCode":208}"#.utf8)))
+            }
             else if state == "completed" { model.phase = .completed }
             else if state == "connecting" { model.phase = .connecting }
             else if state == "transferring" { model.phase = .transferring }
@@ -318,7 +332,7 @@ struct RenderMacReviewAcceptance {
                 model.receive(try AgentEvent.decode(JSONSerialization.data(withJSONObject:
                     ["kind": "residue", "sessions": [], "sourceDiagnosticHistory": [attempt]])))
             }
-            guard model.accountNavigationID == nil, !model.helperRunning,
+            guard model.accountNavigationID == nil, !model.helperRunning, model.safeSupportCode.isEmpty,
                   model.operationID == nil || (["connecting", "agree-checking", "active-transfer"] + unlockStates).contains(state) ||
                     !setupStates.contains(state) else {
                 throw FixtureError.unexpectedState("Fixture must not request account navigation or start the helper")
@@ -337,6 +351,8 @@ struct RenderMacReviewAcceptance {
                 "canRetryApprovalAdoption": model.canRetryApprovalAdoption,
                 "approvedToSave": model.phoneRun.map { CollectorModel.approvedToSaveLabel($0.categories) } ?? "",
                 "saveReceiptPending": model.accountSaveAwaitingBrowserReceipt,
+                "saveAcknowledged": model.handoffAcknowledged, "canSafelyClose": model.canSafelyClose,
+                "statusTitle": model.statusTitle, "statusDetail": model.statusDetail,
                 "selectionChangePending": model.selectionChangePending, "accountNavigationRequested": false]
             timings[state] = Date().timeIntervalSince(start)
             for (width, height) in viewports {

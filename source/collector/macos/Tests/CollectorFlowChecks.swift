@@ -754,11 +754,19 @@ struct CollectorFlowChecks {
         }
         let (model, server, wire, _) = try PhoneRunFlowChecks.startedModel()
         var commands: [Data] { wire.commands }
+        model.receive(try event(#"{"kind":"state","state":"processing"}"#))
+        model.receive(try event(#"{"kind":"state","state":"completed"}"#))
+        try require(model.phase == .processing && model.statusTitle == "Preparing contacts for review" &&
+                    model.statusDetail.contains("before review") && model.statusDetail.contains("Nothing has been saved") &&
+                    !model.handoffAcknowledged && !model.canSafelyClose,
+                    "Local preparation or cleanup cannot imply a saved account result before review")
         try loaded(model) { commands.last }
         guard let workspace = model.workspace else { throw Failure.check("The synthetic workspace must build") }
         try require(workspace.mainCount == 400 && workspace.reviewCount == 50 && model.selectedIDs == workspace.mainIDs,
                     "Choose opens with the 400 Main contacts selected and 50 Review contacts waiting")
         try require(model.journeyStep == 2, "Choose is the current step once contacts are ready")
+        try require(model.statusTitle == "Choose people and continue" && !model.handoffAcknowledged,
+                    "The review step names the remaining user action")
 
         // Select all, individual exceptions, then a partial scope.
         model.selectAllVerifiedContacts()
@@ -806,13 +814,17 @@ struct CollectorFlowChecks {
         try require(model.destinationApproved && !model.destinationDecisionPending && model.browserHandoffReady,
                     "The helper's acknowledgement keeps the website in charge")
         model.receive(try event(#"{"kind":"handoff","state":"received","handoffId":"\#(handoff)"}"#))
+        try require(!model.statusTitle.hasPrefix("Saved") && !model.canSafelyClose,
+                    "Received pages alone cannot claim a saved result")
         model.receive(try event(#"{"kind":"handoff","state":"saved_pending_browser_receipt","handoffId":"\#(handoff)"}"#))
+        model.receive(try event(#"{"kind":"state","state":"completed"}"#))
         try require(model.accountSaveAwaitingBrowserReceipt && !model.handoffAcknowledged && model.phase == .reviewing &&
-                    model.statusDetail.contains("final receipt"),
+                    model.statusDetail.contains("final receipt") && !model.statusTitle.hasPrefix("Saved") && !model.canSafelyClose,
                     "A first save receipt still waits for the browser's final receipt")
         try require(model.journeyStep == 3, "Save & report is the current step until the save is confirmed")
         model.receive(try event(#"{"kind":"handoff","state":"saved","handoffId":"\#(handoff)"}"#))
-        try require(model.handoffAcknowledged && model.phase == .completing,
+        try require(model.handoffAcknowledged && model.phase == .completing &&
+                    model.statusTitle.hasPrefix("Saved") && !model.canSafelyClose,
                     "The matching final receipt finishes the run")
         try require(!model.browserHandoffReady, "A confirmed save ends the handoff")
         model.finished(mode: "connect", code: 0)
