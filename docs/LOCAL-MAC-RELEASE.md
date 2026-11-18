@@ -9,7 +9,39 @@ This path signs an already qualified AMPLIFai Phone native build with the existi
 3. Keep the existing Developer ID identity, `AMPLIFai-notary` profile, and `ai.satoris.amplifai.phone.candidate` Sparkle account available to the same macOS user. Normal Keychain prompts are part of key use. This path does not export a private key, create a credential, add a runner or role, or weaken branch protection.
 4. Use a new absolute 0700 scratch directory and distinct new output directories outside the checkout. Put the signed delivery, scratch, and publication output in separate paths. Use the merged control implementation and exact source authorization. Keep that control SHA unchanged from signing through publication so the sealed manifest remains valid.
 
-## November 16 RC37 Apple Silicon authorization
+## November 18 RC38 Apple Silicon authorization
+
+Native [PR #58](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/58)
+merged normally to `8b9a9ee67397526194d9286290871be24dad8c9c`, preserving
+reviewed head `013b57cea223183293659e2499b3eb5d253dbbfc`. Required CI run
+`44354183146` passed native and control checks. This row authorizes only
+`macos-arm64`, version `2026.11.18-rc38`, build `26111838`, under
+`phone-run-recovery-v1`.
+
+RC38 checks the signed architecture feed when the running app reopens and before
+supported account-link delivery, respects Sparkle's automatic-check preference,
+and coalesces active sessions. A verified expired setup is retired locally only
+if it never sent approval. Uncertain claims, pending/uncertain approval, Start,
+transfer, review, Save receipts and cleanup remain protected from installation.
+No layout, consent text, server protocol or customer-data changes are included.
+
+Final local updater and complete flow/preparation/setup suites passed, including
+actual AppKit reopening, opt-out/manual, offline, duplicate checks, a real expiry
+task, replacement setup and exact approval recovery. Hosted native checks passed
+119 Python tests, 311,149 synthetic records over 3,114 pages, authority refresh
+and watchdog checks, preparation checks and 40 hidden AppKit lifecycle cycles.
+Physical-device/account acceptance and the customer's installed version or
+historical backup-unlock cause remain unverified.
+
+The ARM rollback/build floor is RC37 `26111637`. Its feed was verified at both
+public website origins: 1,561 bytes, SHA-256
+`02a468a38b9b0453719f8a41ed180d3263eca0acc15a0b131d25b23c16bef6c7`.
+Use a new exact-source release-mode run and immutable artifact for RC38. Keep
+RC37 assets and all other platform channels. This authorization is not signing,
+notarization or publication evidence; website activation follows the verified
+signed public-byte handoff through the canonical coordinator and website owner.
+
+## November 16 RC37 Apple Silicon authorization (historical)
 
 Native [PR #56](https://github.com/JmooreOsirs/amplifai-phone-companion/pull/56)
 merged normally to `9d8e4e43bbc364a16878b4d6ae6efee8584b3f6f`, preserving reviewed
